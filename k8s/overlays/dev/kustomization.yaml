@@ -1,3 +1,23 @@
 resources:
   - ../../base
 
+images:
+  - name: yotowebmgr-api
+    newName: localhost:32000/yotowebmgr-api
+    newTag: dev
+  - name: yotowebmgr-worker
+    newName: localhost:32000/yotowebmgr-worker
+    newTag: dev
+  - name: yotowebmgr-frontend
+    newName: localhost:32000/yotowebmgr-frontend
+    newTag: dev
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+secretGenerator:
+  - name: yotowebmgr-secrets
+    namespace: yotowebmgr
+    literals:
+      - POSTGRES_PASSWORD=change-me
+      - DATABASE_URL=postgresql+psycopg://yotowebmgr:change-me@postgres:5432/yotowebmgr

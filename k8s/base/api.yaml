@@ -16,6 +16,7 @@ spec:
       containers:
         - name: api
           image: yotowebmgr-api:latest
+          imagePullPolicy: Always
           ports:
             - containerPort: 8000
           envFrom:
@@ -24,6 +25,8 @@ spec:
             - secretRef:
                 name: yotowebmgr-secrets
           volumeMounts:
+            - name: imports
+              mountPath: /media/imports
             - name: originals
               mountPath: /media/originals
             - name: processed
@@ -33,6 +36,9 @@ spec:
             - name: exports
               mountPath: /media/exports
       volumes:
+        - name: imports
+          persistentVolumeClaim:
+            claimName: imports-pvc
         - name: originals
           persistentVolumeClaim:
             claimName: originals-pvc
@@ -57,4 +63,3 @@ spec:
   ports:
     - port: 8000
       targetPort: 8000
-

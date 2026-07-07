@@ -182,7 +182,11 @@ a {
   color: #ddd4c3;
 }
 
-.password-form input {
+.password-form input,
+.data-form input,
+.data-form select,
+.import-form input,
+.import-form select {
   width: 100%;
   padding: 12px 14px;
   border-radius: 14px;
@@ -190,6 +194,115 @@ a {
   background: rgba(6, 22, 26, 0.72);
   color: #f4efe6;
   font: inherit;
+}
+
+.segmented-control {
+  display: inline-grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 4px;
+  margin-bottom: 18px;
+  border-radius: 14px;
+  background: rgba(6, 22, 26, 0.72);
+  border: 1px solid rgba(255, 240, 214, 0.12);
+}
+
+.segmented-control button {
+  min-width: 124px;
+  min-height: 42px;
+  border: 0;
+  border-radius: 10px;
+  cursor: pointer;
+  color: #ddd4c3;
+  background: transparent;
+  font: inherit;
+}
+
+.segmented-control .segment-active {
+  color: #1f1b16;
+  background: #ffbf69;
+  font-weight: 600;
+}
+
+.import-form {
+  display: grid;
+  gap: 16px;
+  margin: 0 0 20px;
+}
+
+.import-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(180px, 0.8fr);
+  gap: 12px;
+}
+
+.import-form label {
+  display: grid;
+  gap: 6px;
+  color: #ddd4c3;
+}
+
+.drop-panel {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border-radius: 16px;
+  background: rgba(6, 22, 26, 0.52);
+  border: 1px solid rgba(255, 240, 214, 0.12);
+}
+
+.file-picker {
+  position: relative;
+  min-height: 74px;
+  place-items: center;
+  border-radius: 14px;
+  border: 1px dashed rgba(255, 240, 214, 0.28);
+  background: rgba(255, 248, 232, 0.06);
+  text-align: center;
+  cursor: pointer;
+}
+
+.file-picker input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.form-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.subsection-title {
+  margin: 24px 0 0;
+}
+
+.data-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  align-items: end;
+  margin: 18px 0 20px;
+}
+
+.data-form label {
+  display: grid;
+  gap: 6px;
+  color: #ddd4c3;
+}
+
+.checkbox-row {
+  display: flex !important;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 10px !important;
+}
+
+.checkbox-row input {
+  width: auto;
 }
 
 .primary-button {
@@ -236,6 +349,105 @@ a {
   border-top: 1px solid rgba(255, 240, 214, 0.12);
 }
 
+.section-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.item-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.list-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(6, 22, 26, 0.52);
+  border: 1px solid rgba(255, 240, 214, 0.12);
+}
+
+.list-row > div:first-child {
+  min-width: 0;
+  flex: 1;
+}
+
+.list-row h3 {
+  margin: 0 0 4px;
+  font-size: 1.05rem;
+}
+
+.row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.danger-icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid rgba(255, 130, 110, 0.36);
+  border-radius: 12px;
+  background: rgba(120, 24, 24, 0.38);
+  color: #ffd2c8;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.danger-icon-button:hover {
+  background: rgba(164, 35, 35, 0.52);
+}
+
+.library-player {
+  margin-top: 10px;
+  max-width: 620px;
+}
+
+.library-player .rhap_container {
+  padding: 8px 10px;
+  border-radius: 14px;
+  background: rgba(6, 22, 26, 0.72);
+  border: 1px solid rgba(255, 240, 214, 0.12);
+  box-shadow: none;
+}
+
+.library-player .rhap_time,
+.library-player .rhap_current-time,
+.library-player .rhap_total-time {
+  color: #ddd4c3;
+  font-family: inherit;
+}
+
+.library-player .rhap_main-controls-button,
+.library-player .rhap_repeat-button {
+  color: #ffbf69;
+}
+
+.library-player .rhap_progress-filled,
+.library-player .rhap_progress-indicator {
+  background-color: #ffbf69;
+}
+
+.library-player .rhap_progress-bar {
+  background-color: rgba(255, 248, 232, 0.18);
+}
+
+.muted {
+  color: #ddd4c3;
+}
+
 .panel h2 {
   margin: 0 0 12px;
   font-size: 2rem;
@@ -261,5 +473,30 @@ a {
   .oauth-strip {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .segmented-control,
+  .import-grid {
+    width: 100%;
+    grid-template-columns: 1fr;
+  }
+
+  .form-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .list-row,
+  .row-actions {
+    align-items: flex-start;
+  }
+
+  .list-row {
+    flex-direction: column;
+  }
+
+  .row-actions {
+    width: 100%;
+    justify-content: space-between;
   }
 }
