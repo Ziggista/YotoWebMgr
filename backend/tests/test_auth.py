@@ -1,14 +1,15 @@
-from fastapi.testclient import TestClient
+import pytest
+from httpx import ASGITransport, AsyncClient
 
 from app.core.security import hash_password, verify_password
 from app.main import app
 from app.services.auth import AuthService
 
 
-client = TestClient(app)
+pytestmark = pytest.mark.asyncio
 
 
-def test_password_hashing_uses_verifiable_hashes() -> None:
+async def test_password_hashing_uses_verifiable_hashes() -> None:
     hashed = hash_password("household-secret")
 
     assert hashed != "household-secret"
@@ -16,8 +17,9 @@ def test_password_hashing_uses_verifiable_hashes() -> None:
     assert verify_password("wrong-secret", hashed) is False
 
 
-def test_auth_providers_expose_current_and_future_options() -> None:
-    response = client.get("/api/v1/auth/providers")
+async def test_auth_providers_expose_current_and_future_options() -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/v1/auth/providers")
 
     assert response.status_code == 200
     payload = response.json()
@@ -29,14 +31,15 @@ def test_auth_providers_expose_current_and_future_options() -> None:
     assert {user["slug"] for user in payload["users"]} == {"krystin", "dale"}
 
 
-def test_quick_select_session_returns_selected_user() -> None:
-    response = client.post("/api/v1/auth/session/select", json={"user_slug": "krystin"})
+async def test_quick_select_session_returns_selected_user() -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/v1/auth/session/select", json={"user_slug": "krystin"})
 
     assert response.status_code == 200
     assert response.json()["user"]["auth_method"] == "household_select"
 
 
-def test_password_login_succeeds_when_password_exists() -> None:
+async def test_password_login_succeeds_when_password_exists() -> None:
     service = AuthService()
     service.set_password_for_user("krystin", "correct horse battery staple")
 
@@ -46,10 +49,11 @@ def test_password_login_succeeds_when_password_exists() -> None:
     assert session.user.auth_method == "password"
 
 
-def test_password_login_endpoint_rejects_unconfigured_users() -> None:
-    response = client.post(
-        "/api/v1/auth/session/password",
-        json={"username": "krystin", "password": "anything"},
-    )
+async def test_password_login_endpoint_rejects_unconfigured_users() -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/v1/auth/session/password",
+            json={"username": "krystin", "password": "anything"},
+        )
 
     assert response.status_code == 401

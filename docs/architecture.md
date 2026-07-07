@@ -23,3 +23,8 @@ YotoWebMgr is split into four main runtime areas:
 - `worker` polls a PostgreSQL-backed jobs table.
 - `postgres` stores operational and domain data.
 
+## Persistence
+
+The backend uses SQLAlchemy 2.x models with Alembic migrations against PostgreSQL. The first
+migration creates household user records for Krystin and Dale so local auth can move from the
+temporary in-memory scaffold to persistent accounts without changing the API contract.
