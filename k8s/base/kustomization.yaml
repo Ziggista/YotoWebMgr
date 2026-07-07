@@ -1,0 +1,9 @@
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - persistentvolumeclaims.yaml
+  - postgres.yaml
+  - api.yaml
+  - worker.yaml
+  - frontend.yaml
+

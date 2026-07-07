@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: yotowebmgr
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: worker
+  template:
+    metadata:
+      labels:
+        app: worker
+    spec:
+      containers:
+        - name: worker
+          image: yotowebmgr-worker:latest
+          envFrom:
+            - configMapRef:
+                name: yotowebmgr-config
+            - secretRef:
+                name: yotowebmgr-secrets
+          volumeMounts:
+            - name: originals
+              mountPath: /media/originals
+            - name: processed
+              mountPath: /media/processed
+            - name: artwork
+              mountPath: /media/artwork
+            - name: exports
+              mountPath: /media/exports
+      volumes:
+        - name: originals
+          persistentVolumeClaim:
+            claimName: originals-pvc
+        - name: processed
+          persistentVolumeClaim:
+            claimName: processed-pvc
+        - name: artwork
+          persistentVolumeClaim:
+            claimName: artwork-pvc
+        - name: exports
+          persistentVolumeClaim:
+            claimName: exports-pvc
+

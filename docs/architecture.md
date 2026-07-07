@@ -1,0 +1,25 @@
+# Architecture
+
+## Overview
+
+YotoWebMgr is split into four main runtime areas:
+
+- A React frontend for household-facing workflows.
+- A FastAPI backend for authenticated REST APIs.
+- A Python worker for long-running and retry-safe processing jobs.
+- PostgreSQL for application state, audit history, and job leasing.
+
+## Design Principles
+
+- Original media is immutable.
+- Background work is asynchronous and idempotent.
+- Version history is append-only and restore-safe.
+- Integrations such as Yoto and Plex are isolated behind service layers.
+
+## Initial Runtime Topology
+
+- `frontend` serves the web UI.
+- `api` exposes `/api/v1` and health endpoints.
+- `worker` polls a PostgreSQL-backed jobs table.
+- `postgres` stores operational and domain data.
+

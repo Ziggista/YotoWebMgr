@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: yotowebmgr-config
+  namespace: yotowebmgr
+data:
+  POSTGRES_DB: yotowebmgr
+  POSTGRES_USER: yotowebmgr
+  API_HOST: "0.0.0.0"
+  API_PORT: "8000"
+

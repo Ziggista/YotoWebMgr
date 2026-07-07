@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: yotowebmgr
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      containers:
+        - name: api
+          image: yotowebmgr-api:latest
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: yotowebmgr-config
+            - secretRef:
+                name: yotowebmgr-secrets
+          volumeMounts:
+            - name: originals
+              mountPath: /media/originals
+            - name: processed
+              mountPath: /media/processed
+            - name: artwork
+              mountPath: /media/artwork
+            - name: exports
+              mountPath: /media/exports
+      volumes:
+        - name: originals
+          persistentVolumeClaim:
+            claimName: originals-pvc
+        - name: processed
+          persistentVolumeClaim:
+            claimName: processed-pvc
+        - name: artwork
+          persistentVolumeClaim:
+            claimName: artwork-pvc
+        - name: exports
+          persistentVolumeClaim:
+            claimName: exports-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: yotowebmgr
+spec:
+  selector:
+    app: api
+  ports:
+    - port: 8000
+      targetPort: 8000
+

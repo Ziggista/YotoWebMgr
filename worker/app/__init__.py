@@ -1,0 +1,2 @@
+"""YotoWebMgr worker package."""
+
