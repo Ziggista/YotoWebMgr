@@ -57,8 +57,8 @@ npm run dev
 The current scaffold provides:
 
 - FastAPI health API under `/api/v1`
+- Auth scaffold with quick household user selection, Argon2 password support hooks, and OAuth 2.0 placeholders
 - Python worker bootstrap
 - Mobile-first React shell with base navigation
 - Kubernetes base manifests for namespace, frontend, api, worker, and postgres
 - Documentation stubs aligned with the project brief
-
