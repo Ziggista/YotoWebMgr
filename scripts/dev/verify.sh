@@ -7,6 +7,10 @@ echo "Running backend tests"
 "${ROOT_DIR}/backend/.venv/bin/pytest" "${ROOT_DIR}/backend/tests"
 
 echo
+echo "Running worker tests"
+"${ROOT_DIR}/worker/.venv/bin/pytest" "${ROOT_DIR}/worker/tests"
+
+echo
 echo "Building frontend"
 npm --prefix "${ROOT_DIR}/frontend" run build
 

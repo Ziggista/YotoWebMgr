@@ -2,6 +2,7 @@ import signal
 import time
 
 from app.core.config import get_settings
+from app.jobs.runner import JobRunner, create_worker_engine
 
 
 shutdown_requested = False
@@ -19,8 +20,13 @@ def main() -> None:
     signal.signal(signal.SIGINT, request_shutdown)
     signal.signal(signal.SIGTERM, request_shutdown)
 
+    engine = create_worker_engine(settings.database_url)
+    runner = JobRunner(engine)
+
     while not shutdown_requested:
-        time.sleep(5)
+        processed = runner.process_once()
+        if not processed:
+            time.sleep(5)
 
     print("Worker shutdown requested")
 
