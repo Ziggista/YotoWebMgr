@@ -14,6 +14,12 @@
 
 Future areas will include library, tags, imports, playlists, cards, jobs, artwork, and settings.
 
+## Library Processing
+
+- `POST /api/v1/library/{item_id}/process`
+
+Queues a `transcode_audio` worker job for non-stream source-backed tracks. Generated output is returned on the library detail response as `processed_assets`.
+
 ## Library History
 
 - `GET /api/v1/library/{item_id}/versions`

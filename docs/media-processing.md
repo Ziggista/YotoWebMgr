@@ -37,6 +37,19 @@ The worker handles `inspect_media` and ZIP album inspection jobs with `ffprobe`.
 - Files without embedded chapters become one playlist track per source file.
 - Library items move to `inspected` with `needs_card_plan` readiness after successful inspection.
 - Inspection details record duration, codec, channels, and embedded chapter count in the local readiness detail.
+- Chapter rows store source start/end offsets so later processing can create separate Yoto-ready files without altering originals.
+
+## Processing
+
+`POST /api/v1/library/{item_id}/process` queues a `transcode_audio` job for the worker.
+
+- The worker processes non-stream playlist tracks with source paths.
+- Spoken-word content uses mono MP3 at the configured audiobook bitrate, defaulting to 96 kbps.
+- Music-like content uses stereo MP3 at the configured music bitrate, defaulting to 128 kbps.
+- Loudness normalisation follows `normalise_loudness_default`.
+- Generated files are written under `/var/lib/yotowebmgr/media/processed/library-{id}`.
+- Each output is recorded in `processed_assets` with source path, output path, codec, bitrate, channels, duration, size, checksum, profile, and settings JSON.
+- Source media is never overwritten.
 
 ## Artwork
 

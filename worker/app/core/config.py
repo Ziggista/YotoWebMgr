@@ -9,9 +9,9 @@ class Settings(BaseSettings):
     app_name: str = "YotoWebMgr"
     environment: str = "development"
     database_url: str = "postgresql+psycopg://yotowebmgr:change-me@localhost:5432/yotowebmgr"
+    processed_path: str = "/var/lib/yotowebmgr/media/processed"
 
 
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-

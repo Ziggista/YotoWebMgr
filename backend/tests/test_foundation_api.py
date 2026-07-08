@@ -13,7 +13,7 @@ from app.api.routes.library import _playlist_stream_url_from_text
 from app.db.base import Base
 from app.db.session import get_db_session
 from app.main import app
-from app.models import Job, LibraryItem, PhysicalCard, PlaylistTrack, Setting, User, VersionEvent
+from app.models import Job, LibraryItem, PhysicalCard, PlaylistTrack, ProcessedAsset, Setting, User, VersionEvent
 
 
 pytestmark = pytest.mark.asyncio
@@ -597,6 +597,8 @@ async def test_playlist_track_can_be_edited(api_client: AsyncClient) -> None:
                 "title": "Updated Stream",
                 "track_number": 3,
                 "duration_seconds": 120,
+                "source_start_seconds": 5,
+                "source_end_seconds": 125,
                 "icon_path": "/icons/radio.png",
                 "track_behavior": "repeat_track",
                 "stream_url": "https://example.test/updated.mp3",
@@ -612,6 +614,8 @@ async def test_playlist_track_can_be_edited(api_client: AsyncClient) -> None:
     assert updated.json()["title"] == "Updated Stream"
     assert updated.json()["track_number"] == 3
     assert updated.json()["duration_seconds"] == 120
+    assert updated.json()["source_start_seconds"] == 5
+    assert updated.json()["source_end_seconds"] == 125
     assert updated.json()["icon_path"] == "/icons/radio.png"
     assert updated.json()["track_behavior"] == "repeat_track"
     assert updated.json()["stream_url"] == "https://example.test/updated.mp3"
@@ -727,6 +731,66 @@ async def test_card_plan_groups_tracks_by_target_duration(
     assert payload["parts"][1]["track_count"] == 2
     assert payload["parts"][1]["duration_seconds"] == 3600
     assert payload["parts"][0]["tracks"][0]["estimated_size_mb"] == 240
+
+
+async def test_library_processing_can_be_queued(api_client: AsyncClient) -> None:
+    async with api_client as client:
+        created = await client.post(
+            "/api/v1/library",
+            json={"title": "Ready Book", "content_type": "Audiobook"},
+        )
+        item_id = created.json()["id"]
+        empty_response = await client.post(f"/api/v1/library/{item_id}/process")
+        await client.post(
+            f"/api/v1/library/{item_id}/tracks",
+            json={
+                "title": "Chapter One",
+                "source_path": "/imports/book.m4b",
+                "source_start_seconds": 0,
+                "source_end_seconds": 60,
+                "track_number": 1,
+                "duration_seconds": 60,
+            },
+        )
+        queued = await client.post(f"/api/v1/library/{item_id}/process")
+        detail = await client.get(f"/api/v1/library/{item_id}")
+
+    assert empty_response.status_code == 409
+    assert queued.status_code == 202
+    assert queued.json()["type"] == "transcode_audio"
+    assert queued.json()["related_library_item_id"] == item_id
+    assert detail.json()["item"]["status"] == "processing_queued"
+
+
+async def test_library_detail_includes_processed_assets(
+    api_client: AsyncClient,
+    db_session: Session,
+) -> None:
+    item = LibraryItem(title="Processed Detail", content_type="Audiobook", status="processed")
+    db_session.add(item)
+    db_session.flush()
+    asset = ProcessedAsset(
+        library_item_id=item.id,
+        source_path="/imports/book.m4b",
+        output_path="/processed/book.mp3",
+        codec="mp3",
+        bitrate_kbps=96,
+        channels=1,
+        duration_seconds=60,
+        size_bytes=1234,
+        checksum_sha256="a" * 64,
+        profile="spoken_word",
+        settings_json='{"profile":"spoken_word"}',
+    )
+    db_session.add(asset)
+    db_session.commit()
+
+    async with api_client as client:
+        detail = await client.get(f"/api/v1/library/{item.id}")
+
+    assert detail.status_code == 200
+    assert detail.json()["processed_assets"][0]["output_path"] == "/processed/book.mp3"
+    assert detail.json()["processed_assets"][0]["bitrate_kbps"] == 96
 
 
 async def test_cover_art_upload_sets_library_cover_path(

@@ -75,6 +75,8 @@ export interface PlaylistTrack {
   title: string;
   source_path: string | null;
   source_url: string | null;
+  source_start_seconds: number | null;
+  source_end_seconds: number | null;
   track_number: number;
   duration_seconds: number | null;
   icon_path: string | null;
@@ -124,6 +126,24 @@ export interface LibraryItemDetail {
   tracks: PlaylistTrack[];
   podcast_feeds: PodcastFeed[];
   split_points: SplitPoint[];
+  processed_assets: ProcessedAsset[];
+}
+
+export interface ProcessedAsset {
+  id: number;
+  library_item_id: number;
+  playlist_track_id: number | null;
+  source_path: string;
+  output_path: string;
+  codec: string;
+  bitrate_kbps: number;
+  channels: number;
+  duration_seconds: number | null;
+  size_bytes: number;
+  checksum_sha256: string;
+  profile: string;
+  settings_json: string;
+  created_at: string;
 }
 
 export interface VersionEvent {
@@ -413,6 +433,8 @@ export async function updatePlaylistTrack(
   payload: {
     title?: string;
     source_url?: string | null;
+    source_start_seconds?: number | null;
+    source_end_seconds?: number | null;
     track_number?: number;
     duration_seconds?: number | null;
     icon_path?: string | null;
@@ -487,6 +509,14 @@ export async function fetchCardPlan(itemId: number): Promise<CardPlan> {
     throw new Error(await errorMessage(response, "Failed to build card plan."));
   }
   return response.json() as Promise<CardPlan>;
+}
+
+export async function queueLibraryItemProcessing(itemId: number): Promise<Job> {
+  const response = await fetch(`/api/v1/library/${itemId}/process`, { method: "POST" });
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to queue audio processing."));
+  }
+  return response.json() as Promise<Job>;
 }
 
 export async function fetchImports(): Promise<ImportRequest[]> {

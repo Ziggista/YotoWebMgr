@@ -93,6 +93,8 @@ class PlaylistTrackCreate(BaseModel):
     title: str = Field(min_length=1, max_length=240)
     source_path: str | None = Field(default=None, max_length=2000)
     source_url: str | None = Field(default=None, max_length=2000)
+    source_start_seconds: int | None = Field(default=None, ge=0)
+    source_end_seconds: int | None = Field(default=None, ge=0)
     track_number: int = Field(default=1, gt=0)
     duration_seconds: int | None = Field(default=None, ge=0)
     icon_path: str | None = Field(default=None, max_length=2000)
@@ -105,6 +107,8 @@ class PlaylistTrackCreate(BaseModel):
 class PlaylistTrackUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=240)
     source_url: str | None = Field(default=None, max_length=2000)
+    source_start_seconds: int | None = Field(default=None, ge=0)
+    source_end_seconds: int | None = Field(default=None, ge=0)
     track_number: int | None = Field(default=None, gt=0)
     duration_seconds: int | None = Field(default=None, ge=0)
     icon_path: str | None = Field(default=None, max_length=2000)
@@ -118,6 +122,8 @@ class PlaylistTrackResponse(BaseModel):
     title: str
     source_path: str | None
     source_url: str | None
+    source_start_seconds: int | None
+    source_end_seconds: int | None
     track_number: int
     duration_seconds: int | None
     icon_path: str | None
@@ -190,6 +196,24 @@ class LibraryItemDetailResponse(BaseModel):
     tracks: list[PlaylistTrackResponse]
     podcast_feeds: list[PodcastFeedResponse]
     split_points: list[SplitPointResponse]
+    processed_assets: list["ProcessedAssetResponse"] = []
+
+
+class ProcessedAssetResponse(BaseModel):
+    id: int
+    library_item_id: int
+    playlist_track_id: int | None
+    source_path: str
+    output_path: str
+    codec: str
+    bitrate_kbps: int
+    channels: int
+    duration_seconds: int | None
+    size_bytes: int
+    checksum_sha256: str
+    profile: str
+    settings_json: str
+    created_at: datetime
 
 
 class VersionEventResponse(BaseModel):

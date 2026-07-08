@@ -21,7 +21,7 @@ def main() -> None:
     signal.signal(signal.SIGTERM, request_shutdown)
 
     engine = create_worker_engine(settings.database_url)
-    runner = JobRunner(engine)
+    runner = JobRunner(engine, processed_root=settings.processed_path)
 
     while not shutdown_requested:
         processed = runner.process_once()

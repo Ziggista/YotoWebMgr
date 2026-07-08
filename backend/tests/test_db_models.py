@@ -7,6 +7,7 @@ from app.models import (
     PlaylistTrack,
     PodcastEpisode,
     PodcastFeed,
+    ProcessedAsset,
     Setting,
     SplitPoint,
     User,
@@ -31,6 +32,7 @@ def test_foundation_models_are_registered_in_metadata() -> None:
     assert PlaylistTrack.__tablename__ in Base.metadata.tables
     assert PodcastFeed.__tablename__ in Base.metadata.tables
     assert PodcastEpisode.__tablename__ in Base.metadata.tables
+    assert ProcessedAsset.__tablename__ in Base.metadata.tables
     assert SplitPoint.__tablename__ in Base.metadata.tables
     assert Setting.__tablename__ in Base.metadata.tables
     assert VersionEvent.__tablename__ in Base.metadata.tables

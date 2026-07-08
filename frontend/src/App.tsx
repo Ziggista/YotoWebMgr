@@ -36,6 +36,7 @@ import {
   linkLibraryItemToCard,
   loginWithPassword,
   quickSelectUser,
+  queueLibraryItemProcessing,
   restoreLibraryItemVersion,
   retryJob,
   updatePlaylistTrack,
@@ -759,6 +760,16 @@ function LibraryDetailPage() {
     }
   }
 
+  async function handleQueueProcessing() {
+    setError(null);
+    try {
+      await queueLibraryItemProcessing(numericItemId);
+      await refreshPage();
+    } catch (processError) {
+      setError(processError instanceof Error ? processError.message : "Processing queue failed.");
+    }
+  }
+
   async function handleRestoreVersion(version: VersionEvent) {
     const confirmed = window.confirm(
       `Restore ${detail?.item.title ?? "this item"} to version ${version.version_number}? This will create a new version event.`,
@@ -815,6 +826,9 @@ function LibraryDetailPage() {
           <button className="ghost-button" onClick={() => void refreshPage()} type="button">
             Refresh
           </button>
+          <button className="primary-button" onClick={() => void handleQueueProcessing()} type="button">
+            Process audio
+          </button>
           <Link className="ghost-button" to="/">
             Back
           </Link>
@@ -856,6 +870,10 @@ function LibraryDetailPage() {
         <div className="summary-tile">
           <span className="summary-label">Versions</span>
           <strong>{versions.length}</strong>
+        </div>
+        <div className="summary-tile">
+          <span className="summary-label">Assets</span>
+          <strong>{detail.processed_assets.length}</strong>
         </div>
       </div>
 
@@ -919,6 +937,7 @@ function LibraryDetailPage() {
                   <p className="muted">
                     {formatDuration(track.duration_seconds)} ·{" "}
                     {track.is_stream ? "Stream" : track.track_behavior}
+                    {track.source_start_seconds !== null ? ` · starts ${formatDuration(track.source_start_seconds)}` : ""}
                   </p>
                 </div>
                 <span className="muted">{track.icon_path ?? "No icon"}</span>
@@ -1017,6 +1036,35 @@ function LibraryDetailPage() {
             </div>
           )}
         </div>
+      </div>
+
+      <div className="detail-section">
+        <div className="section-header">
+          <div>
+            <p className="eyebrow">Processed</p>
+            <h2>Yoto-ready assets</h2>
+          </div>
+          <span className="status-pill">{detail.processed_assets.length} assets</span>
+        </div>
+        {detail.processed_assets.length === 0 ? (
+          <EmptyState message="No processed audio assets yet." />
+        ) : (
+          <div className="compact-table">
+            {detail.processed_assets.map((asset) => (
+              <div className="compact-table-row" key={asset.id}>
+                <span className="status-pill status-pill-muted">{asset.profile}</span>
+                <div>
+                  <strong>{asset.output_path}</strong>
+                  <p className="muted">
+                    {asset.codec} · {asset.bitrate_kbps} kbps · {asset.channels}ch ·{" "}
+                    {formatDuration(asset.duration_seconds)}
+                  </p>
+                </div>
+                <span className="muted">{Math.round(asset.size_bytes / 1024)} KB</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="detail-section">

@@ -1,11 +1,12 @@
 from datetime import UTC, datetime
 import json
+from pathlib import Path
 import subprocess
 
 import httpx
 from sqlalchemy import create_engine, select
 
-from app.jobs.runner import import_requests, jobs, library_items, metadata, playlist_tracks
+from app.jobs.runner import import_requests, jobs, library_items, metadata, playlist_tracks, processed_assets, settings
 from app.jobs.runner import JobRunner
 
 
@@ -72,7 +73,7 @@ def test_runner_marks_unknown_job_waiting() -> None:
         connection.execute(
             jobs.insert().values(
                 id=1,
-                type="transcode_audio",
+                type="generate_artwork",
                 status="queued",
                 pending_delete=False,
                 retry_count=0,
@@ -90,7 +91,7 @@ def test_runner_marks_unknown_job_waiting() -> None:
         job = connection.execute(select(jobs).where(jobs.c.id == 1)).one()
 
     assert job.status == "waiting"
-    assert "transcode_audio" in job.progress_message
+    assert "generate_artwork" in job.progress_message
 
 
 def test_runner_inspects_media_and_creates_chapter_tracks() -> None:
@@ -107,6 +108,7 @@ def test_runner_inspects_media_and_creates_chapter_tracks() -> None:
             library_items.insert().values(
                 id=20,
                 title="A Test Book",
+                content_type="Audiobook",
                 status="import_queued",
                 readiness_status="needs_review",
             )
@@ -148,6 +150,71 @@ def test_runner_inspects_media_and_creates_chapter_tracks() -> None:
     assert import_request.status == "inspected"
     assert [track.title for track in tracks] == ["Opening", "Middle"]
     assert [track.duration_seconds for track in tracks] == [60, 90]
+    assert [track.source_start_seconds for track in tracks] == [0, 60]
+    assert [track.source_end_seconds for track in tracks] == [60, 150]
+
+
+def test_runner_transcodes_tracks_and_records_assets(tmp_path: Path) -> None:
+    engine = _make_engine()
+    with engine.begin() as connection:
+        connection.execute(settings.insert().values(key="audiobook_bitrate_kbps", value="96"))
+        connection.execute(settings.insert().values(key="music_bitrate_kbps", value="128"))
+        connection.execute(settings.insert().values(key="normalise_loudness_default", value="true"))
+        connection.execute(
+            library_items.insert().values(
+                id=30,
+                title="A Processed Book",
+                content_type="Audiobook",
+                status="inspected",
+                readiness_status="needs_card_plan",
+            )
+        )
+        connection.execute(
+            playlist_tracks.insert().values(
+                id=11,
+                library_item_id=30,
+                title="Opening",
+                source_path="/imports/book.m4b",
+                source_start_seconds=0,
+                source_end_seconds=60,
+                track_number=1,
+                duration_seconds=60,
+                is_stream=False,
+                track_behavior="continue",
+            )
+        )
+        connection.execute(
+            jobs.insert().values(
+                id=4,
+                type="transcode_audio",
+                status="queued",
+                pending_delete=False,
+                retry_count=0,
+                max_retries=3,
+                progress_percent=0,
+                progress_message="Queued",
+                related_library_item_id=30,
+                created_at=datetime.now(UTC),
+            )
+        )
+
+    runner = JobRunner(engine, command_runner=_ffmpeg_runner, processed_root=str(tmp_path / "processed"))
+
+    assert runner.process_once() is True
+    with engine.begin() as connection:
+        job = connection.execute(select(jobs).where(jobs.c.id == 4)).one()
+        library_item = connection.execute(select(library_items).where(library_items.c.id == 30)).one()
+        asset = connection.execute(select(processed_assets).where(processed_assets.c.library_item_id == 30)).one()
+
+    assert job.status == "succeeded"
+    assert library_item.status == "processed"
+    assert library_item.readiness_status == "needs_yoto_upload"
+    assert asset.playlist_track_id == 11
+    assert asset.bitrate_kbps == 96
+    assert asset.channels == 1
+    assert asset.duration_seconds == 60
+    assert asset.size_bytes == len(b"processed-audio")
+    assert Path(asset.output_path).read_bytes() == b"processed-audio"
 
 
 def _ffprobe_runner(args: list[str]) -> subprocess.CompletedProcess[str]:
@@ -179,3 +246,14 @@ def _ffprobe_runner(args: list[str]) -> subprocess.CompletedProcess[str]:
         ],
     }
     return subprocess.CompletedProcess(args, 0, stdout=json.dumps(payload), stderr="")
+
+
+def _ffmpeg_runner(args: list[str]) -> subprocess.CompletedProcess[str]:
+    assert args[0] == "ffmpeg"
+    assert "-ss" in args
+    assert "-to" in args
+    assert "-af" in args
+    output_path = Path(args[-1])
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(b"processed-audio")
+    return subprocess.CompletedProcess(args, 0, stdout="", stderr="")

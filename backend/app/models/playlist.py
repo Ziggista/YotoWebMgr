@@ -14,6 +14,8 @@ class PlaylistTrack(Base):
     title: Mapped[str] = mapped_column(String(240))
     source_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_start_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_end_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     track_number: Mapped[int] = mapped_column(Integer, default=1, index=True)
     duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     icon_path: Mapped[str | None] = mapped_column(Text, nullable=True)

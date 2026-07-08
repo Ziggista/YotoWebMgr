@@ -21,6 +21,7 @@ from app.models import (
     PlaylistTrack,
     PodcastEpisode,
     PodcastFeed,
+    ProcessedAsset,
     Setting,
     SplitPoint,
     User,
@@ -44,6 +45,7 @@ from app.schemas.foundation import (
     PodcastEpisodeResponse,
     PodcastFeedCreate,
     PodcastFeedResponse,
+    ProcessedAssetResponse,
     RadioStreamCreate,
     ReadinessCheck,
     ReadinessResponse,
@@ -225,6 +227,10 @@ def _build_podcast_feed_response(db: Session, feed: PodcastFeed) -> PodcastFeedR
     return response
 
 
+def _build_processed_asset_response(asset: ProcessedAsset) -> ProcessedAssetResponse:
+    return ProcessedAssetResponse.model_validate(asset, from_attributes=True)
+
+
 def _detail_for_item(db: Session, item: LibraryItem) -> LibraryItemDetailResponse:
     tracks = db.scalars(
         select(PlaylistTrack)
@@ -241,11 +247,17 @@ def _detail_for_item(db: Session, item: LibraryItem) -> LibraryItemDetailRespons
         .where(SplitPoint.library_item_id == item.id)
         .order_by(SplitPoint.timestamp_seconds.asc(), SplitPoint.id.asc())
     )
+    processed_assets = db.scalars(
+        select(ProcessedAsset)
+        .where(ProcessedAsset.library_item_id == item.id)
+        .order_by(ProcessedAsset.created_at.desc(), ProcessedAsset.id.desc())
+    )
     return LibraryItemDetailResponse(
         item=_build_library_item_response(db, item),
         tracks=[_build_track_response(track) for track in tracks],
         podcast_feeds=[_build_podcast_feed_response(db, feed) for feed in feeds],
         split_points=[_build_split_point_response(split_point) for split_point in split_points],
+        processed_assets=[_build_processed_asset_response(asset) for asset in processed_assets],
     )
 
 
@@ -292,6 +304,8 @@ def _version_snapshot(db: Session, item: LibraryItem) -> str:
                 "title": track.title,
                 "track_number": track.track_number,
                 "duration_seconds": track.duration_seconds,
+                "source_start_seconds": track.source_start_seconds,
+                "source_end_seconds": track.source_end_seconds,
                 "icon_path": track.icon_path,
                 "track_behavior": track.track_behavior,
                 "is_stream": track.is_stream,
@@ -396,6 +410,8 @@ def _restore_library_item_from_snapshot(db: Session, item: LibraryItem, snapshot
                 title=str(track_snapshot.get("title") or "Untitled track")[:240],
                 source_path=track_snapshot.get("source_path"),
                 source_url=track_snapshot.get("source_url"),
+                source_start_seconds=track_snapshot.get("source_start_seconds"),
+                source_end_seconds=track_snapshot.get("source_end_seconds"),
                 track_number=int(track_snapshot.get("track_number") or 1),
                 duration_seconds=track_snapshot.get("duration_seconds"),
                 icon_path=track_snapshot.get("icon_path"),
@@ -1105,6 +1121,41 @@ async def get_library_item_card_plan(
     if item is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Library item not found")
     return _build_card_plan(db, item)
+
+
+@router.post("/{item_id}/process", response_model=JobResponse, status_code=202)
+async def queue_library_item_processing(
+    item_id: int,
+    db: Annotated[Session, Depends(get_db_session)],
+) -> JobResponse:
+    item = db.get(LibraryItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Library item not found")
+
+    track_count = db.scalar(
+        select(func.count(PlaylistTrack.id))
+        .where(PlaylistTrack.library_item_id == item.id)
+        .where(PlaylistTrack.is_stream.is_(False))
+    )
+    if not track_count:
+        raise HTTPException(status_code=409, detail="Add or inspect non-stream tracks before processing.")
+
+    item.status = "processing_queued"
+    job = Job(
+        type="transcode_audio",
+        status="queued",
+        progress_percent=0,
+        progress_message="Queued Yoto-ready audio processing",
+        related_library_item_id=item.id,
+        related_import_id=item.source_import_id,
+    )
+    db.add(item)
+    db.add(job)
+    db.flush()
+    _record_library_version(db, item, "processing_queued", "Queued Yoto-ready audio processing.")
+    db.commit()
+    db.refresh(job)
+    return JobResponse.model_validate(job, from_attributes=True)
 
 
 @router.post("/{item_id}/link-card", response_model=LinkCardResponse, status_code=202)
