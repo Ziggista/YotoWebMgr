@@ -8,19 +8,32 @@ import {
   ImportSourceInfo,
   ImportRequest,
   Job,
+  LibraryItemDetail,
   LibraryItem,
+  PhysicalCard,
+  ReadinessResponse,
   SessionResponse,
+  applyTrackIcon,
+  createCard,
   createImport,
+  createPodcastFeed,
+  createRadioStreamTrack,
+  createSplitPoint,
+  fetchCards,
   fetchImportSources,
   fetchImports,
   fetchJobs,
+  fetchLibraryItemDetail,
   fetchLibraryItems,
+  fetchReadiness,
   fetchSettings,
   hideImport,
   fetchAuthProviders,
+  linkLibraryItemToCard,
   loginWithPassword,
   quickSelectUser,
   retryJob,
+  updateLibraryItemSettings,
   updateSettings,
   uploadImport,
 } from "./api";
@@ -38,6 +51,7 @@ const contentTypes = [
   "Custom Playlist",
   "Other Audio",
 ];
+const defaultNdefFormatCommand = "A2:03:E1:10:06:00,A2:04:03:04:D8:00,A2:05:00:00:FE:00";
 
 function PlaceholderPage({ title }: { title: string }) {
   return (
@@ -58,7 +72,20 @@ function EmptyState({ message }: { message: string }) {
 
 function LibraryPage() {
   const [items, setItems] = useState<LibraryItem[]>([]);
+  const [cards, setCards] = useState<PhysicalCard[]>([]);
+  const [activeLinkItemId, setActiveLinkItemId] = useState<number | null>(null);
+  const [selectedCardId, setSelectedCardId] = useState("");
+  const [detail, setDetail] = useState<LibraryItemDetail | null>(null);
+  const [readiness, setReadiness] = useState<ReadinessResponse | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [coverArtPath, setCoverArtPath] = useState("");
+  const [trackIconPath, setTrackIconPath] = useState("");
+  const [radioForm, setRadioForm] = useState({ title: "", stream_url: "", icon_path: "" });
+  const [podcastForm, setPodcastForm] = useState({ title: "", rss_url: "" });
+  const [splitForm, setSplitForm] = useState({ timestamp_seconds: "", title: "", part_number: "" });
   const [error, setError] = useState<string | null>(null);
+  const [linkMessage, setLinkMessage] = useState<string | null>(null);
+  const [linking, setLinking] = useState(false);
 
   useEffect(() => {
     void fetchLibraryItems()
@@ -67,6 +94,179 @@ function LibraryPage() {
         setError(loadError instanceof Error ? loadError.message : "Failed to load library."),
       );
   }, []);
+
+  async function openLinkPanel(itemId: number) {
+    setError(null);
+    setLinkMessage(null);
+    setActiveLinkItemId(itemId);
+    try {
+      const nextCards = cards.length > 0 ? cards : await fetchCards();
+      setCards(nextCards);
+      setSelectedCardId(nextCards[0] ? String(nextCards[0].id) : "");
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "Failed to load cards.");
+    }
+  }
+
+  async function openDetailPanel(itemId: number) {
+    setError(null);
+    setLinkMessage(null);
+    setDetailLoading(true);
+    try {
+      const [nextDetail, nextReadiness] = await Promise.all([
+        fetchLibraryItemDetail(itemId),
+        fetchReadiness(itemId),
+      ]);
+      setDetail(nextDetail);
+      setReadiness(nextReadiness);
+      setCoverArtPath(nextDetail.item.cover_art_path ?? "");
+      setTrackIconPath("");
+      setRadioForm({ title: "", stream_url: "", icon_path: "" });
+      setPodcastForm({ title: "", rss_url: "" });
+      setSplitForm({ timestamp_seconds: "", title: "", part_number: "" });
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "Failed to load item detail.");
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
+  async function refreshDetail(itemId: number) {
+    const [nextDetail, nextReadiness] = await Promise.all([
+      fetchLibraryItemDetail(itemId),
+      fetchReadiness(itemId),
+    ]);
+    setDetail(nextDetail);
+    setReadiness(nextReadiness);
+    setItems((current) =>
+      current.map((item) => (item.id === nextDetail.item.id ? nextDetail.item : item)),
+    );
+  }
+
+  async function handleSavePlaylistSettings() {
+    if (!detail) return;
+    setError(null);
+    try {
+      const updated = await updateLibraryItemSettings(detail.item.id, {
+        cover_art_path: coverArtPath || null,
+        playlist_always_play_from_start: detail.item.playlist_always_play_from_start,
+        playlist_shuffle_tracks: detail.item.playlist_shuffle_tracks,
+        playlist_hide_track_numbers: detail.item.playlist_hide_track_numbers,
+      });
+      setItems((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+      await refreshDetail(updated.id);
+      setLinkMessage("Playlist settings saved.");
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Failed to save settings.");
+    }
+  }
+
+  function setDetailOption(
+    key:
+      | "playlist_always_play_from_start"
+      | "playlist_shuffle_tracks"
+      | "playlist_hide_track_numbers",
+    value: boolean,
+  ) {
+    setDetail((current) =>
+      current ? { ...current, item: { ...current.item, [key]: value } } : current,
+    );
+  }
+
+  async function handleApplyIcon() {
+    if (!detail || !trackIconPath) return;
+    setError(null);
+    try {
+      await applyTrackIcon(detail.item.id, trackIconPath);
+      await refreshDetail(detail.item.id);
+      setLinkMessage("Track icon applied.");
+    } catch (iconError) {
+      setError(iconError instanceof Error ? iconError.message : "Failed to apply icon.");
+    }
+  }
+
+  async function handleAddRadioStream(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!detail) return;
+    setError(null);
+    try {
+      await createRadioStreamTrack(detail.item.id, {
+        title: radioForm.title,
+        stream_url: radioForm.stream_url,
+        icon_path: radioForm.icon_path || null,
+      });
+      await refreshDetail(detail.item.id);
+      setRadioForm({ title: "", stream_url: "", icon_path: "" });
+      setLinkMessage("Radio stream saved and validation queued.");
+    } catch (radioError) {
+      setError(radioError instanceof Error ? radioError.message : "Failed to add radio stream.");
+    }
+  }
+
+  async function handleAddPodcast(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!detail) return;
+    setError(null);
+    try {
+      await createPodcastFeed(detail.item.id, {
+        title: podcastForm.title || null,
+        rss_url: podcastForm.rss_url,
+      });
+      await refreshDetail(detail.item.id);
+      setPodcastForm({ title: "", rss_url: "" });
+      setLinkMessage("Podcast feed saved and inspection queued.");
+    } catch (podcastError) {
+      setError(podcastError instanceof Error ? podcastError.message : "Failed to add podcast.");
+    }
+  }
+
+  async function handleAddSplitPoint(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!detail) return;
+    setError(null);
+    try {
+      await createSplitPoint(detail.item.id, {
+        timestamp_seconds: Number(splitForm.timestamp_seconds),
+        title: splitForm.title,
+        part_number: splitForm.part_number ? Number(splitForm.part_number) : null,
+      });
+      await refreshDetail(detail.item.id);
+      setSplitForm({ timestamp_seconds: "", title: "", part_number: "" });
+      setLinkMessage("Split point saved.");
+    } catch (splitError) {
+      setError(splitError instanceof Error ? splitError.message : "Failed to save split point.");
+    }
+  }
+
+  async function handleLinkToCard(itemId: number) {
+    if (!selectedCardId) {
+      setError("Choose a card first.");
+      return;
+    }
+
+    setLinking(true);
+    setError(null);
+    setLinkMessage(null);
+    try {
+      const result = await linkLibraryItemToCard(itemId, Number(selectedCardId));
+      setItems((current) =>
+        current.map((item) => (item.id === result.library_item.id ? result.library_item : item)),
+      );
+      setCards((current) =>
+        current.map((card) => (card.id === result.card.id ? result.card : card)),
+      );
+      setLinkMessage(
+        result.requires_split_plan
+          ? `Queued card planning for ${result.card.display_name}.`
+          : `Queued Yoto upload for ${result.card.display_name}.`,
+      );
+      setActiveLinkItemId(null);
+    } catch (linkError) {
+      setError(linkError instanceof Error ? linkError.message : "Failed to link card.");
+    } finally {
+      setLinking(false);
+    }
+  }
 
   return (
     <section className="panel">
@@ -88,25 +288,271 @@ function LibraryPage() {
                 <h3>{item.title}</h3>
                 <p className="muted">
                   {item.content_type} · {item.status}
+                  {item.stream_url ? " · Live stream" : ""}
                 </p>
-                {item.media_url ? (
+                {item.media_url || item.stream_url ? (
                   <div className="library-player">
                     <AudioPlayer
                       customAdditionalControls={[]}
                       customVolumeControls={[]}
                       layout="horizontal-reverse"
-                      preload="metadata"
+                      preload={item.stream_url ? "none" : "metadata"}
                       showJumpControls={false}
-                      src={item.media_url}
+                      src={item.media_url ?? item.stream_url ?? undefined}
                     />
                   </div>
                 ) : null}
+                {activeLinkItemId === item.id ? (
+                  <div className="inline-link-panel">
+                    {cards.length === 0 ? (
+                      <p className="muted">No cards available yet.</p>
+                    ) : (
+                      <label>
+                        Card
+                        <select
+                          onChange={(event) => setSelectedCardId(event.target.value)}
+                          value={selectedCardId}
+                        >
+                          {cards.map((card) => (
+                            <option key={card.id} value={card.id}>
+                              {card.display_name} ({card.card_code})
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+                    <div className="row-actions">
+                      <button
+                        className="primary-button"
+                        disabled={linking || cards.length === 0}
+                        onClick={() => void handleLinkToCard(item.id)}
+                        type="button"
+                      >
+                        {linking ? "Queueing" : "Queue link"}
+                      </button>
+                      <button
+                        className="ghost-button"
+                        onClick={() => setActiveLinkItemId(null)}
+                        type="button"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
               </div>
-              <span className="status-pill status-pill-muted">#{item.id}</span>
+              <div className="row-actions">
+                <button
+                  className="ghost-button"
+                  onClick={() => void openDetailPanel(item.id)}
+                  type="button"
+                >
+                  Options
+                </button>
+                <button
+                  className="ghost-button"
+                  onClick={() => void openLinkPanel(item.id)}
+                  type="button"
+                >
+                  Link to card
+                </button>
+                <span className="status-pill status-pill-muted">#{item.id}</span>
+              </div>
             </article>
           ))}
         </div>
       )}
+      {detail ? (
+        <div className="detail-panel">
+          <div className="section-header">
+            <div>
+              <p className="eyebrow">Card prep</p>
+              <h2>{detail.item.title}</h2>
+            </div>
+            <button className="ghost-button" onClick={() => setDetail(null)} type="button">
+              Close
+            </button>
+          </div>
+
+          <div className="prep-grid">
+            <div className="prep-block">
+              <h3>Playlist options</h3>
+              <label>
+                Cover path
+                <input
+                  onChange={(event) => setCoverArtPath(event.target.value)}
+                  placeholder="/artwork/moon.png"
+                  value={coverArtPath}
+                />
+              </label>
+              <label className="checkbox-row">
+                <input
+                  checked={detail.item.playlist_always_play_from_start}
+                  onChange={(event) =>
+                    setDetailOption("playlist_always_play_from_start", event.target.checked)
+                  }
+                  type="checkbox"
+                />
+                Always play from start
+              </label>
+              <label className="checkbox-row">
+                <input
+                  checked={detail.item.playlist_shuffle_tracks}
+                  onChange={(event) =>
+                    setDetailOption("playlist_shuffle_tracks", event.target.checked)
+                  }
+                  type="checkbox"
+                />
+                Shuffle tracks
+              </label>
+              <label className="checkbox-row">
+                <input
+                  checked={detail.item.playlist_hide_track_numbers}
+                  onChange={(event) =>
+                    setDetailOption("playlist_hide_track_numbers", event.target.checked)
+                  }
+                  type="checkbox"
+                />
+                Hide track numbers
+              </label>
+              <button className="primary-button" onClick={() => void handleSavePlaylistSettings()} type="button">
+                Save options
+              </button>
+            </div>
+
+            <div className="prep-block">
+              <h3>Track icons</h3>
+              <label>
+                Icon path
+                <input
+                  onChange={(event) => setTrackIconPath(event.target.value)}
+                  placeholder="/icons/book.png"
+                  value={trackIconPath}
+                />
+              </label>
+              <button
+                className="ghost-button"
+                disabled={!trackIconPath || detail.tracks.length === 0}
+                onClick={() => void handleApplyIcon()}
+                type="button"
+              >
+                Apply to all tracks
+              </button>
+              <p className="muted">
+                {detail.tracks.length} tracks ·{" "}
+                {detail.tracks.filter((track) => !track.icon_path).length} missing icons
+              </p>
+            </div>
+
+            <form className="prep-block" onSubmit={(event) => void handleAddRadioStream(event)}>
+              <h3>Radio stream</h3>
+              <input
+                onChange={(event) =>
+                  setRadioForm((current) => ({ ...current, title: event.target.value }))
+                }
+                placeholder="Stream title"
+                required
+                value={radioForm.title}
+              />
+              <input
+                onChange={(event) =>
+                  setRadioForm((current) => ({ ...current, stream_url: event.target.value }))
+                }
+                placeholder="https://example.test/stream.mp3"
+                required
+                value={radioForm.stream_url}
+              />
+              <input
+                onChange={(event) =>
+                  setRadioForm((current) => ({ ...current, icon_path: event.target.value }))
+                }
+                placeholder="/icons/radio.png"
+                value={radioForm.icon_path}
+              />
+              <button className="primary-button" type="submit">
+                Add stream
+              </button>
+            </form>
+
+            <form className="prep-block" onSubmit={(event) => void handleAddPodcast(event)}>
+              <h3>Podcast feed</h3>
+              <input
+                onChange={(event) =>
+                  setPodcastForm((current) => ({ ...current, title: event.target.value }))
+                }
+                placeholder="Optional title"
+                value={podcastForm.title}
+              />
+              <input
+                onChange={(event) =>
+                  setPodcastForm((current) => ({ ...current, rss_url: event.target.value }))
+                }
+                placeholder="https://example.test/feed.xml"
+                required
+                value={podcastForm.rss_url}
+              />
+              <button className="primary-button" type="submit">
+                Add feed
+              </button>
+            </form>
+
+            <form className="prep-block" onSubmit={(event) => void handleAddSplitPoint(event)}>
+              <h3>Manual split point</h3>
+              <input
+                min="0"
+                onChange={(event) =>
+                  setSplitForm((current) => ({ ...current, timestamp_seconds: event.target.value }))
+                }
+                placeholder="Timestamp seconds"
+                required
+                type="number"
+                value={splitForm.timestamp_seconds}
+              />
+              <input
+                onChange={(event) =>
+                  setSplitForm((current) => ({ ...current, title: event.target.value }))
+                }
+                placeholder="Part title"
+                required
+                value={splitForm.title}
+              />
+              <input
+                min="1"
+                onChange={(event) =>
+                  setSplitForm((current) => ({ ...current, part_number: event.target.value }))
+                }
+                placeholder="Part number"
+                type="number"
+                value={splitForm.part_number}
+              />
+              <button className="primary-button" type="submit">
+                Save split
+              </button>
+            </form>
+
+            <div className="prep-block">
+              <h3>Readiness</h3>
+              {detailLoading ? <p className="muted">Loading checks...</p> : null}
+              {readiness ? (
+                <div className="check-list">
+                  {readiness.checks.map((check) => (
+                    <div className="check-row" key={check.key}>
+                      <span className={check.ok ? "check-ok" : "check-warn"}>
+                        {check.ok ? "OK" : "Needs review"}
+                      </span>
+                      <div>
+                        <strong>{check.label}</strong>
+                        <p className="muted">{check.detail}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {linkMessage ? <p className="muted">{linkMessage}</p> : null}
     </section>
   );
 }
@@ -243,7 +689,8 @@ function ImportPage({ session }: { session: SessionResponse }) {
               />
             </label>
             <p className="muted">
-              Uploads are staged in {sources?.browser_upload_path ?? "/media/imports/uploads"}.
+              Uploads are staged in{" "}
+              {sources?.browser_upload_path ?? "/var/lib/yotowebmgr/media/imports/uploads"}.
             </p>
           </div>
         ) : (
@@ -254,12 +701,15 @@ function ImportPage({ session }: { session: SessionResponse }) {
                 onChange={(event) =>
                   setForm((current) => ({ ...current, source_path: event.target.value }))
                 }
-                placeholder={`${sources?.filesystem_drop_path ?? "/media/imports/drop"}/example.m4b`}
+                placeholder={`${
+                  sources?.filesystem_drop_path ?? "/var/lib/yotowebmgr/media/imports/drop"
+                }/example.m4b`}
                 value={form.source_path}
               />
             </label>
             <p className="muted">
-              Filesystem imports are limited to {sources?.filesystem_drop_path ?? "/media/imports/drop"}.
+              Filesystem imports are limited to{" "}
+              {sources?.filesystem_drop_path ?? "/var/lib/yotowebmgr/media/imports/drop"}.
             </p>
           </div>
         )}
@@ -371,6 +821,401 @@ function JobsPage() {
   );
 }
 
+function CardsPage() {
+  const [cards, setCards] = useState<PhysicalCard[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [form, setForm] = useState({
+    card_code: "",
+    programmable_id: "",
+    display_name: "",
+    card_kind: "generic_mifare_ultralight_ev1",
+    nfc_technology: "NFC Type 2",
+    chip_type: "MIFARE Ultralight EV1",
+    memory_size_bytes: "48",
+    ndef_prepared: true,
+    ndef_format_command: defaultNdefFormatCommand,
+    programming_app: "NFC Tools",
+    source_card_code: "",
+    is_reusable_transfer_card: false,
+    ready_to_link_in_app: false,
+    linked_manually: false,
+    overwrite_ok: false,
+    downloaded_to_player_confirmed: false,
+    needs_player_download: false,
+    yoto_playlist_uri: "",
+    status: "available",
+    label_color: "",
+    tested: false,
+    notes: "",
+  });
+
+  async function refreshCards() {
+    setCards(await fetchCards());
+  }
+
+  useEffect(() => {
+    void refreshCards().catch((loadError) =>
+      setError(loadError instanceof Error ? loadError.message : "Failed to load cards."),
+    );
+  }, []);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSubmitting(true);
+    setError(null);
+    try {
+      await createCard({
+        card_code: form.card_code,
+        programmable_id: form.programmable_id || null,
+        display_name: form.display_name,
+        card_kind: form.card_kind,
+        nfc_technology: form.nfc_technology || null,
+        chip_type: form.chip_type || null,
+        memory_size_bytes: form.memory_size_bytes ? Number(form.memory_size_bytes) : null,
+        ndef_prepared: form.ndef_prepared,
+        ndef_format_command: form.ndef_format_command || null,
+        programming_app: form.programming_app || null,
+        source_card_code: form.source_card_code || null,
+        is_reusable_transfer_card: form.is_reusable_transfer_card,
+        ready_to_link_in_app: form.ready_to_link_in_app,
+        linked_manually: form.linked_manually,
+        overwrite_ok: form.overwrite_ok,
+        downloaded_to_player_confirmed: form.downloaded_to_player_confirmed,
+        needs_player_download: form.needs_player_download,
+        yoto_playlist_uri: form.yoto_playlist_uri || null,
+        status: form.status,
+        label_color: form.label_color || null,
+        tested: form.tested,
+        notes: form.notes || null,
+      });
+      setForm((current) => ({
+        ...current,
+        card_code: "",
+        programmable_id: "",
+        display_name: "",
+        source_card_code: "",
+        yoto_playlist_uri: "",
+        label_color: "",
+        tested: false,
+        ready_to_link_in_app: false,
+        linked_manually: false,
+        overwrite_ok: false,
+        downloaded_to_player_confirmed: false,
+        needs_player_download: false,
+        notes: "",
+      }));
+      await refreshCards();
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "Card creation failed.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <section className="panel">
+      <div className="section-header">
+        <div>
+          <p className="eyebrow">Cards</p>
+          <h2>Card inventory</h2>
+        </div>
+        <span className="status-pill">{cards.length} cards</span>
+      </div>
+
+      <form className="import-form" onSubmit={(event) => void handleSubmit(event)}>
+        <div className="import-grid import-grid-wide">
+          <label>
+            Card ID
+            <input
+              onChange={(event) =>
+                setForm((current) => ({ ...current, card_code: event.target.value.toUpperCase() }))
+              }
+              pattern="[A-Za-z0-9]+"
+              placeholder="CARD01"
+              required
+              value={form.card_code}
+            />
+          </label>
+          <label>
+            Programmable ID
+            <input
+              onChange={(event) =>
+                setForm((current) => ({ ...current, programmable_id: event.target.value }))
+              }
+              placeholder="04A1B2C3D4"
+              value={form.programmable_id}
+            />
+          </label>
+          <label>
+            Name
+            <input
+              onChange={(event) =>
+                setForm((current) => ({ ...current, display_name: event.target.value }))
+              }
+              placeholder="Card 01"
+              required
+              value={form.display_name}
+            />
+          </label>
+        </div>
+
+        <div className="import-grid import-grid-wide">
+          <label>
+            Kind
+            <select
+              onChange={(event) =>
+                setForm((current) => ({ ...current, card_kind: event.target.value }))
+              }
+              value={form.card_kind}
+            >
+              <option value="official_myo">Official MYO</option>
+              <option value="generic_mifare_ultralight_ev1">Generic MIFARE Ultralight EV1</option>
+              <option value="other_nfc">Other NFC</option>
+            </select>
+          </label>
+          <label>
+            NFC technology
+            <input
+              onChange={(event) =>
+                setForm((current) => ({ ...current, nfc_technology: event.target.value }))
+              }
+              value={form.nfc_technology}
+            />
+          </label>
+        </div>
+
+        <div className="import-grid import-grid-wide">
+          <label>
+            Chip
+            <input
+              onChange={(event) =>
+                setForm((current) => ({ ...current, chip_type: event.target.value }))
+              }
+              value={form.chip_type}
+            />
+          </label>
+          <label>
+            Memory bytes
+            <input
+              min="1"
+              onChange={(event) =>
+                setForm((current) => ({ ...current, memory_size_bytes: event.target.value }))
+              }
+              type="number"
+              value={form.memory_size_bytes}
+            />
+          </label>
+          <label>
+            Programming app
+            <input
+              onChange={(event) =>
+                setForm((current) => ({ ...current, programming_app: event.target.value }))
+              }
+              value={form.programming_app}
+            />
+          </label>
+        </div>
+
+        <div className="import-grid import-grid-wide">
+          <label>
+            Source card
+            <input
+              onChange={(event) =>
+                setForm((current) => ({ ...current, source_card_code: event.target.value.toUpperCase() }))
+              }
+              placeholder="MYOTRANSFER01"
+              value={form.source_card_code}
+            />
+          </label>
+          <label>
+            Playlist URI
+            <input
+              onChange={(event) =>
+                setForm((current) => ({ ...current, yoto_playlist_uri: event.target.value }))
+              }
+              placeholder="yoto://playlist/..."
+              value={form.yoto_playlist_uri}
+            />
+          </label>
+          <label>
+            Status
+            <select
+              onChange={(event) =>
+                setForm((current) => ({ ...current, status: event.target.value }))
+              }
+              value={form.status}
+            >
+              <option value="available">Available</option>
+              <option value="ready_to_link">Ready to link</option>
+              <option value="linked">Linked</option>
+              <option value="needs_attention">Needs attention</option>
+            </select>
+          </label>
+        </div>
+
+        <div className="import-grid">
+          <label>
+            NDEF command
+            <input
+              onChange={(event) =>
+                setForm((current) => ({ ...current, ndef_format_command: event.target.value }))
+              }
+              value={form.ndef_format_command}
+            />
+          </label>
+          <label>
+            Label colour
+            <input
+              onChange={(event) =>
+                setForm((current) => ({ ...current, label_color: event.target.value }))
+              }
+              value={form.label_color}
+            />
+          </label>
+          <label>
+            Notes
+            <input
+              onChange={(event) =>
+                setForm((current) => ({ ...current, notes: event.target.value }))
+              }
+              value={form.notes}
+            />
+          </label>
+        </div>
+
+        <div className="checkbox-pair">
+          <label className="checkbox-row">
+            <input
+              checked={form.ndef_prepared}
+              onChange={(event) =>
+                setForm((current) => ({ ...current, ndef_prepared: event.target.checked }))
+              }
+              type="checkbox"
+            />
+            NDEF prepared
+          </label>
+          <label className="checkbox-row">
+            <input
+              checked={form.tested}
+              onChange={(event) =>
+                setForm((current) => ({ ...current, tested: event.target.checked }))
+              }
+              type="checkbox"
+            />
+            Tested
+          </label>
+          <label className="checkbox-row">
+            <input
+              checked={form.is_reusable_transfer_card}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  is_reusable_transfer_card: event.target.checked,
+                }))
+              }
+              type="checkbox"
+            />
+            Reusable transfer card
+          </label>
+          <label className="checkbox-row">
+            <input
+              checked={form.ready_to_link_in_app}
+              onChange={(event) =>
+                setForm((current) => ({ ...current, ready_to_link_in_app: event.target.checked }))
+              }
+              type="checkbox"
+            />
+            Ready to link in app
+          </label>
+          <label className="checkbox-row">
+            <input
+              checked={form.linked_manually}
+              onChange={(event) =>
+                setForm((current) => ({ ...current, linked_manually: event.target.checked }))
+              }
+              type="checkbox"
+            />
+            Linked manually
+          </label>
+          <label className="checkbox-row">
+            <input
+              checked={form.overwrite_ok}
+              onChange={(event) =>
+                setForm((current) => ({ ...current, overwrite_ok: event.target.checked }))
+              }
+              type="checkbox"
+            />
+            OK to overwrite
+          </label>
+          <label className="checkbox-row">
+            <input
+              checked={form.needs_player_download}
+              onChange={(event) =>
+                setForm((current) => ({ ...current, needs_player_download: event.target.checked }))
+              }
+              type="checkbox"
+            />
+            Needs player download
+          </label>
+          <label className="checkbox-row">
+            <input
+              checked={form.downloaded_to_player_confirmed}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  downloaded_to_player_confirmed: event.target.checked,
+                }))
+              }
+              type="checkbox"
+            />
+            Download confirmed
+          </label>
+        </div>
+
+        <div className="form-actions">
+          <span className="muted">Alphanumeric card IDs only</span>
+          <button className="primary-button" disabled={submitting} type="submit">
+            {submitting ? "Adding" : "Add card"}
+          </button>
+        </div>
+      </form>
+      {error ? <p className="auth-error">{error}</p> : null}
+
+      <div className="item-list">
+        {cards.length === 0 ? (
+          <EmptyState message="No cards yet." />
+        ) : (
+          cards.map((card) => (
+            <article className="list-row" key={card.id}>
+              <div>
+                <h3>{card.display_name}</h3>
+                <p className="muted">
+                  {card.card_code} · {card.card_kind} · {card.status}
+                </p>
+                <p className="muted">
+                  {card.programmable_id ?? "No programmable ID"} ·{" "}
+                  {card.chip_type ?? "Chip unknown"} ·{" "}
+                  {card.memory_size_bytes ? `${card.memory_size_bytes} bytes` : "Memory unknown"}
+                </p>
+              </div>
+              <div className="row-actions">
+                {card.ndef_prepared ? <span className="status-pill">NDEF</span> : null}
+                {card.ready_to_link_in_app ? <span className="status-pill">Ready</span> : null}
+                {card.linked_manually ? <span className="status-pill">Linked</span> : null}
+                {card.needs_player_download ? (
+                  <span className="status-pill status-pill-muted">Needs download</span>
+                ) : null}
+                {card.tested ? <span className="status-pill status-pill-muted">Tested</span> : null}
+              </div>
+            </article>
+          ))
+        )}
+      </div>
+    </section>
+  );
+}
+
 function SettingsPage() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -405,7 +1250,11 @@ function SettingsPage() {
       <section className="panel">
         <p className="eyebrow">Settings</p>
         <h2>Processing defaults</h2>
-        <EmptyState message="Loading settings..." />
+        {error ? (
+          <p className="auth-error">{error}</p>
+        ) : (
+          <EmptyState message="Loading settings..." />
+        )}
       </section>
     );
   }
@@ -482,6 +1331,125 @@ function SettingsPage() {
           />
           Normalise loudness by default
         </label>
+
+        <h3 className="settings-section-title">Yoto API</h3>
+        <label className="checkbox-row">
+          <input
+            checked={settings.yoto_api_enabled}
+            onChange={(event) =>
+              setSettings((current) =>
+                current ? { ...current, yoto_api_enabled: event.target.checked } : current,
+              )
+            }
+            type="checkbox"
+          />
+          Enable Yoto API integration
+        </label>
+        <label>
+          API base URL
+          <input
+            onChange={(event) =>
+              setSettings((current) =>
+                current ? { ...current, yoto_api_base_url: event.target.value } : current,
+              )
+            }
+            type="url"
+            value={settings.yoto_api_base_url}
+          />
+        </label>
+        <label>
+          Auth base URL
+          <input
+            onChange={(event) =>
+              setSettings((current) =>
+                current ? { ...current, yoto_auth_base_url: event.target.value } : current,
+              )
+            }
+            type="url"
+            value={settings.yoto_auth_base_url}
+          />
+        </label>
+        <label>
+          Client ID
+          <input
+            onChange={(event) =>
+              setSettings((current) =>
+                current ? { ...current, yoto_client_id: event.target.value } : current,
+              )
+            }
+            value={settings.yoto_client_id}
+          />
+        </label>
+        <label>
+          Redirect URI
+          <input
+            onChange={(event) =>
+              setSettings((current) =>
+                current ? { ...current, yoto_redirect_uri: event.target.value } : current,
+              )
+            }
+            value={settings.yoto_redirect_uri}
+          />
+        </label>
+        <label>
+          OAuth scope
+          <input
+            onChange={(event) =>
+              setSettings((current) =>
+                current ? { ...current, yoto_oauth_scope: event.target.value } : current,
+              )
+            }
+            value={settings.yoto_oauth_scope}
+          />
+        </label>
+        <label>
+          Upload timeout seconds
+          <input
+            min="1"
+            onChange={(event) =>
+              setSettings((current) =>
+                current
+                  ? { ...current, yoto_upload_timeout_seconds: Number(event.target.value) }
+                  : current,
+              )
+            }
+            type="number"
+            value={settings.yoto_upload_timeout_seconds}
+          />
+        </label>
+        <label>
+          Transcode poll seconds
+          <input
+            min="1"
+            onChange={(event) =>
+              setSettings((current) =>
+                current
+                  ? { ...current, yoto_transcode_poll_seconds: Number(event.target.value) }
+                  : current,
+              )
+            }
+            type="number"
+            value={settings.yoto_transcode_poll_seconds}
+          />
+        </label>
+        <label>
+          Transcode timeout minutes
+          <input
+            min="1"
+            onChange={(event) =>
+              setSettings((current) =>
+                current
+                  ? { ...current, yoto_transcode_timeout_minutes: Number(event.target.value) }
+                  : current,
+              )
+            }
+            type="number"
+            value={settings.yoto_transcode_timeout_minutes}
+          />
+        </label>
+        <p className="settings-note">
+          Store refresh tokens and client secrets in Kubernetes Secrets, not application settings.
+        </p>
         <button className="primary-button" disabled={saving} type="submit">
           Save settings
         </button>
@@ -710,7 +1678,7 @@ export default function App() {
           />
           <Route
             path="/cards"
-            element={session ? <PlaceholderPage title="Cards" /> : <PlaceholderPage title="Home" />}
+            element={session ? <CardsPage /> : <PlaceholderPage title="Home" />}
           />
           <Route
             path="/jobs"

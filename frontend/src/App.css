@@ -186,7 +186,9 @@ a {
 .data-form input,
 .data-form select,
 .import-form input,
-.import-form select {
+.import-form select,
+.inline-link-panel select,
+.prep-block input {
   width: 100%;
   padding: 12px 14px;
   border-radius: 14px;
@@ -194,6 +196,87 @@ a {
   background: rgba(6, 22, 26, 0.72);
   color: #f4efe6;
   font: inherit;
+}
+
+.detail-panel {
+  display: grid;
+  gap: 18px;
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid rgba(255, 240, 214, 0.14);
+}
+
+.prep-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+}
+
+.prep-block {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 16px;
+  border-radius: 8px;
+  background: rgba(6, 22, 26, 0.46);
+  border: 1px solid rgba(255, 240, 214, 0.12);
+}
+
+.prep-block h3 {
+  margin: 0;
+}
+
+.prep-block label {
+  display: grid;
+  gap: 6px;
+  color: #ddd4c3;
+}
+
+.checkbox-row {
+  display: flex !important;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 10px !important;
+}
+
+.checkbox-row input {
+  width: auto;
+}
+
+.check-list {
+  display: grid;
+  gap: 10px;
+}
+
+.check-row {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  gap: 10px;
+  align-items: start;
+}
+
+.check-row p {
+  margin: 4px 0 0;
+}
+
+.check-ok,
+.check-warn {
+  display: inline-flex;
+  justify-content: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.check-ok {
+  color: #123128;
+  background: #a7f3d0;
+}
+
+.check-warn {
+  color: #332313;
+  background: #fed7aa;
 }
 
 .segmented-control {
@@ -234,6 +317,10 @@ a {
   display: grid;
   grid-template-columns: minmax(0, 1.4fr) minmax(180px, 0.8fr);
   gap: 12px;
+}
+
+.import-grid-wide {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .import-form label {
@@ -294,6 +381,20 @@ a {
   color: #ddd4c3;
 }
 
+.settings-section-title,
+.settings-note {
+  grid-column: 1 / -1;
+}
+
+.settings-section-title {
+  margin: 14px 0 0;
+}
+
+.settings-note {
+  margin: 0;
+  color: #ddd4c3;
+}
+
 .checkbox-row {
   display: flex !important;
   grid-template-columns: auto 1fr;
@@ -303,6 +404,12 @@ a {
 
 .checkbox-row input {
   width: auto;
+}
+
+.checkbox-pair {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
 }
 
 .primary-button {
@@ -415,6 +522,23 @@ a {
   max-width: 620px;
 }
 
+.inline-link-panel {
+  display: grid;
+  gap: 10px;
+  max-width: 520px;
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(6, 22, 26, 0.62);
+  border: 1px solid rgba(255, 240, 214, 0.12);
+}
+
+.inline-link-panel label {
+  display: grid;
+  gap: 6px;
+  color: #ddd4c3;
+}
+
 .library-player .rhap_container {
   padding: 8px 10px;
   border-radius: 14px;
@@ -476,7 +600,8 @@ a {
   }
 
   .segmented-control,
-  .import-grid {
+  .import-grid,
+  .import-grid-wide {
     width: 100%;
     grid-template-columns: 1fr;
   }

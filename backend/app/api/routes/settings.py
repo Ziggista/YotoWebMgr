@@ -17,6 +17,15 @@ SETTING_DEFAULTS = {
     "normalise_loudness_default": "true",
     "audiobook_bitrate_kbps": "96",
     "music_bitrate_kbps": "128",
+    "yoto_api_enabled": "false",
+    "yoto_api_base_url": "https://api.yotoplay.com",
+    "yoto_auth_base_url": "https://login.yotoplay.com",
+    "yoto_client_id": "",
+    "yoto_redirect_uri": "",
+    "yoto_oauth_scope": "openid offline_access",
+    "yoto_upload_timeout_seconds": "900",
+    "yoto_transcode_poll_seconds": "10",
+    "yoto_transcode_timeout_minutes": "30",
 }
 
 
@@ -28,6 +37,15 @@ def _coerce_settings(records: dict[str, str]) -> AppSettings:
         normalise_loudness_default=values["normalise_loudness_default"].lower() == "true",
         audiobook_bitrate_kbps=int(values["audiobook_bitrate_kbps"]),
         music_bitrate_kbps=int(values["music_bitrate_kbps"]),
+        yoto_api_enabled=values["yoto_api_enabled"].lower() == "true",
+        yoto_api_base_url=values["yoto_api_base_url"],
+        yoto_auth_base_url=values["yoto_auth_base_url"],
+        yoto_client_id=values["yoto_client_id"],
+        yoto_redirect_uri=values["yoto_redirect_uri"],
+        yoto_oauth_scope=values["yoto_oauth_scope"],
+        yoto_upload_timeout_seconds=int(values["yoto_upload_timeout_seconds"]),
+        yoto_transcode_poll_seconds=int(values["yoto_transcode_poll_seconds"]),
+        yoto_transcode_timeout_minutes=int(values["yoto_transcode_timeout_minutes"]),
     )
 
 

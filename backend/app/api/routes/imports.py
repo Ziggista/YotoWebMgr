@@ -2,6 +2,7 @@ from typing import Annotated
 from pathlib import Path
 from re import sub
 from uuid import uuid4
+import zipfile
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy import select
@@ -9,12 +10,12 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db.session import get_db_session
-from app.models import ImportRequest, Job, LibraryItem, User
+from app.models import ImportRequest, Job, LibraryItem, PlaylistTrack, User
 from app.schemas.foundation import ImportCreate, ImportResponse, ImportSourceInfo
 
 
 router = APIRouter()
-allowed_import_extensions = [
+allowed_audio_extensions = [
     ".aac",
     ".flac",
     ".m4a",
@@ -25,6 +26,7 @@ allowed_import_extensions = [
     ".opus",
     ".wav",
 ]
+allowed_import_extensions = [*allowed_audio_extensions, ".zip"]
 
 
 def _normalise_filesystem_source(source_path: str | None) -> str:
@@ -58,9 +60,43 @@ def _safe_upload_filename(filename: str) -> str:
     if suffix not in allowed_import_extensions:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Unsupported media extension: {suffix or 'none'}.",
+            detail=f"Unsupported import extension: {suffix or 'none'}.",
         )
     return f"{stem or 'upload'}-{uuid4().hex[:12]}{suffix}"
+
+
+def _title_from_track_path(path: Path) -> str:
+    cleaned = sub(r"^[0-9]+[\s._-]+", "", path.stem)
+    cleaned = sub(r"[\s._-]+", " ", cleaned).strip()
+    return cleaned or path.stem
+
+
+def _extract_zip_upload(zip_path: Path, upload_root: Path) -> list[Path]:
+    extract_root = upload_root / f"{zip_path.stem}-extracted"
+    extract_root.mkdir(parents=True, exist_ok=True)
+    audio_files: list[Path] = []
+
+    with zipfile.ZipFile(zip_path) as archive:
+        for member in archive.infolist():
+            if member.is_dir():
+                continue
+            member_path = Path(member.filename)
+            if member_path.is_absolute() or ".." in member_path.parts:
+                raise HTTPException(status_code=422, detail="ZIP import contains an unsafe path.")
+            if member_path.suffix.lower() not in allowed_audio_extensions:
+                continue
+            destination = (extract_root / member_path).resolve(strict=False)
+            if extract_root.resolve(strict=False) not in destination.parents:
+                raise HTTPException(status_code=422, detail="ZIP import contains an unsafe path.")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with archive.open(member) as source_file, destination.open("wb") as output_file:
+                while chunk := source_file.read(1024 * 1024):
+                    output_file.write(chunk)
+            audio_files.append(destination)
+
+    if not audio_files:
+        raise HTTPException(status_code=422, detail="ZIP import did not contain supported audio files.")
+    return sorted(audio_files, key=lambda path: str(path.relative_to(extract_root)).lower())
 
 
 def _ensure_import_directories() -> None:
@@ -93,6 +129,9 @@ def _create_import_records(
     payload: ImportCreate,
     *,
     source_path: str | None = None,
+    job_type: str | None = None,
+    job_message: str = "Queued for media inspection",
+    playlist_tracks: list[Path] | None = None,
 ) -> ImportResponse:
     requested_by = None
     if payload.requested_by_user_slug:
@@ -123,17 +162,35 @@ def _create_import_records(
     db.add(library_item)
     db.flush()
 
-    job_type = "import_from_filesystem" if payload.source_type == "filesystem" else "inspect_media"
+    resolved_job_type = (
+        job_type
+        if job_type is not None
+        else "import_from_filesystem"
+        if payload.source_type == "filesystem"
+        else "inspect_media"
+    )
     job = Job(
-        type=job_type,
+        type=resolved_job_type,
         status="queued",
         created_by_user_id=requested_by.id if requested_by else None,
         progress_percent=0,
-        progress_message="Queued for media inspection",
+        progress_message=job_message,
         related_import_id=import_request.id,
         related_library_item_id=library_item.id,
     )
     db.add(job)
+
+    if playlist_tracks:
+        for index, track_path in enumerate(playlist_tracks, start=1):
+            db.add(
+                PlaylistTrack(
+                    library_item_id=library_item.id,
+                    title=_title_from_track_path(track_path),
+                    source_path=str(track_path),
+                    track_number=index,
+                    track_behavior="continue",
+                )
+            )
     db.commit()
     db.refresh(import_request)
 
@@ -226,11 +283,28 @@ async def upload_import(
         while chunk := await media_file.read(1024 * 1024):
             output_file.write(chunk)
 
+    extracted_tracks: list[Path] | None = None
+    import_source_path = str(destination)
+    job_type = None
+    job_message = "Queued for media inspection"
+    if destination.suffix.lower() == ".zip":
+        extracted_tracks = _extract_zip_upload(destination, upload_root)
+        import_source_path = str(upload_root / f"{destination.stem}-extracted")
+        job_type = "extract_zip_import"
+        job_message = f"Queued ZIP album import with {len(extracted_tracks)} discovered track(s)"
+
     payload = ImportCreate(
         title=title,
         source_type="browser_upload",
-        source_path=str(destination),
+        source_path=import_source_path,
         content_type=content_type,
         requested_by_user_slug=requested_by_user_slug or None,
     )
-    return _create_import_records(db, payload, source_path=str(destination))
+    return _create_import_records(
+        db,
+        payload,
+        source_path=import_source_path,
+        job_type=job_type,
+        job_message=job_message,
+        playlist_tracks=extracted_tracks,
+    )

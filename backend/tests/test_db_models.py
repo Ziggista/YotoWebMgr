@@ -1,5 +1,16 @@
 from app.db.base import Base
-from app.models import ImportRequest, Job, LibraryItem, Setting, User
+from app.models import (
+    ImportRequest,
+    Job,
+    LibraryItem,
+    PhysicalCard,
+    PlaylistTrack,
+    PodcastEpisode,
+    PodcastFeed,
+    Setting,
+    SplitPoint,
+    User,
+)
 
 
 def test_user_model_is_registered_in_metadata() -> None:
@@ -15,4 +26,9 @@ def test_foundation_models_are_registered_in_metadata() -> None:
     assert LibraryItem.__tablename__ in Base.metadata.tables
     assert ImportRequest.__tablename__ in Base.metadata.tables
     assert Job.__tablename__ in Base.metadata.tables
+    assert PhysicalCard.__tablename__ in Base.metadata.tables
+    assert PlaylistTrack.__tablename__ in Base.metadata.tables
+    assert PodcastFeed.__tablename__ in Base.metadata.tables
+    assert PodcastEpisode.__tablename__ in Base.metadata.tables
+    assert SplitPoint.__tablename__ in Base.metadata.tables
     assert Setting.__tablename__ in Base.metadata.tables

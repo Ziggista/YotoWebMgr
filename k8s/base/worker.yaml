@@ -24,15 +24,15 @@ spec:
                 name: yotowebmgr-secrets
           volumeMounts:
             - name: imports
-              mountPath: /media/imports
+              mountPath: /var/lib/yotowebmgr/media/imports
             - name: originals
-              mountPath: /media/originals
+              mountPath: /var/lib/yotowebmgr/media/originals
             - name: processed
-              mountPath: /media/processed
+              mountPath: /var/lib/yotowebmgr/media/processed
             - name: artwork
-              mountPath: /media/artwork
+              mountPath: /var/lib/yotowebmgr/media/artwork
             - name: exports
-              mountPath: /media/exports
+              mountPath: /var/lib/yotowebmgr/media/exports
       volumes:
         - name: imports
           persistentVolumeClaim:

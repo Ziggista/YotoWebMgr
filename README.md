@@ -59,17 +59,48 @@ MicroK8s registry:
 k8s/scripts/deploy-dev.sh
 ```
 
-The dev deployment script deletes the `yotowebmgr` namespace before applying the manifests so
-PostgreSQL starts with a clean volume and Alembic applies all migrations from scratch.
+The dev deployment script is intentionally destructive. It deletes the `yotowebmgr` namespace
+before building images or applying manifests, so PostgreSQL starts with a clean volume and Alembic
+applies all migrations from scratch.
+The dev overlay also sets `RESET_DATABASE_ON_START=true`, which makes the API drop and recreate
+PostgreSQL's `public` schema before migrations run. That is intentionally destructive and should
+stay disabled outside disposable dev deployments.
+
+Open the Kubernetes frontend with the dedicated helper:
+
+```bash
+k8s/scripts/open-dev.sh
+```
+
+Then browse to:
+
+```text
+http://127.0.0.1:5175/
+```
+
+Use this URL for the MicroK8s app. Port `5173` is reserved for local Vite development and can show
+stale local state if it is running separately.
+
+### Dev Shortcuts
+
+Common commands are wrapped so routine checks use less typing:
+
+```bash
+scripts/dev/verify.sh      # backend tests, frontend build, shell syntax checks
+scripts/dev/redeploy.sh    # destructive MicroK8s rebuild/redeploy from scratch
+k8s/scripts/open-dev.sh    # open the Kubernetes frontend on http://127.0.0.1:5175/
+scripts/dev/status.sh      # pods, services, recent API logs
+scripts/dev/seed-radio.sh  # add the ABC Triple J test stream to the current dev API
+```
 
 Filesystem imports use a persistent MicroK8s volume mounted into the API and worker pods at:
 
 ```text
-/media/imports
+/var/lib/yotowebmgr/media/imports
 ```
 
-Use `/media/imports/drop` for files copied into the pod-backed import area and
-`/media/imports/uploads` for browser-uploaded files staged by the API.
+Use `/var/lib/yotowebmgr/media/imports/drop` for files copied into the pod-backed import area and
+`/var/lib/yotowebmgr/media/imports/uploads` for browser-uploaded files staged by the API.
 
 ## Initial Scope
 

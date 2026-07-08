@@ -21,4 +21,6 @@ node_modules/
 coverage/
 *.log
 media/
+local-media/
+private-docs/
 !.gitkeep

@@ -10,14 +10,33 @@ that all LibriVox recordings are public domain in the United States.
 
 Suggested use:
 
-- Download one short MP3 chapter from a LibriVox children's book, such as a chapter from a public
-  domain children's story collection.
-- Keep it outside Git, then import it through `/media/imports/drop` or browser upload.
+- Download one or two short MP3 chapters from a LibriVox children's book, such as chapters from
+  `Alice's Adventures in Wonderland`.
+- Keep it outside Git, then import it through `/var/lib/yotowebmgr/media/imports/drop` or browser upload.
 - Record the title, reader, source URL, and public-domain notice in any fixture manifest.
 
 Source:
 
 - https://librivox.org/pages/public-domain/
+
+## Local Audiobook Samples
+
+Two local LibriVox MP3 files are staged outside Git for import testing:
+
+```text
+local-media/imports/drop/alice-01-chapter-1-librivox-public-domain.mp3
+local-media/imports/drop/alice-02-chapter-2-librivox-public-domain.mp3
+```
+
+They are chapters from `Alice's Adventures in Wonderland` by Lewis Carroll, from the LibriVox
+public-domain recording:
+
+- https://librivox.org/alices-adventures-in-wonderland-by-lewis-carroll/
+- https://www.archive.org/download/alice_in_wonderland_librivox/wonderland_ch_01_64kb.mp3
+- https://www.archive.org/download/alice_in_wonderland_librivox/wonderland_ch_02_64kb.mp3
+
+The default app import path is `/var/lib/yotowebmgr/media/imports/drop`. For local testing, point
+`IMPORT_DROP_PATH` at `local-media/imports/drop` or copy these files into the MicroK8s import PVC.
 
 ## Copyleft Music Candidate
 

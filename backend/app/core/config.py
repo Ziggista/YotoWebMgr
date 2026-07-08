@@ -10,8 +10,9 @@ class Settings(BaseSettings):
     environment: str = "development"
     api_v1_prefix: str = "/api/v1"
     database_url: str = "postgresql+psycopg://yotowebmgr:change-me@localhost:5432/yotowebmgr"
-    import_drop_path: str = "/media/imports/drop"
-    browser_upload_path: str = "/media/imports/uploads"
+    reset_database_on_start: bool = False
+    import_drop_path: str = "/var/lib/yotowebmgr/media/imports/drop"
+    browser_upload_path: str = "/var/lib/yotowebmgr/media/imports/uploads"
 
 
 @lru_cache

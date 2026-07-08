@@ -6,7 +6,9 @@ metadata:
 data:
   POSTGRES_DB: yotowebmgr
   POSTGRES_USER: yotowebmgr
+  ENVIRONMENT: development
+  RESET_DATABASE_ON_START: "false"
   API_HOST: "0.0.0.0"
   API_PORT: "8000"
-  IMPORT_DROP_PATH: /media/imports/drop
-  BROWSER_UPLOAD_PATH: /media/imports/uploads
+  IMPORT_DROP_PATH: /var/lib/yotowebmgr/media/imports/drop
+  BROWSER_UPLOAD_PATH: /var/lib/yotowebmgr/media/imports/uploads
