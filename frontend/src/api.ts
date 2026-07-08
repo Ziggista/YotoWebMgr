@@ -139,6 +139,34 @@ export interface ReadinessResponse {
   checks: ReadinessCheck[];
 }
 
+export interface CardPlanTrack {
+  track_id: number;
+  title: string;
+  track_number: number;
+  duration_seconds: number | null;
+  estimated_size_mb: number | null;
+}
+
+export interface CardPlanPart {
+  part_number: number;
+  title: string;
+  duration_seconds: number;
+  estimated_size_mb: number;
+  track_count: number;
+  tracks: CardPlanTrack[];
+  warnings: string[];
+}
+
+export interface CardPlan {
+  library_item_id: number;
+  target_duration_seconds: number;
+  target_size_mb: number;
+  total_duration_seconds: number;
+  estimated_total_size_mb: number;
+  parts: CardPlanPart[];
+  warnings: string[];
+}
+
 export interface ImportRequest {
   id: number;
   title: string;
@@ -398,6 +426,14 @@ export async function fetchReadiness(itemId: number): Promise<ReadinessResponse>
     throw new Error(await errorMessage(response, "Failed to check readiness."));
   }
   return response.json() as Promise<ReadinessResponse>;
+}
+
+export async function fetchCardPlan(itemId: number): Promise<CardPlan> {
+  const response = await fetch(`/api/v1/library/${itemId}/card-plan`);
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to build card plan."));
+  }
+  return response.json() as Promise<CardPlan>;
 }
 
 export async function fetchImports(): Promise<ImportRequest[]> {

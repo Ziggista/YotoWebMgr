@@ -5,6 +5,7 @@ import "react-h5-audio-player/lib/styles.css";
 import {
   AppSettings,
   AuthProvidersResponse,
+  CardPlan,
   ImportSourceInfo,
   ImportRequest,
   Job,
@@ -20,6 +21,7 @@ import {
   createRadioStreamTrack,
   createSplitPoint,
   fetchCards,
+  fetchCardPlan,
   fetchImportSources,
   fetchImports,
   fetchJobs,
@@ -678,6 +680,7 @@ function LibraryDetailPage() {
   const numericItemId = Number(itemId);
   const [detail, setDetail] = useState<LibraryItemDetail | null>(null);
   const [readiness, setReadiness] = useState<ReadinessResponse | null>(null);
+  const [cardPlan, setCardPlan] = useState<CardPlan | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -686,13 +689,15 @@ function LibraryDetailPage() {
     if (!Number.isFinite(numericItemId)) {
       throw new Error("Invalid library item.");
     }
-    const [nextDetail, nextReadiness, nextJobs] = await Promise.all([
+    const [nextDetail, nextReadiness, nextCardPlan, nextJobs] = await Promise.all([
       fetchLibraryItemDetail(numericItemId),
       fetchReadiness(numericItemId),
+      fetchCardPlan(numericItemId),
       fetchJobs(),
     ]);
     setDetail(nextDetail);
     setReadiness(nextReadiness);
+    setCardPlan(nextCardPlan);
     setJobs(nextJobs.filter((job) => job.related_library_item_id === numericItemId));
   }
 
@@ -862,6 +867,52 @@ function LibraryDetailPage() {
               </div>
             ))}
           </div>
+        )}
+      </div>
+
+      <div className="detail-section">
+        <div className="section-header">
+          <div>
+            <p className="eyebrow">Card plan</p>
+            <h2>Proposed parts</h2>
+          </div>
+          <span className="status-pill">
+            {cardPlan ? `${cardPlan.parts.length} parts` : "No plan"}
+          </span>
+        </div>
+        {cardPlan && cardPlan.parts.length > 0 ? (
+          <div className="card-plan-list">
+            {cardPlan.parts.map((part) => (
+              <article className="card-plan-part" key={part.part_number}>
+                <div className="section-header">
+                  <div>
+                    <h3>{part.title}</h3>
+                    <p className="muted">
+                      {formatDuration(part.duration_seconds)} · {part.estimated_size_mb} MB ·{" "}
+                      {part.track_count} tracks
+                    </p>
+                  </div>
+                  <span className="status-pill status-pill-muted">Part {part.part_number}</span>
+                </div>
+                {part.warnings.length > 0 ? (
+                  <p className="auth-error">{part.warnings.join(" ")}</p>
+                ) : null}
+                <div className="compact-list">
+                  {part.tracks.map((track) => (
+                    <p className="muted" key={track.track_id}>
+                      #{track.track_number} {track.title} · {formatDuration(track.duration_seconds)}
+                      {track.estimated_size_mb !== null ? ` · ${track.estimated_size_mb} MB` : ""}
+                    </p>
+                  ))}
+                </div>
+              </article>
+            ))}
+            {cardPlan.warnings.length > 0 ? (
+              <p className="auth-error">{cardPlan.warnings.join(" ")}</p>
+            ) : null}
+          </div>
+        ) : (
+          <EmptyState message="No plan yet. Inspect media or add tracks first." />
         )}
       </div>
 

@@ -205,6 +205,34 @@ class ReadinessResponse(BaseModel):
     checks: list[ReadinessCheck]
 
 
+class CardPlanTrackResponse(BaseModel):
+    track_id: int
+    title: str
+    track_number: int
+    duration_seconds: int | None
+    estimated_size_mb: float | None
+
+
+class CardPlanPartResponse(BaseModel):
+    part_number: int
+    title: str
+    duration_seconds: int
+    estimated_size_mb: float
+    track_count: int
+    tracks: list[CardPlanTrackResponse]
+    warnings: list[str] = []
+
+
+class CardPlanResponse(BaseModel):
+    library_item_id: int
+    target_duration_seconds: int
+    target_size_mb: int
+    total_duration_seconds: int
+    estimated_total_size_mb: float
+    parts: list[CardPlanPartResponse]
+    warnings: list[str] = []
+
+
 class ImportCreate(BaseModel):
     title: str = Field(min_length=1, max_length=240)
     source_type: ImportSourceType

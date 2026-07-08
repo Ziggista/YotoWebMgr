@@ -24,6 +24,9 @@ from app.models import (
     User,
 )
 from app.schemas.foundation import (
+    CardPlanPartResponse,
+    CardPlanResponse,
+    CardPlanTrackResponse,
     CardResponse,
     JobResponse,
     LibraryItemDetailResponse,
@@ -171,6 +174,16 @@ def _target_size_mb(db: Session) -> int:
         return 480
 
 
+def _target_duration_seconds(db: Session) -> int:
+    setting = db.scalar(select(Setting).where(Setting.key == "target_duration_hours"))
+    if setting is None:
+        return round(4.9 * 3600)
+    try:
+        return round(float(setting.value) * 3600)
+    except ValueError:
+        return round(4.9 * 3600)
+
+
 def _build_track_response(track: PlaylistTrack) -> PlaylistTrackResponse:
     return PlaylistTrackResponse.model_validate(track, from_attributes=True)
 
@@ -215,6 +228,108 @@ def _detail_for_item(db: Session, item: LibraryItem) -> LibraryItemDetailRespons
         tracks=[_build_track_response(track) for track in tracks],
         podcast_feeds=[_build_podcast_feed_response(db, feed) for feed in feeds],
         split_points=[_build_split_point_response(split_point) for split_point in split_points],
+    )
+
+
+def _estimate_track_size_mb(
+    duration_seconds: int | None,
+    target_duration_seconds: int,
+    target_size_mb: int,
+) -> float | None:
+    if duration_seconds is None:
+        return None
+    return round((duration_seconds / target_duration_seconds) * target_size_mb, 2)
+
+
+def _build_card_plan(db: Session, item: LibraryItem) -> CardPlanResponse:
+    tracks = list(
+        db.scalars(
+            select(PlaylistTrack)
+            .where(PlaylistTrack.library_item_id == item.id)
+            .where(PlaylistTrack.is_stream.is_(False))
+            .order_by(PlaylistTrack.track_number.asc(), PlaylistTrack.id.asc())
+        )
+    )
+    split_seconds = [
+        split_point.timestamp_seconds
+        for split_point in db.scalars(
+            select(SplitPoint)
+            .where(SplitPoint.library_item_id == item.id)
+            .order_by(SplitPoint.timestamp_seconds.asc(), SplitPoint.id.asc())
+        )
+    ]
+    target_duration_seconds = _target_duration_seconds(db)
+    target_size_mb = _target_size_mb(db)
+    warnings: list[str] = []
+    parts: list[CardPlanPartResponse] = []
+    current_tracks: list[CardPlanTrackResponse] = []
+    current_duration = 0
+    current_size = 0.0
+    cumulative_start = 0
+    next_split_index = 0
+
+    def finish_part() -> None:
+        nonlocal current_tracks, current_duration, current_size
+        if not current_tracks:
+            return
+        part_number = len(parts) + 1
+        part_warnings: list[str] = []
+        if current_duration > target_duration_seconds:
+            part_warnings.append("Part exceeds target duration.")
+        if current_size > target_size_mb:
+            part_warnings.append("Part exceeds estimated target size.")
+        parts.append(
+            CardPlanPartResponse(
+                part_number=part_number,
+                title=f"{item.title} - Part {part_number}",
+                duration_seconds=current_duration,
+                estimated_size_mb=round(current_size, 2),
+                track_count=len(current_tracks),
+                tracks=current_tracks,
+                warnings=part_warnings,
+            )
+        )
+        current_tracks = []
+        current_duration = 0
+        current_size = 0.0
+
+    for track in tracks:
+        duration = track.duration_seconds or 0
+        while next_split_index < len(split_seconds) and cumulative_start >= split_seconds[next_split_index]:
+            finish_part()
+            next_split_index += 1
+
+        estimated_size = _estimate_track_size_mb(track.duration_seconds, target_duration_seconds, target_size_mb)
+        if track.duration_seconds is None:
+            warnings.append(f"{track.title} has no duration, so estimates may be incomplete.")
+        if duration > target_duration_seconds:
+            warnings.append(f"{track.title} is longer than the target card duration.")
+        if current_tracks and duration and current_duration + duration > target_duration_seconds:
+            finish_part()
+
+        current_tracks.append(
+            CardPlanTrackResponse(
+                track_id=track.id,
+                title=track.title,
+                track_number=track.track_number,
+                duration_seconds=track.duration_seconds,
+                estimated_size_mb=estimated_size,
+            )
+        )
+        current_duration += duration
+        current_size += estimated_size or 0
+        cumulative_start += duration
+
+    finish_part()
+    total_duration = sum(part.duration_seconds for part in parts)
+    return CardPlanResponse(
+        library_item_id=item.id,
+        target_duration_seconds=target_duration_seconds,
+        target_size_mb=target_size_mb,
+        total_duration_seconds=total_duration,
+        estimated_total_size_mb=round(sum(part.estimated_size_mb for part in parts), 2),
+        parts=parts,
+        warnings=warnings,
     )
 
 
@@ -680,6 +795,17 @@ async def get_library_item_readiness(
     if item is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Library item not found")
     return _calculate_readiness(db, item)
+
+
+@router.get("/{item_id}/card-plan", response_model=CardPlanResponse)
+async def get_library_item_card_plan(
+    item_id: int,
+    db: Annotated[Session, Depends(get_db_session)],
+) -> CardPlanResponse:
+    item = db.get(LibraryItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Library item not found")
+    return _build_card_plan(db, item)
 
 
 @router.post("/{item_id}/link-card", response_model=LinkCardResponse, status_code=202)

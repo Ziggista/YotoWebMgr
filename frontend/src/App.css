@@ -627,7 +627,8 @@ a {
 }
 
 .compact-table,
-.compact-list {
+.compact-list,
+.card-plan-list {
   display: grid;
   gap: 10px;
 }
@@ -647,6 +648,19 @@ a {
 .compact-table-row p,
 .job-detail-row p {
   margin: 4px 0 0;
+}
+
+.card-plan-part {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 8px;
+  background: rgba(6, 22, 26, 0.46);
+  border: 1px solid rgba(255, 240, 214, 0.12);
+}
+
+.card-plan-part h3 {
+  margin: 0 0 4px;
 }
 
 .inline-link-panel {

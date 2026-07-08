@@ -582,3 +582,40 @@ async def test_manual_split_point_is_saved(api_client: AsyncClient) -> None:
     assert response.status_code == 201
     assert response.json()["timestamp_seconds"] == 3600
     assert detail.json()["split_points"][0]["title"] == "Part 2"
+
+
+async def test_card_plan_groups_tracks_by_target_duration(
+    api_client: AsyncClient,
+    db_session: Session,
+) -> None:
+    target_setting = db_session.scalar(select(Setting).where(Setting.key == "target_duration_hours"))
+    assert target_setting is not None
+    target_setting.value = "1"
+    db_session.add(target_setting)
+    db_session.commit()
+
+    async with api_client as client:
+        created = await client.post(
+            "/api/v1/library",
+            json={"title": "Long Book", "content_type": "Audiobook"},
+        )
+        item_id = created.json()["id"]
+        for track_number, duration in enumerate([1800, 2400, 1200], start=1):
+            await client.post(
+                f"/api/v1/library/{item_id}/tracks",
+                json={
+                    "title": f"Chapter {track_number}",
+                    "track_number": track_number,
+                    "duration_seconds": duration,
+                },
+            )
+        response = await client.get(f"/api/v1/library/{item_id}/card-plan")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["target_duration_seconds"] == 3600
+    assert payload["parts"][0]["track_count"] == 1
+    assert payload["parts"][0]["duration_seconds"] == 1800
+    assert payload["parts"][1]["track_count"] == 2
+    assert payload["parts"][1]["duration_seconds"] == 3600
+    assert payload["parts"][0]["tracks"][0]["estimated_size_mb"] == 240
