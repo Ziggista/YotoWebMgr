@@ -37,3 +37,11 @@ The worker handles `inspect_media` and ZIP album inspection jobs with `ffprobe`.
 - Files without embedded chapters become one playlist track per source file.
 - Library items move to `inspected` with `needs_card_plan` readiness after successful inspection.
 - Inspection details record duration, codec, channels, and embedded chapter count in the local readiness detail.
+
+## Artwork
+
+Manual cover uploads are accepted by the API and stored under `/var/lib/yotowebmgr/media/artwork`.
+
+- Supported upload formats are JPG, PNG, and WebP.
+- Uploading artwork updates the library item's `cover_art_path`.
+- Artwork files are separate from original audio imports and are not written into source media files.

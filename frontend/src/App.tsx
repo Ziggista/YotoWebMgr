@@ -38,6 +38,7 @@ import {
   updatePlaylistTrack,
   updateLibraryItemSettings,
   updateSettings,
+  uploadCoverArt,
   uploadImport,
 } from "./api";
 import "./App.css";
@@ -93,6 +94,7 @@ function LibraryPage() {
   const [readiness, setReadiness] = useState<ReadinessResponse | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [coverArtPath, setCoverArtPath] = useState("");
+  const [coverArtFile, setCoverArtFile] = useState<File | null>(null);
   const [trackIconPath, setTrackIconPath] = useState("");
   const [radioForm, setRadioForm] = useState({ title: "", stream_url: "", icon_path: "" });
   const [podcastForm, setPodcastForm] = useState({ title: "", rss_url: "" });
@@ -134,6 +136,7 @@ function LibraryPage() {
       setDetail(nextDetail);
       setReadiness(nextReadiness);
       setCoverArtPath(nextDetail.item.cover_art_path ?? "");
+      setCoverArtFile(null);
       setTrackIconPath("");
       setRadioForm({ title: "", stream_url: "", icon_path: "" });
       setPodcastForm({ title: "", rss_url: "" });
@@ -172,6 +175,20 @@ function LibraryPage() {
       setLinkMessage("Playlist settings saved.");
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "Failed to save settings.");
+    }
+  }
+
+  async function handleUploadCoverArt() {
+    if (!detail || !coverArtFile) return;
+    setError(null);
+    try {
+      const updated = await uploadCoverArt(detail.item.id, coverArtFile);
+      setCoverArtPath(updated.cover_art_path ?? "");
+      setCoverArtFile(null);
+      await refreshDetail(updated.id);
+      setLinkMessage("Cover artwork uploaded.");
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : "Failed to upload cover art.");
     }
   }
 
@@ -428,6 +445,22 @@ function LibraryPage() {
                   value={coverArtPath}
                 />
               </label>
+              <label className="file-picker compact-file-picker">
+                <span>{coverArtFile ? coverArtFile.name : "Choose cover image"}</span>
+                <input
+                  accept=".jpg,.jpeg,.png,.webp"
+                  onChange={(event) => setCoverArtFile(event.target.files?.[0] ?? null)}
+                  type="file"
+                />
+              </label>
+              <button
+                className="ghost-button"
+                disabled={!coverArtFile}
+                onClick={() => void handleUploadCoverArt()}
+                type="button"
+              >
+                Upload cover
+              </button>
               <label className="checkbox-row">
                 <input
                   checked={detail.item.playlist_always_play_from_start}

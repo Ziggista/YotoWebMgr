@@ -24,17 +24,21 @@ def import_storage_paths(tmp_path: Path) -> Generator[dict[str, str], None, None
     settings = get_settings()
     original_drop_path = settings.import_drop_path
     original_upload_path = settings.browser_upload_path
+    original_artwork_path = settings.artwork_path
     paths = {
         "drop": str(tmp_path / "drop"),
         "uploads": str(tmp_path / "uploads"),
+        "artwork": str(tmp_path / "artwork"),
     }
     settings.import_drop_path = paths["drop"]
     settings.browser_upload_path = paths["uploads"]
+    settings.artwork_path = paths["artwork"]
     try:
         yield paths
     finally:
         settings.import_drop_path = original_drop_path
         settings.browser_upload_path = original_upload_path
+        settings.artwork_path = original_artwork_path
 
 
 @pytest.fixture()
@@ -619,3 +623,24 @@ async def test_card_plan_groups_tracks_by_target_duration(
     assert payload["parts"][1]["track_count"] == 2
     assert payload["parts"][1]["duration_seconds"] == 3600
     assert payload["parts"][0]["tracks"][0]["estimated_size_mb"] == 240
+
+
+async def test_cover_art_upload_sets_library_cover_path(
+    api_client: AsyncClient,
+    import_storage_paths: dict[str, str],
+) -> None:
+    async with api_client as client:
+        created = await client.post(
+            "/api/v1/library",
+            json={"title": "Moon Stories", "content_type": "Story Collection"},
+        )
+        item_id = created.json()["id"]
+        response = await client.post(
+            f"/api/v1/library/{item_id}/cover-art",
+            files={"artwork_file": ("cover.png", b"png bytes", "image/png")},
+        )
+
+    assert response.status_code == 200
+    cover_path = response.json()["cover_art_path"]
+    assert cover_path.startswith(import_storage_paths["artwork"])
+    assert Path(cover_path).read_bytes() == b"png bytes"

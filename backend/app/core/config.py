@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     reset_database_on_start: bool = False
     import_drop_path: str = "/var/lib/yotowebmgr/media/imports/drop"
     browser_upload_path: str = "/var/lib/yotowebmgr/media/imports/uploads"
+    artwork_path: str = "/var/lib/yotowebmgr/media/artwork"
 
 
 @lru_cache

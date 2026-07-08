@@ -1,10 +1,11 @@
 from typing import Annotated
 from pathlib import Path
+from uuid import uuid4
 import xml.etree.ElementTree as ET
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -51,6 +52,7 @@ from app.schemas.foundation import (
 
 
 router = APIRouter()
+allowed_artwork_extensions = {".jpg", ".jpeg", ".png", ".webp"}
 
 
 def _is_allowed_media_path(path: Path) -> bool:
@@ -89,6 +91,18 @@ def _stream_url_for_item(db: Session, item: LibraryItem) -> str | None:
     if _stream_track_for_item(db, item) is None:
         return None
     return f"/api/v1/library/{item.id}/stream"
+
+
+def _safe_artwork_filename(filename: str) -> str:
+    source_name = Path(filename).name
+    suffix = Path(source_name).suffix.lower()
+    if suffix not in allowed_artwork_extensions:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Unsupported artwork extension: {suffix or 'none'}.",
+        )
+    stem = "".join(character if character.isalnum() or character in "._-" else "-" for character in Path(source_name).stem)
+    return f"{stem.strip('.-') or 'cover'}-{uuid4().hex[:12]}{suffix}"
 
 
 def _build_library_item_response(db: Session, item: LibraryItem) -> LibraryItemResponse:
@@ -617,6 +631,35 @@ async def update_library_item_settings(
 
     for key, value in payload.model_dump(exclude_unset=True).items():
         setattr(item, key, value)
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return _build_library_item_response(db, item)
+
+
+@router.post("/{item_id}/cover-art", response_model=LibraryItemResponse)
+async def upload_library_item_cover_art(
+    item_id: int,
+    db: Annotated[Session, Depends(get_db_session)],
+    artwork_file: UploadFile = File(...),
+) -> LibraryItemResponse:
+    item = db.get(LibraryItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Library item not found")
+    if not artwork_file.filename:
+        raise HTTPException(status_code=422, detail="Artwork upload requires a filename.")
+
+    settings = get_settings()
+    artwork_root = Path(settings.artwork_path).resolve(strict=False)
+    artwork_root.mkdir(parents=True, exist_ok=True)
+    destination = artwork_root / f"library-{item.id}-{_safe_artwork_filename(artwork_file.filename)}"
+
+    with destination.open("wb") as output_file:
+        while chunk := await artwork_file.read(1024 * 1024):
+            output_file.write(chunk)
+
+    item.cover_art_path = str(destination)
+    item.status = "artwork_uploaded"
     db.add(item)
     db.commit()
     db.refresh(item)

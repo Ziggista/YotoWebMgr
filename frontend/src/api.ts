@@ -339,6 +339,19 @@ export async function updateLibraryItemSettings(
   return response.json() as Promise<LibraryItem>;
 }
 
+export async function uploadCoverArt(itemId: number, artworkFile: File): Promise<LibraryItem> {
+  const formData = new FormData();
+  formData.append("artwork_file", artworkFile);
+  const response = await fetch(`/api/v1/library/${itemId}/cover-art`, {
+    method: "POST",
+    body: formData,
+  });
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to upload cover art."));
+  }
+  return response.json() as Promise<LibraryItem>;
+}
+
 export async function createRadioStreamTrack(
   itemId: number,
   payload: { title: string; stream_url: string; icon_path?: string | null },

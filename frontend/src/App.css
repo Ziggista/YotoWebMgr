@@ -395,6 +395,11 @@ a {
   cursor: pointer;
 }
 
+.compact-file-picker {
+  min-height: 52px;
+  padding: 10px;
+}
+
 .file-picker input {
   position: absolute;
   inset: 0;
