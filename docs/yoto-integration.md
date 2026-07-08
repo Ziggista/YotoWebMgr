@@ -42,9 +42,14 @@ The API exposes local-only Yoto scaffolding endpoints:
 - `GET /api/v1/yoto/config` reports non-secret Yoto configuration state.
 - `GET /api/v1/yoto/library/{item_id}/playlist-preview` maps a local library item and its tracks
   into a Yoto-shaped playlist payload without making a live Yoto API call.
+- `GET /api/v1/yoto/library/{item_id}/playlists` lists stored local playlist drafts.
+- `POST /api/v1/yoto/library/{item_id}/playlists` stores a draft payload and queues
+  `create_yoto_playlist`.
 
-The preview endpoint is deliberately not an upload action. It exists so request mapping, card
-planning, and future worker jobs can converge on one integration-layer payload shape.
+The preview endpoint is deliberately not an upload action. The queue endpoint is a local scaffold:
+it persists the payload, creates a trackable worker job, and currently advances the item to
+`ready_to_link` for the manual Yoto-app linking workflow. Live OAuth/upload calls will be added
+behind the same worker job once the exact supported flow is confirmed.
 
 ## Physical Card Inventory
 

@@ -13,7 +13,17 @@ from app.api.routes.library import _playlist_stream_url_from_text
 from app.db.base import Base
 from app.db.session import get_db_session
 from app.main import app
-from app.models import Job, LibraryItem, PhysicalCard, PlaylistTrack, ProcessedAsset, Setting, User, VersionEvent
+from app.models import (
+    Job,
+    LibraryItem,
+    PhysicalCard,
+    PlaylistTrack,
+    ProcessedAsset,
+    Setting,
+    User,
+    VersionEvent,
+    YotoPlaylistDraft,
+)
 
 
 pytestmark = pytest.mark.asyncio
@@ -883,3 +893,39 @@ async def test_yoto_config_and_playlist_preview(api_client: AsyncClient) -> None
     assert payload["payload"]["playback"]["always_play_from_start"] is True
     assert payload["payload"]["chapters"][0]["title"] == "Story One"
     assert payload["payload"]["chapters"][0]["offline_available"] is True
+
+
+async def test_yoto_playlist_queue_persists_draft_and_job(
+    api_client: AsyncClient,
+    db_session: Session,
+) -> None:
+    async with api_client as client:
+        created = await client.post(
+            "/api/v1/library",
+            json={"title": "Queue Mix", "content_type": "Custom Playlist"},
+        )
+        item_id = created.json()["id"]
+        await client.post(
+            f"/api/v1/library/{item_id}/tracks",
+            json={"title": "Chapter One", "track_number": 1, "duration_seconds": 60},
+        )
+        queued = await client.post(f"/api/v1/yoto/library/{item_id}/playlists")
+        listed = await client.get(f"/api/v1/yoto/library/{item_id}/playlists")
+
+    assert queued.status_code == 202
+    payload = queued.json()
+    assert payload["live_api_call"] is False
+    assert payload["playlist"]["status"] == "queued"
+    assert payload["playlist"]["payload"]["chapters"][0]["title"] == "Chapter One"
+    assert payload["job"]["type"] == "create_yoto_playlist"
+    assert listed.status_code == 200
+    assert listed.json()[0]["title"] == "Queue Mix"
+
+    draft = db_session.scalar(select(YotoPlaylistDraft).where(YotoPlaylistDraft.library_item_id == item_id))
+    job = db_session.scalar(select(Job).where(Job.related_library_item_id == item_id).where(Job.type == "create_yoto_playlist"))
+    item = db_session.get(LibraryItem, item_id)
+    assert draft is not None
+    assert job is not None
+    assert draft.related_job_id == job.id
+    assert item is not None
+    assert item.status == "yoto_playlist_queued"

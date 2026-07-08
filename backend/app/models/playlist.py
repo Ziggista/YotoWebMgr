@@ -110,3 +110,23 @@ class CardPlanTrackAssignment(Base):
     playlist_track_id: Mapped[int] = mapped_column(ForeignKey("playlist_tracks.id"), index=True)
     track_order: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class YotoPlaylistDraft(Base):
+    __tablename__ = "yoto_playlist_drafts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    library_item_id: Mapped[int] = mapped_column(ForeignKey("library_items.id"), index=True)
+    related_job_id: Mapped[int | None] = mapped_column(ForeignKey("jobs.id"), nullable=True, index=True)
+    title: Mapped[str] = mapped_column(String(240))
+    status: Mapped[str] = mapped_column(String(80), default="draft", index=True)
+    payload_json: Mapped[str] = mapped_column(Text)
+    remote_playlist_id: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    remote_playlist_uri: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )

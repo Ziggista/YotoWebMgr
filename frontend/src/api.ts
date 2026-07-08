@@ -281,6 +281,25 @@ export interface LinkCardResponse {
   estimated_source_size_mb: number | null;
 }
 
+export interface YotoPlaylistDraft {
+  id: number;
+  library_item_id: number;
+  related_job_id: number | null;
+  title: string;
+  status: string;
+  payload: Record<string, unknown>;
+  remote_playlist_id: string | null;
+  remote_playlist_uri: string | null;
+  last_error: string | null;
+  created_at: string;
+}
+
+export interface QueueYotoPlaylistResponse {
+  playlist: YotoPlaylistDraft;
+  job: Job;
+  live_api_call: boolean;
+}
+
 async function errorMessage(response: Response, fallback: string): Promise<string> {
   try {
     const payload = (await response.json()) as { detail?: string };
@@ -540,6 +559,22 @@ export async function queueLibraryItemProcessing(itemId: number): Promise<Job> {
     throw new Error(await errorMessage(response, "Failed to queue audio processing."));
   }
   return response.json() as Promise<Job>;
+}
+
+export async function fetchYotoPlaylists(itemId: number): Promise<YotoPlaylistDraft[]> {
+  const response = await fetch(`/api/v1/yoto/library/${itemId}/playlists`);
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to load Yoto playlists."));
+  }
+  return response.json() as Promise<YotoPlaylistDraft[]>;
+}
+
+export async function queueYotoPlaylist(itemId: number): Promise<QueueYotoPlaylistResponse> {
+  const response = await fetch(`/api/v1/yoto/library/${itemId}/playlists`, { method: "POST" });
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to queue Yoto playlist."));
+  }
+  return response.json() as Promise<QueueYotoPlaylistResponse>;
 }
 
 export async function fetchImports(): Promise<ImportRequest[]> {

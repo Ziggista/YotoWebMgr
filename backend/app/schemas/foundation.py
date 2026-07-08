@@ -420,3 +420,22 @@ class YotoPlaylistPreviewResponse(BaseModel):
     library_item_id: int
     payload: dict[str, object]
     live_api_call: bool = False
+
+
+class YotoPlaylistDraftResponse(BaseModel):
+    id: int
+    library_item_id: int
+    related_job_id: int | None
+    title: str
+    status: str
+    payload: dict[str, object]
+    remote_playlist_id: str | None
+    remote_playlist_uri: str | None
+    last_error: str | None
+    created_at: datetime
+
+
+class QueueYotoPlaylistResponse(BaseModel):
+    playlist: YotoPlaylistDraftResponse
+    job: JobResponse
+    live_api_call: bool = False

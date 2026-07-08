@@ -15,6 +15,7 @@ import {
   ReadinessResponse,
   SessionResponse,
   VersionEvent,
+  YotoPlaylistDraft,
   applyTrackIcon,
   createCard,
   createImport,
@@ -32,12 +33,14 @@ import {
   fetchReadiness,
   fetchSavedCardPlan,
   fetchSettings,
+  fetchYotoPlaylists,
   hideImport,
   fetchAuthProviders,
   linkLibraryItemToCard,
   loginWithPassword,
   quickSelectUser,
   queueLibraryItemProcessing,
+  queueYotoPlaylist,
   restoreLibraryItemVersion,
   retryJob,
   saveCardPlan,
@@ -734,6 +737,7 @@ function LibraryDetailPage() {
   const [cardPlanDraft, setCardPlanDraft] = useState<Record<number, number>>({});
   const [versions, setVersions] = useState<VersionEvent[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [yotoPlaylists, setYotoPlaylists] = useState<YotoPlaylistDraft[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -741,13 +745,22 @@ function LibraryDetailPage() {
     if (!Number.isFinite(numericItemId)) {
       throw new Error("Invalid library item.");
     }
-    const [nextDetail, nextReadiness, nextCardPlan, nextSavedCardPlan, nextVersions, nextJobs] = await Promise.all([
+    const [
+      nextDetail,
+      nextReadiness,
+      nextCardPlan,
+      nextSavedCardPlan,
+      nextVersions,
+      nextJobs,
+      nextYotoPlaylists,
+    ] = await Promise.all([
       fetchLibraryItemDetail(numericItemId),
       fetchReadiness(numericItemId),
       fetchCardPlan(numericItemId),
       fetchSavedCardPlan(numericItemId),
       fetchLibraryItemVersions(numericItemId),
       fetchJobs(),
+      fetchYotoPlaylists(numericItemId),
     ]);
     setDetail(nextDetail);
     setReadiness(nextReadiness);
@@ -756,6 +769,7 @@ function LibraryDetailPage() {
     setCardPlanDraft(cardPlanAssignments(nextSavedCardPlan.parts.length > 0 ? nextSavedCardPlan : nextCardPlan));
     setVersions(nextVersions);
     setJobs(nextJobs.filter((job) => job.related_library_item_id === numericItemId));
+    setYotoPlaylists(nextYotoPlaylists);
   }
 
   useEffect(() => {
@@ -784,6 +798,16 @@ function LibraryDetailPage() {
       await refreshPage();
     } catch (processError) {
       setError(processError instanceof Error ? processError.message : "Processing queue failed.");
+    }
+  }
+
+  async function handleQueueYotoPlaylist() {
+    setError(null);
+    try {
+      await queueYotoPlaylist(numericItemId);
+      await refreshPage();
+    } catch (queueError) {
+      setError(queueError instanceof Error ? queueError.message : "Yoto playlist queue failed.");
     }
   }
 
@@ -1140,6 +1164,39 @@ function LibraryDetailPage() {
                   </p>
                 </div>
                 <span className="muted">{Math.round(asset.size_bytes / 1024)} KB</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="detail-section">
+        <div className="section-header">
+          <div>
+            <p className="eyebrow">Yoto</p>
+            <h2>Playlist upload</h2>
+          </div>
+          <button className="primary-button" onClick={() => void handleQueueYotoPlaylist()} type="button">
+            Queue Yoto playlist
+          </button>
+        </div>
+        {yotoPlaylists.length === 0 ? (
+          <EmptyState message="No Yoto playlist drafts queued yet." />
+        ) : (
+          <div className="compact-table">
+            {yotoPlaylists.map((playlist) => (
+              <div className="compact-table-row" key={playlist.id}>
+                <span className="status-pill status-pill-muted">{playlist.status}</span>
+                <div>
+                  <strong>{playlist.title}</strong>
+                  <p className="muted">
+                    Job {playlist.related_job_id ?? "pending"} ·{" "}
+                    {playlist.remote_playlist_uri ?? "Manual link pending"}
+                  </p>
+                </div>
+                <span className="muted">
+                  {Array.isArray(playlist.payload.chapters) ? playlist.payload.chapters.length : 0} tracks
+                </span>
               </div>
             ))}
           </div>

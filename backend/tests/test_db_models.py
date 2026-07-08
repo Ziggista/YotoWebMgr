@@ -14,6 +14,7 @@ from app.models import (
     SplitPoint,
     User,
     VersionEvent,
+    YotoPlaylistDraft,
 )
 
 
@@ -40,3 +41,4 @@ def test_foundation_models_are_registered_in_metadata() -> None:
     assert SplitPoint.__tablename__ in Base.metadata.tables
     assert Setting.__tablename__ in Base.metadata.tables
     assert VersionEvent.__tablename__ in Base.metadata.tables
+    assert YotoPlaylistDraft.__tablename__ in Base.metadata.tables

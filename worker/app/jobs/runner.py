@@ -117,6 +117,22 @@ processed_assets = Table(
     Column("created_at", DateTime(timezone=True), nullable=True),
 )
 
+yoto_playlist_drafts = Table(
+    "yoto_playlist_drafts",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("library_item_id", Integer, nullable=False),
+    Column("related_job_id", Integer, nullable=True),
+    Column("title", String(240), nullable=False),
+    Column("status", String(80), nullable=False),
+    Column("payload_json", Text, nullable=False),
+    Column("remote_playlist_id", String(240), nullable=True),
+    Column("remote_playlist_uri", String(500), nullable=True),
+    Column("last_error", Text, nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=True),
+    Column("updated_at", DateTime(timezone=True), nullable=True),
+)
+
 
 def create_worker_engine(database_url: str) -> Engine:
     return create_engine(database_url, pool_pre_ping=True)
@@ -168,6 +184,8 @@ class JobRunner:
                 )
             elif leased_job.type == "transcode_audio":
                 self._transcode_audio(leased_job.id, leased_job.related_library_item_id)
+            elif leased_job.type == "create_yoto_playlist":
+                self._prepare_yoto_playlist(leased_job.id, leased_job.related_library_item_id)
             else:
                 self._mark_waiting(leased_job.id, f"Waiting for worker support for {leased_job.type}")
         except Exception as error:  # noqa: BLE001 - job failures need to be captured, not raised.
@@ -476,6 +494,48 @@ class JobRunner:
                 )
             )
         self._mark_succeeded(job_id, f"Generated {len(tracks)} Yoto-ready MP3 asset(s)")
+
+    def _prepare_yoto_playlist(self, job_id: int, library_item_id: int | None) -> None:
+        if library_item_id is None:
+            raise RuntimeError("Yoto playlist job is missing a library item.")
+
+        self._mark_running(job_id, 20, "Loading local Yoto playlist draft")
+        now = datetime.now(UTC)
+        with self.engine.begin() as connection:
+            draft = connection.execute(
+                select(yoto_playlist_drafts)
+                .where(yoto_playlist_drafts.c.related_job_id == job_id)
+                .order_by(yoto_playlist_drafts.c.id.desc())
+                .limit(1)
+            ).first()
+            if draft is None:
+                raise RuntimeError("Yoto playlist job references a missing playlist draft.")
+
+            json.loads(draft.payload_json)
+            connection.execute(
+                update(yoto_playlist_drafts)
+                .where(yoto_playlist_drafts.c.id == draft.id)
+                .values(
+                    status="ready_to_link",
+                    last_error=None,
+                    updated_at=now,
+                )
+            )
+            connection.execute(
+                update(library_items)
+                .where(library_items.c.id == library_item_id)
+                .values(
+                    status="ready_to_link",
+                    readiness_status="ready_to_link",
+                    readiness_detail=(
+                        "Local Yoto playlist payload is ready. Link it manually in the Yoto app until "
+                        "live API upload is enabled."
+                    ),
+                    updated_at=now,
+                )
+            )
+
+        self._mark_succeeded(job_id, "Yoto playlist draft ready for manual linking")
 
     def _mark_running(self, job_id: int, progress_percent: int, message: str) -> None:
         now = datetime.now(UTC)
