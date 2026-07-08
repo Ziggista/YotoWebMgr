@@ -15,6 +15,8 @@ YotoWebMgr is split into four main runtime areas:
 - Background work is asynchronous and idempotent.
 - Version history is append-only and restore-safe.
 - Integrations such as Yoto and Plex are isolated behind service layers.
+- Tags are reusable records with generic assignments so the same tag model can apply to library
+  items first and later extend to cards, playlists, or versions without duplicating tag names.
 
 ## Initial Runtime Topology
 

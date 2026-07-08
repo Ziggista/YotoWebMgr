@@ -67,6 +67,16 @@ export interface LibraryItem {
   created_at: string;
   media_url: string | null;
   stream_url: string | null;
+  tags: Tag[];
+}
+
+export interface Tag {
+  id: number;
+  name: string;
+  normalized_name: string;
+  color: string | null;
+  usage_count: number;
+  created_at: string;
 }
 
 export interface PlaylistTrack {
@@ -383,12 +393,53 @@ export async function updateSettings(payload: Partial<AppSettings>): Promise<App
   return response.json() as Promise<AppSettings>;
 }
 
-export async function fetchLibraryItems(): Promise<LibraryItem[]> {
-  const response = await fetch("/api/v1/library");
+export async function fetchLibraryItems(filters: {
+  content_type?: string;
+  tag_id?: number | null;
+  search?: string;
+} = {}): Promise<LibraryItem[]> {
+  const params = new URLSearchParams();
+  if (filters.content_type) params.set("content_type", filters.content_type);
+  if (filters.tag_id) params.set("tag_id", String(filters.tag_id));
+  if (filters.search) params.set("search", filters.search);
+  const query = params.toString();
+  const response = await fetch(`/api/v1/library${query ? `?${query}` : ""}`);
   if (!response.ok) {
     throw new Error("Failed to load library.");
   }
   return response.json() as Promise<LibraryItem[]>;
+}
+
+export async function fetchTags(): Promise<Tag[]> {
+  const response = await fetch("/api/v1/tags");
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to load tags."));
+  }
+  return response.json() as Promise<Tag[]>;
+}
+
+export async function createTag(payload: { name: string; color?: string | null }): Promise<Tag> {
+  const response = await fetch("/api/v1/tags", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to create tag."));
+  }
+  return response.json() as Promise<Tag>;
+}
+
+export async function setLibraryItemTags(itemId: number, tagIds: number[]): Promise<Tag[]> {
+  const response = await fetch(`/api/v1/tags/library-items/${itemId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tag_ids: tagIds }),
+  });
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to save tags."));
+  }
+  return response.json() as Promise<Tag[]>;
 }
 
 export async function fetchLibraryItemDetail(itemId: number): Promise<LibraryItemDetail> {

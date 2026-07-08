@@ -53,6 +53,24 @@ class SettingsUpdate(BaseModel):
     yoto_transcode_timeout_minutes: int | None = Field(default=None, gt=0)
 
 
+class TagCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    color: str | None = Field(default=None, max_length=40)
+
+
+class TagResponse(BaseModel):
+    id: int
+    name: str
+    normalized_name: str
+    color: str | None
+    usage_count: int = 0
+    created_at: datetime
+
+
+class TagAssignmentUpdate(BaseModel):
+    tag_ids: list[int] = []
+
+
 class LibraryItemResponse(BaseModel):
     id: int
     title: str
@@ -68,6 +86,7 @@ class LibraryItemResponse(BaseModel):
     created_at: datetime
     media_url: str | None = None
     stream_url: str | None = None
+    tags: list[TagResponse] = []
 
 
 class LibraryItemCreate(BaseModel):

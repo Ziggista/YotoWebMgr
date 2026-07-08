@@ -21,6 +21,8 @@ from app.models import (
     PlaylistTrack,
     ProcessedAsset,
     Setting,
+    Tag,
+    TagAssignment,
     User,
     VersionEvent,
     YotoPlaylistDraft,
@@ -206,6 +208,43 @@ async def test_upload_import_stages_file(
     assert Path(payload["source_path"]).exists()
     assert library_response.status_code == 200
     assert library_response.json()[0]["media_url"] == "/api/v1/library/1/media"
+
+
+async def test_tags_can_be_created_assigned_and_used_for_library_filtering(
+    api_client: AsyncClient,
+    db_session: Session,
+) -> None:
+    async with api_client as client:
+        item = await client.post(
+            "/api/v1/library",
+            json={"title": "Bedtime Dragon", "content_type": "Story Collection"},
+        )
+        other_item = await client.post(
+            "/api/v1/library",
+            json={"title": "Morning Music", "content_type": "Music Album"},
+        )
+        tag = await client.post("/api/v1/tags", json={"name": "Bedtime", "color": "#90cdf4"})
+        tag_id = tag.json()["id"]
+        assigned = await client.put(
+            f"/api/v1/tags/library-items/{item.json()['id']}",
+            json={"tag_ids": [tag_id]},
+        )
+        filtered = await client.get(f"/api/v1/library?tag_id={tag_id}")
+        searched = await client.get("/api/v1/library?search=dragon")
+
+    assert other_item.status_code == 201
+    assert tag.status_code == 201
+    assert tag.json()["normalized_name"] == "bedtime"
+    assert assigned.status_code == 200
+    assert assigned.json()[0]["name"] == "Bedtime"
+    assert filtered.status_code == 200
+    assert [row["title"] for row in filtered.json()] == ["Bedtime Dragon"]
+    assert filtered.json()[0]["tags"][0]["name"] == "Bedtime"
+    assert searched.status_code == 200
+    assert [row["title"] for row in searched.json()] == ["Bedtime Dragon"]
+
+    assert db_session.scalar(select(Tag).where(Tag.normalized_name == "bedtime")) is not None
+    assert db_session.scalar(select(TagAssignment).where(TagAssignment.entity_id == item.json()["id"])) is not None
 
 
 async def test_zip_upload_extracts_album_tracks(

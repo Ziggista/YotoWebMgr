@@ -89,6 +89,53 @@ a {
   border: 1px solid rgba(255, 240, 214, 0.12);
 }
 
+.filter-bar {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(150px, 220px) minmax(150px, 220px);
+  gap: 10px;
+  margin: 0 0 18px;
+}
+
+.tag-chip-row,
+.tag-checkbox-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tag-checkbox-list {
+  flex-direction: column;
+}
+
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 4px 9px;
+  border: 1px solid rgba(255, 240, 214, 0.22);
+  border-radius: 999px;
+  background: rgba(255, 248, 232, 0.08);
+  color: #f4efe6;
+  font-size: 0.85rem;
+}
+
+.tag-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.tag-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(255, 240, 214, 0.12);
+  border-radius: 14px;
+  background: rgba(10, 28, 32, 0.34);
+}
+
 .auth-panel {
   margin-top: 20px;
   padding: 24px;

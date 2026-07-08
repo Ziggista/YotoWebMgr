@@ -13,6 +13,8 @@ from app.models import (
     ProcessedAsset,
     Setting,
     SplitPoint,
+    Tag,
+    TagAssignment,
     User,
     VersionEvent,
     YotoPlaylistDraft,
@@ -41,6 +43,8 @@ def test_foundation_models_are_registered_in_metadata() -> None:
     assert PodcastEpisode.__tablename__ in Base.metadata.tables
     assert ProcessedAsset.__tablename__ in Base.metadata.tables
     assert SplitPoint.__tablename__ in Base.metadata.tables
+    assert Tag.__tablename__ in Base.metadata.tables
+    assert TagAssignment.__tablename__ in Base.metadata.tables
     assert Setting.__tablename__ in Base.metadata.tables
     assert VersionEvent.__tablename__ in Base.metadata.tables
     assert YotoPlaylistDraft.__tablename__ in Base.metadata.tables

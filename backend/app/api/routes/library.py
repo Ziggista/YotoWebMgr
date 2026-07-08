@@ -27,6 +27,8 @@ from app.models import (
     ProcessedAsset,
     Setting,
     SplitPoint,
+    Tag,
+    TagAssignment,
     User,
     VersionEvent,
 )
@@ -56,6 +58,7 @@ from app.schemas.foundation import (
     ReadinessResponse,
     SplitPointCreate,
     SplitPointResponse,
+    TagResponse,
     TrackIconApplyRequest,
     VersionRestoreResponse,
     VersionEventResponse,
@@ -116,6 +119,33 @@ def _safe_artwork_filename(filename: str) -> str:
     return f"{stem.strip('.-') or 'cover'}-{uuid4().hex[:12]}{suffix}"
 
 
+def _tag_responses_for_entity(db: Session, entity_type: str, entity_id: int) -> list[TagResponse]:
+    usage_subquery = (
+        select(TagAssignment.tag_id, func.count(TagAssignment.id).label("usage_count"))
+        .group_by(TagAssignment.tag_id)
+        .subquery()
+    )
+    rows = db.execute(
+        select(Tag, func.coalesce(usage_subquery.c.usage_count, 0))
+        .join(TagAssignment, TagAssignment.tag_id == Tag.id)
+        .outerjoin(usage_subquery, usage_subquery.c.tag_id == Tag.id)
+        .where(TagAssignment.entity_type == entity_type)
+        .where(TagAssignment.entity_id == entity_id)
+        .order_by(Tag.name.asc())
+    ).all()
+    return [
+        TagResponse(
+            id=tag.id,
+            name=tag.name,
+            normalized_name=tag.normalized_name,
+            color=tag.color,
+            usage_count=usage_count,
+            created_at=tag.created_at,
+        )
+        for tag, usage_count in rows
+    ]
+
+
 def _build_library_item_response(db: Session, item: LibraryItem) -> LibraryItemResponse:
     return LibraryItemResponse(
         id=item.id,
@@ -132,6 +162,7 @@ def _build_library_item_response(db: Session, item: LibraryItem) -> LibraryItemR
         created_at=item.created_at,
         media_url=_media_url_for_item(db, item),
         stream_url=_stream_url_for_item(db, item),
+        tags=_tag_responses_for_entity(db, "library_item", item.id),
     )
 
 
@@ -808,10 +839,19 @@ def _calculate_readiness(db: Session, item: LibraryItem) -> ReadinessResponse:
 async def list_library_items(
     db: Annotated[Session, Depends(get_db_session)],
     content_type: str | None = None,
+    tag_id: int | None = None,
+    search: str | None = None,
 ) -> list[LibraryItemResponse]:
     query = select(LibraryItem).order_by(LibraryItem.created_at.desc(), LibraryItem.id.desc())
     if content_type:
         query = query.where(LibraryItem.content_type == content_type)
+    if tag_id is not None:
+        query = query.join(
+            TagAssignment,
+            (TagAssignment.entity_type == "library_item") & (TagAssignment.entity_id == LibraryItem.id),
+        ).where(TagAssignment.tag_id == tag_id)
+    if search:
+        query = query.where(LibraryItem.title.ilike(f"%{search.strip()}%"))
     return [_build_library_item_response(db, item) for item in db.scalars(query)]
 
 

@@ -30,6 +30,17 @@ Cover uploads are stored as source artwork assets. Pixelisation queues a `pixeli
 job that creates a deterministic 16x16 PNG derivative, records it separately, and updates the
 library cover path to the generated Yoto-style artwork.
 
+## Tags
+
+- `GET /api/v1/tags`
+- `POST /api/v1/tags`
+- `GET /api/v1/tags/library-items/{item_id}`
+- `PUT /api/v1/tags/library-items/{item_id}`
+
+Tags are reusable household labels with normalized names and optional colors. Library items include
+their assigned tags in list/detail responses and can be filtered with `tag_id`, `content_type`, and
+`search` query parameters on `GET /api/v1/library`.
+
 ## Yoto Playlist Drafts
 
 - `GET /api/v1/yoto/config`

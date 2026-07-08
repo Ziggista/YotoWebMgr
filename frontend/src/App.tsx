@@ -14,11 +14,13 @@ import {
   PhysicalCard,
   ReadinessResponse,
   SessionResponse,
+  Tag,
   VersionEvent,
   YotoPlaylistDraft,
   applyTrackIcon,
   createCard,
   createImport,
+  createTag,
   createPodcastFeed,
   createRadioStreamTrack,
   createSplitPoint,
@@ -33,6 +35,7 @@ import {
   fetchReadiness,
   fetchSavedCardPlan,
   fetchSettings,
+  fetchTags,
   fetchYotoPlaylists,
   hideImport,
   fetchAuthProviders,
@@ -45,6 +48,7 @@ import {
   restoreLibraryItemVersion,
   retryJob,
   saveCardPlan,
+  setLibraryItemTags,
   updatePlaylistTrack,
   updateLibraryItemSettings,
   updateSettings,
@@ -107,6 +111,8 @@ function cardPlanAssignments(plan: CardPlan | null): Record<number, number> {
 
 function LibraryPage() {
   const [items, setItems] = useState<LibraryItem[]>([]);
+  const [tags, setTags] = useState<Tag[]>([]);
+  const [filters, setFilters] = useState({ search: "", content_type: "", tag_id: "" });
   const [cards, setCards] = useState<PhysicalCard[]>([]);
   const [activeLinkItemId, setActiveLinkItemId] = useState<number | null>(null);
   const [selectedCardId, setSelectedCardId] = useState("");
@@ -119,17 +125,27 @@ function LibraryPage() {
   const [radioForm, setRadioForm] = useState({ title: "", stream_url: "", icon_path: "" });
   const [podcastForm, setPodcastForm] = useState({ title: "", rss_url: "" });
   const [splitForm, setSplitForm] = useState({ timestamp_seconds: "", title: "", part_number: "" });
+  const [selectedTagIds, setSelectedTagIds] = useState<number[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [linkMessage, setLinkMessage] = useState<string | null>(null);
   const [linking, setLinking] = useState(false);
 
+  async function refreshLibraryList() {
+    const nextItems = await fetchLibraryItems({
+      search: filters.search.trim() || undefined,
+      content_type: filters.content_type || undefined,
+      tag_id: filters.tag_id ? Number(filters.tag_id) : null,
+    });
+    setItems(nextItems);
+  }
+
   useEffect(() => {
-    void fetchLibraryItems()
-      .then(setItems)
+    void Promise.all([refreshLibraryList(), fetchTags().then(setTags)])
+      .then(() => undefined)
       .catch((loadError) =>
         setError(loadError instanceof Error ? loadError.message : "Failed to load library."),
       );
-  }, []);
+  }, [filters.search, filters.content_type, filters.tag_id]);
 
   async function openLinkPanel(itemId: number) {
     setError(null);
@@ -158,6 +174,7 @@ function LibraryPage() {
       setCoverArtPath(nextDetail.item.cover_art_path ?? "");
       setCoverArtFile(null);
       setTrackIconPath("");
+      setSelectedTagIds(nextDetail.item.tags.map((tag) => tag.id));
       setRadioForm({ title: "", stream_url: "", icon_path: "" });
       setPodcastForm({ title: "", rss_url: "" });
       setSplitForm({ timestamp_seconds: "", title: "", part_number: "" });
@@ -178,6 +195,7 @@ function LibraryPage() {
     setItems((current) =>
       current.map((item) => (item.id === nextDetail.item.id ? nextDetail.item : item)),
     );
+    setSelectedTagIds(nextDetail.item.tags.map((tag) => tag.id));
   }
 
   async function handleSavePlaylistSettings() {
@@ -233,6 +251,18 @@ function LibraryPage() {
       setLinkMessage("Track icon applied.");
     } catch (iconError) {
       setError(iconError instanceof Error ? iconError.message : "Failed to apply icon.");
+    }
+  }
+
+  async function handleSaveTags() {
+    if (!detail) return;
+    setError(null);
+    try {
+      await setLibraryItemTags(detail.item.id, selectedTagIds);
+      await Promise.all([refreshDetail(detail.item.id), refreshLibraryList(), fetchTags().then(setTags)]);
+      setLinkMessage("Tags saved.");
+    } catch (tagError) {
+      setError(tagError instanceof Error ? tagError.message : "Failed to save tags.");
     }
   }
 
@@ -355,6 +385,35 @@ function LibraryPage() {
         <span className="status-pill">{items.length} items</span>
       </div>
       {error ? <p className="auth-error">{error}</p> : null}
+      <div className="filter-bar">
+        <input
+          onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))}
+          placeholder="Search library"
+          value={filters.search}
+        />
+        <select
+          onChange={(event) => setFilters((current) => ({ ...current, content_type: event.target.value }))}
+          value={filters.content_type}
+        >
+          <option value="">All types</option>
+          {contentTypes.map((contentType) => (
+            <option key={contentType} value={contentType}>
+              {contentType}
+            </option>
+          ))}
+        </select>
+        <select
+          onChange={(event) => setFilters((current) => ({ ...current, tag_id: event.target.value }))}
+          value={filters.tag_id}
+        >
+          <option value="">All tags</option>
+          {tags.map((tag) => (
+            <option key={tag.id} value={tag.id}>
+              {tag.name}
+            </option>
+          ))}
+        </select>
+      </div>
       {items.length === 0 ? (
         <EmptyState message="No library items yet. Create an import to seed the library." />
       ) : (
@@ -367,6 +426,15 @@ function LibraryPage() {
                   {item.content_type} · {item.status}
                   {item.stream_url ? " · Live stream" : ""}
                 </p>
+                {item.tags.length > 0 ? (
+                  <div className="tag-chip-row">
+                    {item.tags.map((tag) => (
+                      <span className="tag-chip" key={tag.id} style={{ borderColor: tag.color ?? undefined }}>
+                        {tag.name}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
                 {item.media_url || item.stream_url ? (
                   <div className="library-player">
                     <AudioPlayer
@@ -513,6 +581,35 @@ function LibraryPage() {
               </label>
               <button className="primary-button" onClick={() => void handleSavePlaylistSettings()} type="button">
                 Save options
+              </button>
+            </div>
+
+            <div className="prep-block">
+              <h3>Tags</h3>
+              {tags.length === 0 ? (
+                <EmptyState message="No tags available yet." />
+              ) : (
+                <div className="tag-checkbox-list">
+                  {tags.map((tag) => (
+                    <label className="checkbox-row" key={tag.id}>
+                      <input
+                        checked={selectedTagIds.includes(tag.id)}
+                        onChange={(event) =>
+                          setSelectedTagIds((current) =>
+                            event.target.checked
+                              ? Array.from(new Set([...current, tag.id]))
+                              : current.filter((tagId) => tagId !== tag.id),
+                          )
+                        }
+                        type="checkbox"
+                      />
+                      {tag.name}
+                    </label>
+                  ))}
+                </div>
+              )}
+              <button className="primary-button" onClick={() => void handleSaveTags()} type="button">
+                Save tags
               </button>
             </div>
 
@@ -1546,6 +1643,84 @@ function JobsPage() {
   );
 }
 
+function TagsPage() {
+  const [tags, setTags] = useState<Tag[]>([]);
+  const [form, setForm] = useState({ name: "", color: "#90cdf4" });
+  const [error, setError] = useState<string | null>(null);
+
+  async function refreshTags() {
+    setTags(await fetchTags());
+  }
+
+  useEffect(() => {
+    void refreshTags().catch((loadError) =>
+      setError(loadError instanceof Error ? loadError.message : "Failed to load tags."),
+    );
+  }, []);
+
+  async function handleCreateTag(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError(null);
+    try {
+      await createTag({ name: form.name, color: form.color || null });
+      setForm({ name: "", color: "#90cdf4" });
+      await refreshTags();
+    } catch (createError) {
+      setError(createError instanceof Error ? createError.message : "Failed to create tag.");
+    }
+  }
+
+  return (
+    <section className="panel">
+      <div className="section-header">
+        <div>
+          <p className="eyebrow">Tags</p>
+          <h2>Reusable tags</h2>
+        </div>
+        <span className="status-pill">{tags.length} tags</span>
+      </div>
+      {error ? <p className="auth-error">{error}</p> : null}
+      <form className="import-form" onSubmit={(event) => void handleCreateTag(event)}>
+        <div className="import-grid">
+          <label>
+            Name
+            <input
+              onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
+              required
+              value={form.name}
+            />
+          </label>
+          <label>
+            Color
+            <input
+              onChange={(event) => setForm((current) => ({ ...current, color: event.target.value }))}
+              type="color"
+              value={form.color}
+            />
+          </label>
+          <button className="primary-button" type="submit">
+            Create tag
+          </button>
+        </div>
+      </form>
+      {tags.length === 0 ? (
+        <EmptyState message="No tags yet." />
+      ) : (
+        <div className="tag-grid">
+          {tags.map((tag) => (
+            <article className="tag-row" key={tag.id}>
+              <span className="tag-chip" style={{ borderColor: tag.color ?? undefined }}>
+                {tag.name}
+              </span>
+              <span className="muted">{tag.usage_count} uses</span>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function CardsPage() {
   const [cards, setCards] = useState<PhysicalCard[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -2415,7 +2590,7 @@ export default function App() {
           />
           <Route
             path="/tags"
-            element={session ? <PlaceholderPage title="Tags" /> : <PlaceholderPage title="Home" />}
+            element={session ? <TagsPage /> : <PlaceholderPage title="Home" />}
           />
           <Route
             path="/settings"

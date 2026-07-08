@@ -16,6 +16,7 @@ from app.models.playlist import (
 )
 from app.models.processed_asset import ProcessedAsset
 from app.models.setting import Setting
+from app.models.tag import Tag, TagAssignment
 from app.models.user import User
 from app.models.version import VersionEvent
 
@@ -33,6 +34,8 @@ __all__ = [
     "ProcessedAsset",
     "Setting",
     "SplitPoint",
+    "Tag",
+    "TagAssignment",
     "User",
     "VersionEvent",
     "YotoPlaylistDraft",
