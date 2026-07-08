@@ -276,6 +276,22 @@ class CardPlanResponse(BaseModel):
     warnings: list[str] = []
 
 
+class CardPlanTrackAssignmentSave(BaseModel):
+    track_id: int = Field(gt=0)
+    track_order: int = Field(default=1, gt=0)
+
+
+class CardPlanPartSave(BaseModel):
+    part_number: int = Field(gt=0)
+    title: str = Field(min_length=1, max_length=240)
+    track_ids: list[int] | None = None
+    tracks: list[CardPlanTrackAssignmentSave] | None = None
+
+
+class CardPlanSaveRequest(BaseModel):
+    parts: list[CardPlanPartSave] = Field(min_length=1)
+
+
 class ImportCreate(BaseModel):
     title: str = Field(min_length=1, max_length=240)
     source_type: ImportSourceType

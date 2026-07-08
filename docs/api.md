@@ -20,6 +20,14 @@ Future areas will include library, tags, imports, playlists, cards, jobs, artwor
 
 Queues a `transcode_audio` worker job for non-stream source-backed tracks. Generated output is returned on the library detail response as `processed_assets`.
 
+## Card Planning
+
+- `GET /api/v1/library/{item_id}/card-plan`
+- `GET /api/v1/library/{item_id}/card-plan/saved`
+- `PUT /api/v1/library/{item_id}/card-plan`
+
+The generated card plan remains a preview. Saving a card plan stores durable part rows and track assignments, records a version event, and lets later processing/upload workflows use explicit user-approved part boundaries.
+
 ## Library History
 
 - `GET /api/v1/library/{item_id}/versions`

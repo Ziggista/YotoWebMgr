@@ -682,6 +682,37 @@ a {
   margin: 0 0 4px;
 }
 
+.plan-track-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 160px);
+  gap: 10px;
+  align-items: center;
+}
+
+.plan-track-row select {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 240, 214, 0.18);
+  background: rgba(6, 22, 26, 0.72);
+  color: #f4efe6;
+  font: inherit;
+}
+
+.saved-plan-summary {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  border-radius: 8px;
+  background: rgba(255, 191, 105, 0.1);
+  border: 1px solid rgba(255, 191, 105, 0.18);
+}
+
+.saved-plan-summary h3,
+.saved-plan-summary p {
+  margin: 0;
+}
+
 .inline-link-panel {
   display: grid;
   gap: 10px;
@@ -797,6 +828,10 @@ a {
   .track-editor-actions {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .plan-track-row {
+    grid-template-columns: 1fr;
   }
 
   .row-actions {

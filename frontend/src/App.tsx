@@ -30,6 +30,7 @@ import {
   fetchLibraryItems,
   fetchLibraryItemVersions,
   fetchReadiness,
+  fetchSavedCardPlan,
   fetchSettings,
   hideImport,
   fetchAuthProviders,
@@ -39,6 +40,7 @@ import {
   queueLibraryItemProcessing,
   restoreLibraryItemVersion,
   retryJob,
+  saveCardPlan,
   updatePlaylistTrack,
   updateLibraryItemSettings,
   updateSettings,
@@ -87,6 +89,16 @@ function formatDuration(seconds: number | null): string {
     return `${hours}:${String(minutes).padStart(2, "0")}:${String(remainingSeconds).padStart(2, "0")}`;
   }
   return `${minutes}:${String(remainingSeconds).padStart(2, "0")}`;
+}
+
+function cardPlanAssignments(plan: CardPlan | null): Record<number, number> {
+  const assignments: Record<number, number> = {};
+  plan?.parts.forEach((part) => {
+    part.tracks.forEach((track) => {
+      assignments[track.track_id] = part.part_number;
+    });
+  });
+  return assignments;
 }
 
 function LibraryPage() {
@@ -718,6 +730,8 @@ function LibraryDetailPage() {
   const [detail, setDetail] = useState<LibraryItemDetail | null>(null);
   const [readiness, setReadiness] = useState<ReadinessResponse | null>(null);
   const [cardPlan, setCardPlan] = useState<CardPlan | null>(null);
+  const [savedCardPlan, setSavedCardPlan] = useState<CardPlan | null>(null);
+  const [cardPlanDraft, setCardPlanDraft] = useState<Record<number, number>>({});
   const [versions, setVersions] = useState<VersionEvent[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -727,16 +741,19 @@ function LibraryDetailPage() {
     if (!Number.isFinite(numericItemId)) {
       throw new Error("Invalid library item.");
     }
-    const [nextDetail, nextReadiness, nextCardPlan, nextVersions, nextJobs] = await Promise.all([
+    const [nextDetail, nextReadiness, nextCardPlan, nextSavedCardPlan, nextVersions, nextJobs] = await Promise.all([
       fetchLibraryItemDetail(numericItemId),
       fetchReadiness(numericItemId),
       fetchCardPlan(numericItemId),
+      fetchSavedCardPlan(numericItemId),
       fetchLibraryItemVersions(numericItemId),
       fetchJobs(),
     ]);
     setDetail(nextDetail);
     setReadiness(nextReadiness);
     setCardPlan(nextCardPlan);
+    setSavedCardPlan(nextSavedCardPlan);
+    setCardPlanDraft(cardPlanAssignments(nextSavedCardPlan.parts.length > 0 ? nextSavedCardPlan : nextCardPlan));
     setVersions(nextVersions);
     setJobs(nextJobs.filter((job) => job.related_library_item_id === numericItemId));
   }
@@ -767,6 +784,31 @@ function LibraryDetailPage() {
       await refreshPage();
     } catch (processError) {
       setError(processError instanceof Error ? processError.message : "Processing queue failed.");
+    }
+  }
+
+  async function handleSaveCardPlan() {
+    if (!cardPlan) return;
+    setError(null);
+    try {
+      const maxPart = Math.max(1, ...Object.values(cardPlanDraft));
+      const parts = Array.from({ length: maxPart }, (_, index) => {
+        const partNumber = index + 1;
+        return {
+          part_number: partNumber,
+          title: `${detail?.item.title ?? "Card"} - Part ${partNumber}`,
+          track_ids: cardPlan.parts
+            .flatMap((part) => part.tracks)
+            .filter((track) => (cardPlanDraft[track.track_id] || 1) === partNumber)
+            .map((track) => track.track_id),
+        };
+      }).filter((part) => part.track_ids.length > 0);
+      const saved = await saveCardPlan(numericItemId, { parts });
+      setSavedCardPlan(saved);
+      setCardPlanDraft(cardPlanAssignments(saved));
+      await refreshPage();
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Card plan save failed.");
     }
   }
 
@@ -959,6 +1001,14 @@ function LibraryDetailPage() {
         </div>
         {cardPlan && cardPlan.parts.length > 0 ? (
           <div className="card-plan-list">
+            <div className="row-actions">
+              <button className="primary-button" onClick={() => void handleSaveCardPlan()} type="button">
+                Save card plan
+              </button>
+              <span className="status-pill status-pill-muted">
+                {savedCardPlan && savedCardPlan.parts.length > 0 ? "Saved plan available" : "Preview draft"}
+              </span>
+            </div>
             {cardPlan.parts.map((part) => (
               <article className="card-plan-part" key={part.part_number}>
                 <div className="section-header">
@@ -976,10 +1026,29 @@ function LibraryDetailPage() {
                 ) : null}
                 <div className="compact-list">
                   {part.tracks.map((track) => (
-                    <p className="muted" key={track.track_id}>
-                      #{track.track_number} {track.title} · {formatDuration(track.duration_seconds)}
-                      {track.estimated_size_mb !== null ? ` · ${track.estimated_size_mb} MB` : ""}
-                    </p>
+                    <label className="plan-track-row" key={track.track_id}>
+                      <span>
+                        #{track.track_number} {track.title} · {formatDuration(track.duration_seconds)}
+                        {track.estimated_size_mb !== null ? ` · ${track.estimated_size_mb} MB` : ""}
+                      </span>
+                      <select
+                        onChange={(event) =>
+                          setCardPlanDraft((current) => ({
+                            ...current,
+                            [track.track_id]: Number(event.target.value),
+                          }))
+                        }
+                        value={cardPlanDraft[track.track_id] || part.part_number}
+                      >
+                        {Array.from({ length: Math.max(cardPlan.parts.length + 1, 2) }, (_, index) => index + 1).map(
+                          (partNumber) => (
+                            <option key={partNumber} value={partNumber}>
+                              Part {partNumber}
+                            </option>
+                          ),
+                        )}
+                      </select>
+                    </label>
                   ))}
                 </div>
               </article>
@@ -991,6 +1060,16 @@ function LibraryDetailPage() {
         ) : (
           <EmptyState message="No plan yet. Inspect media or add tracks first." />
         )}
+        {savedCardPlan && savedCardPlan.parts.length > 0 ? (
+          <div className="saved-plan-summary">
+            <h3>Saved plan</h3>
+            {savedCardPlan.parts.map((part) => (
+              <p className="muted" key={part.part_number}>
+                Part {part.part_number}: {part.track_count} tracks · {formatDuration(part.duration_seconds)}
+              </p>
+            ))}
+          </div>
+        ) : null}
       </div>
 
       <div className="detail-two-column">

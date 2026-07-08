@@ -733,6 +733,41 @@ async def test_card_plan_groups_tracks_by_target_duration(
     assert payload["parts"][0]["tracks"][0]["estimated_size_mb"] == 240
 
 
+async def test_card_plan_can_be_saved_and_reloaded(api_client: AsyncClient) -> None:
+    async with api_client as client:
+        created = await client.post(
+            "/api/v1/library",
+            json={"title": "Planned Book", "content_type": "Audiobook"},
+        )
+        item_id = created.json()["id"]
+        first = await client.post(
+            f"/api/v1/library/{item_id}/tracks",
+            json={"title": "Chapter 1", "track_number": 1, "duration_seconds": 1200},
+        )
+        second = await client.post(
+            f"/api/v1/library/{item_id}/tracks",
+            json={"title": "Chapter 2", "track_number": 2, "duration_seconds": 1800},
+        )
+        saved = await client.put(
+            f"/api/v1/library/{item_id}/card-plan",
+            json={
+                "parts": [
+                    {"part_number": 1, "title": "Planned Book - Part 1", "track_ids": [second.json()["id"]]},
+                    {"part_number": 2, "title": "Planned Book - Part 2", "track_ids": [first.json()["id"]]},
+                ]
+            },
+        )
+        reloaded = await client.get(f"/api/v1/library/{item_id}/card-plan/saved")
+        versions = await client.get(f"/api/v1/library/{item_id}/versions")
+
+    assert saved.status_code == 200
+    assert saved.json()["parts"][0]["tracks"][0]["title"] == "Chapter 2"
+    assert saved.json()["parts"][1]["tracks"][0]["title"] == "Chapter 1"
+    assert reloaded.status_code == 200
+    assert reloaded.json()["parts"][0]["title"] == "Planned Book - Part 1"
+    assert versions.json()[0]["event_type"] == "card_plan_saved"
+
+
 async def test_library_processing_can_be_queued(api_client: AsyncClient) -> None:
     async with api_client as client:
         created = await client.post(

@@ -83,3 +83,30 @@ class SplitPoint(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+
+
+class CardPlanPart(Base):
+    __tablename__ = "card_plan_parts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    library_item_id: Mapped[int] = mapped_column(ForeignKey("library_items.id"), index=True)
+    part_number: Mapped[int] = mapped_column(Integer, index=True)
+    title: Mapped[str] = mapped_column(String(240))
+    estimated_duration_seconds: Mapped[int] = mapped_column(Integer, default=0)
+    estimated_size_mb: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class CardPlanTrackAssignment(Base):
+    __tablename__ = "card_plan_track_assignments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    card_plan_part_id: Mapped[int] = mapped_column(ForeignKey("card_plan_parts.id"), index=True)
+    playlist_track_id: Mapped[int] = mapped_column(ForeignKey("playlist_tracks.id"), index=True)
+    track_order: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

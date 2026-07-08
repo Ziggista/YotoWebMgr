@@ -511,6 +511,29 @@ export async function fetchCardPlan(itemId: number): Promise<CardPlan> {
   return response.json() as Promise<CardPlan>;
 }
 
+export async function fetchSavedCardPlan(itemId: number): Promise<CardPlan> {
+  const response = await fetch(`/api/v1/library/${itemId}/card-plan/saved`);
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to load saved card plan."));
+  }
+  return response.json() as Promise<CardPlan>;
+}
+
+export async function saveCardPlan(
+  itemId: number,
+  payload: { parts: { part_number: number; title: string; track_ids: number[] }[] },
+): Promise<CardPlan> {
+  const response = await fetch(`/api/v1/library/${itemId}/card-plan`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to save card plan."));
+  }
+  return response.json() as Promise<CardPlan>;
+}
+
 export async function queueLibraryItemProcessing(itemId: number): Promise<Job> {
   const response = await fetch(`/api/v1/library/${itemId}/process`, { method: "POST" });
   if (!response.ok) {

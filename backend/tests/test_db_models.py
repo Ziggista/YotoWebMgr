@@ -1,5 +1,7 @@
 from app.db.base import Base
 from app.models import (
+    CardPlanPart,
+    CardPlanTrackAssignment,
     ImportRequest,
     Job,
     LibraryItem,
@@ -26,6 +28,8 @@ def test_user_model_is_registered_in_metadata() -> None:
 
 def test_foundation_models_are_registered_in_metadata() -> None:
     assert LibraryItem.__tablename__ in Base.metadata.tables
+    assert CardPlanPart.__tablename__ in Base.metadata.tables
+    assert CardPlanTrackAssignment.__tablename__ in Base.metadata.tables
     assert ImportRequest.__tablename__ in Base.metadata.tables
     assert Job.__tablename__ in Base.metadata.tables
     assert PhysicalCard.__tablename__ in Base.metadata.tables

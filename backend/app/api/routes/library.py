@@ -14,6 +14,8 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.db.session import get_db_session
 from app.models import (
+    CardPlanPart,
+    CardPlanTrackAssignment,
     ImportRequest,
     Job,
     LibraryItem,
@@ -30,6 +32,7 @@ from app.models import (
 from app.schemas.foundation import (
     CardPlanPartResponse,
     CardPlanResponse,
+    CardPlanSaveRequest,
     CardPlanTrackResponse,
     CardResponse,
     JobResponse,
@@ -547,6 +550,63 @@ def _build_card_plan(db: Session, item: LibraryItem) -> CardPlanResponse:
         estimated_total_size_mb=round(sum(part.estimated_size_mb for part in parts), 2),
         parts=parts,
         warnings=warnings,
+    )
+
+
+def _build_saved_card_plan(db: Session, item: LibraryItem) -> CardPlanResponse:
+    target_duration_seconds = _target_duration_seconds(db)
+    target_size_mb = _target_size_mb(db)
+    parts: list[CardPlanPartResponse] = []
+    saved_parts = list(
+        db.scalars(
+            select(CardPlanPart)
+            .where(CardPlanPart.library_item_id == item.id)
+            .order_by(CardPlanPart.part_number.asc(), CardPlanPart.id.asc())
+        )
+    )
+    for saved_part in saved_parts:
+        assignments = db.execute(
+            select(CardPlanTrackAssignment, PlaylistTrack)
+            .join(PlaylistTrack, PlaylistTrack.id == CardPlanTrackAssignment.playlist_track_id)
+            .where(CardPlanTrackAssignment.card_plan_part_id == saved_part.id)
+            .order_by(CardPlanTrackAssignment.track_order.asc(), PlaylistTrack.track_number.asc())
+        ).all()
+        tracks = [
+            CardPlanTrackResponse(
+                track_id=track.id,
+                title=track.title,
+                track_number=track.track_number,
+                duration_seconds=track.duration_seconds,
+                estimated_size_mb=_estimate_track_size_mb(track.duration_seconds, target_duration_seconds, target_size_mb),
+            )
+            for _, track in assignments
+        ]
+        duration_seconds = sum(track.duration_seconds or 0 for track in tracks)
+        estimated_size_mb = round(sum(track.estimated_size_mb or 0 for track in tracks), 2)
+        warnings = []
+        if duration_seconds > target_duration_seconds:
+            warnings.append("Part exceeds target duration.")
+        if estimated_size_mb > target_size_mb:
+            warnings.append("Part exceeds estimated target size.")
+        parts.append(
+            CardPlanPartResponse(
+                part_number=saved_part.part_number,
+                title=saved_part.title,
+                duration_seconds=duration_seconds,
+                estimated_size_mb=estimated_size_mb,
+                track_count=len(tracks),
+                tracks=tracks,
+                warnings=warnings,
+            )
+        )
+    return CardPlanResponse(
+        library_item_id=item.id,
+        target_duration_seconds=target_duration_seconds,
+        target_size_mb=target_size_mb,
+        total_duration_seconds=sum(part.duration_seconds for part in parts),
+        estimated_total_size_mb=round(sum(part.estimated_size_mb for part in parts), 2),
+        parts=parts,
+        warnings=[],
     )
 
 
@@ -1121,6 +1181,82 @@ async def get_library_item_card_plan(
     if item is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Library item not found")
     return _build_card_plan(db, item)
+
+
+@router.get("/{item_id}/card-plan/saved", response_model=CardPlanResponse)
+async def get_saved_library_item_card_plan(
+    item_id: int,
+    db: Annotated[Session, Depends(get_db_session)],
+) -> CardPlanResponse:
+    item = db.get(LibraryItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Library item not found")
+    return _build_saved_card_plan(db, item)
+
+
+@router.put("/{item_id}/card-plan", response_model=CardPlanResponse)
+async def save_library_item_card_plan(
+    item_id: int,
+    payload: CardPlanSaveRequest,
+    db: Annotated[Session, Depends(get_db_session)],
+) -> CardPlanResponse:
+    item = db.get(LibraryItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Library item not found")
+
+    track_ids = {
+        track_id
+        for part in payload.parts
+        for track_id in (part.track_ids or [assignment.track_id for assignment in part.tracks or []])
+    }
+    existing_track_ids = set(
+        db.scalars(
+            select(PlaylistTrack.id)
+            .where(PlaylistTrack.library_item_id == item.id)
+            .where(PlaylistTrack.id.in_(track_ids) if track_ids else False)
+        )
+    )
+    missing_track_ids = track_ids - existing_track_ids
+    if missing_track_ids:
+        raise HTTPException(status_code=422, detail=f"Track IDs do not belong to this item: {sorted(missing_track_ids)}")
+
+    existing_part_ids = list(db.scalars(select(CardPlanPart.id).where(CardPlanPart.library_item_id == item.id)))
+    if existing_part_ids:
+        db.execute(delete(CardPlanTrackAssignment).where(CardPlanTrackAssignment.card_plan_part_id.in_(existing_part_ids)))
+    db.execute(delete(CardPlanPart).where(CardPlanPart.library_item_id == item.id))
+    db.flush()
+
+    for part in sorted(payload.parts, key=lambda saved_part: saved_part.part_number):
+        saved_part = CardPlanPart(
+            library_item_id=item.id,
+            part_number=part.part_number,
+            title=part.title,
+            estimated_duration_seconds=0,
+            estimated_size_mb=0,
+        )
+        db.add(saved_part)
+        db.flush()
+        assignments = (
+            [(assignment.track_id, assignment.track_order) for assignment in part.tracks]
+            if part.tracks
+            else [(track_id, index) for index, track_id in enumerate(part.track_ids or [], start=1)]
+        )
+        for track_id, track_order in assignments:
+            db.add(
+                CardPlanTrackAssignment(
+                    card_plan_part_id=saved_part.id,
+                    playlist_track_id=track_id,
+                    track_order=track_order,
+                )
+            )
+
+    item.status = "card_plan_saved"
+    db.add(item)
+    db.flush()
+    _record_library_version(db, item, "card_plan_saved", "Saved card plan track assignments.")
+    db.commit()
+    db.refresh(item)
+    return _build_saved_card_plan(db, item)
 
 
 @router.post("/{item_id}/process", response_model=JobResponse, status_code=202)
