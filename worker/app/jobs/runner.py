@@ -24,6 +24,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.engine import Engine
 
+from app.artwork.pixelise import pixelise_artwork
 from app.media_tools.probe import CommandRunner, ProbeResult, inspect_media
 from app.media_tools.transcode import transcode_audio
 
@@ -68,6 +69,7 @@ library_items = Table(
     Column("title", String(240), nullable=False),
     Column("content_type", String(64), nullable=False),
     Column("status", String(64), nullable=False),
+    Column("cover_art_path", Text, nullable=True),
     Column("readiness_status", String(80), nullable=False),
     Column("readiness_detail", Text, nullable=True),
     Column("updated_at", DateTime(timezone=True), nullable=True),
@@ -117,6 +119,25 @@ processed_assets = Table(
     Column("created_at", DateTime(timezone=True), nullable=True),
 )
 
+artwork_assets = Table(
+    "artwork_assets",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("library_item_id", Integer, nullable=False),
+    Column("source_artwork_id", Integer, nullable=True),
+    Column("kind", String(80), nullable=False),
+    Column("status", String(80), nullable=False),
+    Column("source_path", Text, nullable=False),
+    Column("output_path", Text, nullable=True),
+    Column("width", Integer, nullable=True),
+    Column("height", Integer, nullable=True),
+    Column("palette", String(80), nullable=True),
+    Column("settings_json", Text, nullable=False),
+    Column("checksum_sha256", String(64), nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=True),
+    Column("updated_at", DateTime(timezone=True), nullable=True),
+)
+
 yoto_playlist_drafts = Table(
     "yoto_playlist_drafts",
     metadata,
@@ -160,6 +181,7 @@ class JobRunner:
         http_client_factory: Callable[[], httpx.Client] | None = None,
         command_runner: CommandRunner | None = None,
         processed_root: str = "/var/lib/yotowebmgr/media/processed",
+        artwork_root: str = "/var/lib/yotowebmgr/media/artwork",
     ) -> None:
         self.engine = engine
         self.http_client_factory = http_client_factory or (
@@ -167,6 +189,7 @@ class JobRunner:
         )
         self.command_runner = command_runner
         self.processed_root = Path(processed_root)
+        self.artwork_root = Path(artwork_root)
 
     def process_once(self) -> bool:
         leased_job = self._lease_next_job()
@@ -186,6 +209,8 @@ class JobRunner:
                 self._transcode_audio(leased_job.id, leased_job.related_library_item_id)
             elif leased_job.type == "create_yoto_playlist":
                 self._prepare_yoto_playlist(leased_job.id, leased_job.related_library_item_id)
+            elif leased_job.type == "pixelise_artwork":
+                self._pixelise_artwork(leased_job.id, leased_job.related_library_item_id)
             else:
                 self._mark_waiting(leased_job.id, f"Waiting for worker support for {leased_job.type}")
         except Exception as error:  # noqa: BLE001 - job failures need to be captured, not raised.
@@ -536,6 +561,75 @@ class JobRunner:
             )
 
         self._mark_succeeded(job_id, "Yoto playlist draft ready for manual linking")
+
+    def _pixelise_artwork(self, job_id: int, library_item_id: int | None) -> None:
+        if library_item_id is None:
+            raise RuntimeError("Artwork pixelisation job is missing a library item.")
+
+        self._mark_running(job_id, 15, "Loading cover artwork")
+        with self.engine.begin() as connection:
+            library_item = connection.execute(
+                select(library_items).where(library_items.c.id == library_item_id)
+            ).first()
+            if library_item is None:
+                raise RuntimeError("Artwork pixelisation job references a missing library item.")
+            if not library_item.cover_art_path:
+                raise RuntimeError("Library item has no cover artwork to pixelise.")
+            source_asset = connection.execute(
+                select(artwork_assets)
+                .where(
+                    and_(
+                        artwork_assets.c.library_item_id == library_item_id,
+                        artwork_assets.c.source_path == library_item.cover_art_path,
+                    )
+                )
+                .order_by(artwork_assets.c.id.desc())
+                .limit(1)
+            ).first()
+
+        source_path = Path(library_item.cover_art_path)
+        if not source_path.exists():
+            raise RuntimeError("Cover artwork file is missing from storage.")
+
+        settings_json = json.dumps({"size": 16, "colors": 16, "method": "center_crop_nearest"}, sort_keys=True)
+        source_hash = _sha256(source_path)
+        output_path = self.artwork_root / f"library-{library_item_id}" / f"pixel-{source_hash[:16]}-16.png"
+
+        self._mark_running(job_id, 55, "Generating pixel artwork")
+        width, height = pixelise_artwork(source_path=str(source_path), output_path=str(output_path), size=16, colors=16)
+        checksum = _sha256(output_path)
+        now = datetime.now(UTC)
+        with self.engine.begin() as connection:
+            connection.execute(
+                insert(artwork_assets).values(
+                    library_item_id=library_item_id,
+                    source_artwork_id=source_asset.id if source_asset is not None else None,
+                    kind="pixelized",
+                    status="available",
+                    source_path=str(source_path),
+                    output_path=str(output_path),
+                    width=width,
+                    height=height,
+                    palette="adaptive_16",
+                    settings_json=settings_json,
+                    checksum_sha256=checksum,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            connection.execute(
+                update(library_items)
+                .where(library_items.c.id == library_item_id)
+                .values(
+                    status="artwork_pixelized",
+                    cover_art_path=str(output_path),
+                    readiness_status="artwork_ready",
+                    readiness_detail="Pixel artwork generated for Yoto playlist use.",
+                    updated_at=now,
+                )
+            )
+
+        self._mark_succeeded(job_id, "Pixel artwork generated")
 
     def _mark_running(self, job_id: int, progress_percent: int, message: str) -> None:
         now = datetime.now(UTC)

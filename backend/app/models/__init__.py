@@ -1,5 +1,6 @@
 """Domain models package."""
 
+from app.models.artwork import ArtworkAsset
 from app.models.imports import ImportRequest
 from app.models.job import Job
 from app.models.library import LibraryItem
@@ -20,6 +21,7 @@ from app.models.version import VersionEvent
 
 __all__ = [
     "ImportRequest",
+    "ArtworkAsset",
     "CardPlanPart",
     "CardPlanTrackAssignment",
     "Job",

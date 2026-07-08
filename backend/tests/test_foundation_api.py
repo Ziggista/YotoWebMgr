@@ -14,6 +14,7 @@ from app.db.base import Base
 from app.db.session import get_db_session
 from app.main import app
 from app.models import (
+    ArtworkAsset,
     Job,
     LibraryItem,
     PhysicalCard,
@@ -840,6 +841,7 @@ async def test_library_detail_includes_processed_assets(
 
 async def test_cover_art_upload_sets_library_cover_path(
     api_client: AsyncClient,
+    db_session: Session,
     import_storage_paths: dict[str, str],
 ) -> None:
     async with api_client as client:
@@ -852,11 +854,35 @@ async def test_cover_art_upload_sets_library_cover_path(
             f"/api/v1/library/{item_id}/cover-art",
             files={"artwork_file": ("cover.png", b"png bytes", "image/png")},
         )
+        detail = await client.get(f"/api/v1/library/{item_id}")
 
     assert response.status_code == 200
     cover_path = response.json()["cover_art_path"]
     assert cover_path.startswith(import_storage_paths["artwork"])
     assert Path(cover_path).read_bytes() == b"png bytes"
+
+    assert detail.status_code == 200
+    assert detail.json()["artwork_assets"][0]["kind"] == "source"
+    assert db_session.scalar(select(ArtworkAsset).where(ArtworkAsset.library_item_id == item_id)) is not None
+
+
+async def test_artwork_pixelise_can_be_queued(api_client: AsyncClient) -> None:
+    async with api_client as client:
+        created = await client.post(
+            "/api/v1/library",
+            json={
+                "title": "Pixel Cover",
+                "content_type": "Story Collection",
+                "cover_art_path": "/art/source.png",
+            },
+        )
+        item_id = created.json()["id"]
+        response = await client.post(f"/api/v1/library/{item_id}/artwork/pixelise")
+
+    assert response.status_code == 202
+    payload = response.json()
+    assert payload["type"] == "pixelise_artwork"
+    assert payload["related_library_item_id"] == item_id
 
 
 async def test_yoto_config_and_playlist_preview(api_client: AsyncClient) -> None:

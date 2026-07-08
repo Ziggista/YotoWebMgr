@@ -39,6 +39,7 @@ import {
   linkLibraryItemToCard,
   loginWithPassword,
   quickSelectUser,
+  queueArtworkPixelise,
   queueLibraryItemProcessing,
   queueYotoPlaylist,
   restoreLibraryItemVersion,
@@ -811,6 +812,16 @@ function LibraryDetailPage() {
     }
   }
 
+  async function handleQueueArtworkPixelise() {
+    setError(null);
+    try {
+      await queueArtworkPixelise(numericItemId);
+      await refreshPage();
+    } catch (artworkError) {
+      setError(artworkError instanceof Error ? artworkError.message : "Artwork pixelisation queue failed.");
+    }
+  }
+
   async function handleSaveCardPlan() {
     if (!cardPlan) return;
     setError(null);
@@ -981,6 +992,37 @@ function LibraryDetailPage() {
             {detail.item.playlist_hide_track_numbers ? "Track numbers hidden" : "Track numbers shown"}
           </p>
         </div>
+      </div>
+
+      <div className="detail-section">
+        <div className="section-header">
+          <div>
+            <p className="eyebrow">Artwork</p>
+            <h2>Cover assets</h2>
+          </div>
+          <button className="primary-button" onClick={() => void handleQueueArtworkPixelise()} type="button">
+            Pixelise cover
+          </button>
+        </div>
+        {detail.artwork_assets.length === 0 ? (
+          <EmptyState message="No artwork assets recorded yet." />
+        ) : (
+          <div className="compact-table">
+            {detail.artwork_assets.map((asset) => (
+              <div className="compact-table-row" key={asset.id}>
+                <span className="status-pill status-pill-muted">{asset.kind}</span>
+                <div>
+                  <strong>{asset.output_path ?? asset.source_path}</strong>
+                  <p className="muted">
+                    {asset.status} · {asset.width && asset.height ? `${asset.width}x${asset.height}` : "source"} ·{" "}
+                    {asset.palette ?? "original"}
+                  </p>
+                </div>
+                <span className="muted">{asset.checksum_sha256?.slice(0, 8) ?? "pending"}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="detail-section">

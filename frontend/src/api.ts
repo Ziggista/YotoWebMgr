@@ -127,6 +127,7 @@ export interface LibraryItemDetail {
   podcast_feeds: PodcastFeed[];
   split_points: SplitPoint[];
   processed_assets: ProcessedAsset[];
+  artwork_assets: ArtworkAsset[];
 }
 
 export interface ProcessedAsset {
@@ -143,6 +144,22 @@ export interface ProcessedAsset {
   checksum_sha256: string;
   profile: string;
   settings_json: string;
+  created_at: string;
+}
+
+export interface ArtworkAsset {
+  id: number;
+  library_item_id: number;
+  source_artwork_id: number | null;
+  kind: string;
+  status: string;
+  source_path: string;
+  output_path: string | null;
+  width: number | null;
+  height: number | null;
+  palette: string | null;
+  settings_json: string;
+  checksum_sha256: string | null;
   created_at: string;
 }
 
@@ -429,6 +446,14 @@ export async function uploadCoverArt(itemId: number, artworkFile: File): Promise
     throw new Error(await errorMessage(response, "Failed to upload cover art."));
   }
   return response.json() as Promise<LibraryItem>;
+}
+
+export async function queueArtworkPixelise(itemId: number): Promise<Job> {
+  const response = await fetch(`/api/v1/library/${itemId}/artwork/pixelise`, { method: "POST" });
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to queue artwork pixelisation."));
+  }
+  return response.json() as Promise<Job>;
 }
 
 export async function createRadioStreamTrack(

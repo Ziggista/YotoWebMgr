@@ -56,5 +56,7 @@ The worker handles `inspect_media` and ZIP album inspection jobs with `ffprobe`.
 Manual cover uploads are accepted by the API and stored under `/var/lib/yotowebmgr/media/artwork`.
 
 - Supported upload formats are JPG, PNG, and WebP.
-- Uploading artwork updates the library item's `cover_art_path`.
+- Uploading artwork updates the library item's `cover_art_path` and records a source `artwork_asset`.
+- Pixel artwork generation creates a separate deterministic 16x16 PNG derivative under the artwork volume.
+- The source artwork remains recorded separately from the generated Yoto-ready output.
 - Artwork files are separate from original audio imports and are not written into source media files.

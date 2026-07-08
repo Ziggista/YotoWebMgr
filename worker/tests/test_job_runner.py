@@ -6,7 +6,16 @@ import subprocess
 import httpx
 from sqlalchemy import create_engine, select
 
-from app.jobs.runner import import_requests, jobs, library_items, metadata, playlist_tracks, processed_assets, settings
+from app.jobs.runner import (
+    artwork_assets,
+    import_requests,
+    jobs,
+    library_items,
+    metadata,
+    playlist_tracks,
+    processed_assets,
+    settings,
+)
 from app.jobs.runner import JobRunner
 
 
@@ -215,6 +224,71 @@ def test_runner_transcodes_tracks_and_records_assets(tmp_path: Path) -> None:
     assert asset.duration_seconds == 60
     assert asset.size_bytes == len(b"processed-audio")
     assert Path(asset.output_path).read_bytes() == b"processed-audio"
+
+
+def test_runner_pixelises_artwork_and_records_asset(tmp_path: Path) -> None:
+    from PIL import Image
+
+    engine = _make_engine()
+    source_path = tmp_path / "source.png"
+    Image.new("RGB", (32, 24), color=(20, 100, 220)).save(source_path)
+
+    with engine.begin() as connection:
+        connection.execute(
+            library_items.insert().values(
+                id=40,
+                title="Pixel Book",
+                content_type="Story Collection",
+                status="artwork_uploaded",
+                cover_art_path=str(source_path),
+                readiness_status="needs_review",
+            )
+        )
+        connection.execute(
+            artwork_assets.insert().values(
+                id=7,
+                library_item_id=40,
+                kind="source",
+                status="available",
+                source_path=str(source_path),
+                output_path=str(source_path),
+                settings_json="{}",
+            )
+        )
+        connection.execute(
+            jobs.insert().values(
+                id=8,
+                type="pixelise_artwork",
+                status="queued",
+                pending_delete=False,
+                retry_count=0,
+                max_retries=3,
+                progress_percent=0,
+                progress_message="Queued",
+                related_library_item_id=40,
+                created_at=datetime.now(UTC),
+            )
+        )
+
+    runner = JobRunner(engine, artwork_root=str(tmp_path / "artwork"))
+
+    assert runner.process_once() is True
+    with engine.begin() as connection:
+        job = connection.execute(select(jobs).where(jobs.c.id == 8)).one()
+        library_item = connection.execute(select(library_items).where(library_items.c.id == 40)).one()
+        asset = connection.execute(
+            select(artwork_assets)
+            .where(artwork_assets.c.library_item_id == 40)
+            .where(artwork_assets.c.kind == "pixelized")
+        ).one()
+
+    assert job.status == "succeeded"
+    assert library_item.status == "artwork_pixelized"
+    assert library_item.cover_art_path == asset.output_path
+    assert asset.source_artwork_id == 7
+    assert asset.width == 16
+    assert asset.height == 16
+    assert Path(asset.output_path).exists()
 
 
 def _ffprobe_runner(args: list[str]) -> subprocess.CompletedProcess[str]:

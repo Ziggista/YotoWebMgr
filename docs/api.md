@@ -20,6 +20,16 @@ Future areas will include library, tags, imports, playlists, cards, jobs, artwor
 
 Queues a `transcode_audio` worker job for non-stream source-backed tracks. Generated output is returned on the library detail response as `processed_assets`.
 
+## Artwork
+
+- `POST /api/v1/library/{item_id}/cover-art`
+- `GET /api/v1/library/{item_id}/artwork`
+- `POST /api/v1/library/{item_id}/artwork/pixelise`
+
+Cover uploads are stored as source artwork assets. Pixelisation queues a `pixelise_artwork` worker
+job that creates a deterministic 16x16 PNG derivative, records it separately, and updates the
+library cover path to the generated Yoto-style artwork.
+
 ## Yoto Playlist Drafts
 
 - `GET /api/v1/yoto/config`

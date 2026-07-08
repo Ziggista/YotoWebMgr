@@ -197,6 +197,7 @@ class LibraryItemDetailResponse(BaseModel):
     podcast_feeds: list[PodcastFeedResponse]
     split_points: list[SplitPointResponse]
     processed_assets: list["ProcessedAssetResponse"] = []
+    artwork_assets: list["ArtworkAssetResponse"] = []
 
 
 class ProcessedAssetResponse(BaseModel):
@@ -213,6 +214,22 @@ class ProcessedAssetResponse(BaseModel):
     checksum_sha256: str
     profile: str
     settings_json: str
+    created_at: datetime
+
+
+class ArtworkAssetResponse(BaseModel):
+    id: int
+    library_item_id: int
+    source_artwork_id: int | None
+    kind: str
+    status: str
+    source_path: str
+    output_path: str | None
+    width: int | None
+    height: int | None
+    palette: str | None
+    settings_json: str
+    checksum_sha256: str | None
     created_at: datetime
 
 

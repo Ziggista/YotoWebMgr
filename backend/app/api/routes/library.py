@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.db.session import get_db_session
 from app.models import (
+    ArtworkAsset,
     CardPlanPart,
     CardPlanTrackAssignment,
     ImportRequest,
@@ -30,6 +31,7 @@ from app.models import (
     VersionEvent,
 )
 from app.schemas.foundation import (
+    ArtworkAssetResponse,
     CardPlanPartResponse,
     CardPlanResponse,
     CardPlanSaveRequest,
@@ -234,6 +236,10 @@ def _build_processed_asset_response(asset: ProcessedAsset) -> ProcessedAssetResp
     return ProcessedAssetResponse.model_validate(asset, from_attributes=True)
 
 
+def _build_artwork_asset_response(asset: ArtworkAsset) -> ArtworkAssetResponse:
+    return ArtworkAssetResponse.model_validate(asset, from_attributes=True)
+
+
 def _detail_for_item(db: Session, item: LibraryItem) -> LibraryItemDetailResponse:
     tracks = db.scalars(
         select(PlaylistTrack)
@@ -255,12 +261,18 @@ def _detail_for_item(db: Session, item: LibraryItem) -> LibraryItemDetailRespons
         .where(ProcessedAsset.library_item_id == item.id)
         .order_by(ProcessedAsset.created_at.desc(), ProcessedAsset.id.desc())
     )
+    artwork_assets = db.scalars(
+        select(ArtworkAsset)
+        .where(ArtworkAsset.library_item_id == item.id)
+        .order_by(ArtworkAsset.created_at.desc(), ArtworkAsset.id.desc())
+    )
     return LibraryItemDetailResponse(
         item=_build_library_item_response(db, item),
         tracks=[_build_track_response(track) for track in tracks],
         podcast_feeds=[_build_podcast_feed_response(db, feed) for feed in feeds],
         split_points=[_build_split_point_response(split_point) for split_point in split_points],
         processed_assets=[_build_processed_asset_response(asset) for asset in processed_assets],
+        artwork_assets=[_build_artwork_asset_response(asset) for asset in artwork_assets],
     )
 
 
@@ -979,11 +991,66 @@ async def upload_library_item_cover_art(
     item.cover_art_path = str(destination)
     item.status = "artwork_uploaded"
     db.add(item)
+    db.add(
+        ArtworkAsset(
+            library_item_id=item.id,
+            kind="source",
+            status="available",
+            source_path=str(destination),
+            output_path=str(destination),
+            settings_json=json.dumps({"upload_filename": artwork_file.filename}, sort_keys=True),
+        )
+    )
     db.flush()
     _record_library_version(db, item, "cover_art_uploaded", "Cover artwork uploaded.")
     db.commit()
     db.refresh(item)
     return _build_library_item_response(db, item)
+
+
+@router.get("/{item_id}/artwork", response_model=list[ArtworkAssetResponse])
+async def list_library_item_artwork(
+    item_id: int,
+    db: Annotated[Session, Depends(get_db_session)],
+) -> list[ArtworkAssetResponse]:
+    item = db.get(LibraryItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Library item not found")
+    assets = db.scalars(
+        select(ArtworkAsset)
+        .where(ArtworkAsset.library_item_id == item.id)
+        .order_by(ArtworkAsset.created_at.desc(), ArtworkAsset.id.desc())
+    )
+    return [_build_artwork_asset_response(asset) for asset in assets]
+
+
+@router.post("/{item_id}/artwork/pixelise", response_model=JobResponse, status_code=202)
+async def queue_library_item_artwork_pixelise(
+    item_id: int,
+    db: Annotated[Session, Depends(get_db_session)],
+) -> JobResponse:
+    item = db.get(LibraryItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Library item not found")
+    if not item.cover_art_path:
+        raise HTTPException(status_code=422, detail="Upload or choose cover artwork before pixelising.")
+
+    job = Job(
+        type="pixelise_artwork",
+        status="queued",
+        progress_percent=0,
+        progress_message="Queued Yoto pixel artwork generation",
+        related_library_item_id=item.id,
+    )
+    item.status = "artwork_pixelise_queued"
+    item.readiness_status = "artwork_pixelise_queued"
+    item.readiness_detail = "Pixel artwork generation queued."
+    db.add(job)
+    db.flush()
+    _record_library_version(db, item, "artwork_pixelise_queued", "Queued pixel artwork generation.")
+    db.commit()
+    db.refresh(job)
+    return JobResponse.model_validate(job, from_attributes=True)
 
 
 @router.post("/{item_id}/tracks", response_model=PlaylistTrackResponse, status_code=201)

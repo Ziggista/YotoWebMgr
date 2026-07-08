@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     environment: str = "development"
     database_url: str = "postgresql+psycopg://yotowebmgr:change-me@localhost:5432/yotowebmgr"
     processed_path: str = "/var/lib/yotowebmgr/media/processed"
+    artwork_path: str = "/var/lib/yotowebmgr/media/artwork"
 
 
 @lru_cache
