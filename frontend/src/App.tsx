@@ -14,6 +14,7 @@ import {
   PhysicalCard,
   ReadinessResponse,
   SessionResponse,
+  VersionEvent,
   applyTrackIcon,
   createCard,
   createImport,
@@ -27,6 +28,7 @@ import {
   fetchJobs,
   fetchLibraryItemDetail,
   fetchLibraryItems,
+  fetchLibraryItemVersions,
   fetchReadiness,
   fetchSettings,
   hideImport,
@@ -714,6 +716,7 @@ function LibraryDetailPage() {
   const [detail, setDetail] = useState<LibraryItemDetail | null>(null);
   const [readiness, setReadiness] = useState<ReadinessResponse | null>(null);
   const [cardPlan, setCardPlan] = useState<CardPlan | null>(null);
+  const [versions, setVersions] = useState<VersionEvent[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -722,15 +725,17 @@ function LibraryDetailPage() {
     if (!Number.isFinite(numericItemId)) {
       throw new Error("Invalid library item.");
     }
-    const [nextDetail, nextReadiness, nextCardPlan, nextJobs] = await Promise.all([
+    const [nextDetail, nextReadiness, nextCardPlan, nextVersions, nextJobs] = await Promise.all([
       fetchLibraryItemDetail(numericItemId),
       fetchReadiness(numericItemId),
       fetchCardPlan(numericItemId),
+      fetchLibraryItemVersions(numericItemId),
       fetchJobs(),
     ]);
     setDetail(nextDetail);
     setReadiness(nextReadiness);
     setCardPlan(nextCardPlan);
+    setVersions(nextVersions);
     setJobs(nextJobs.filter((job) => job.related_library_item_id === numericItemId));
   }
 
@@ -831,6 +836,10 @@ function LibraryDetailPage() {
         <div className="summary-tile">
           <span className="summary-label">Jobs</span>
           <strong>{jobs.length}</strong>
+        </div>
+        <div className="summary-tile">
+          <span className="summary-label">Versions</span>
+          <strong>{versions.length}</strong>
         </div>
       </div>
 
@@ -992,6 +1001,31 @@ function LibraryDetailPage() {
             </div>
           )}
         </div>
+      </div>
+
+      <div className="detail-section">
+        <div className="section-header">
+          <div>
+            <p className="eyebrow">History</p>
+            <h2>Version events</h2>
+          </div>
+          <span className="status-pill">{versions.length} events</span>
+        </div>
+        {versions.length === 0 ? (
+          <EmptyState message="No version events recorded for this item yet." />
+        ) : (
+          <div className="version-list">
+            {versions.map((version) => (
+              <article className="version-row" key={version.id}>
+                <div>
+                  <h3>Version {version.version_number}</h3>
+                  <p className="muted">{version.summary}</p>
+                </div>
+                <span className="status-pill status-pill-muted">{version.event_type}</span>
+              </article>
+            ))}
+          </div>
+        )}
       </div>
     </section>
   );

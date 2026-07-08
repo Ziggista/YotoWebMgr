@@ -10,6 +10,7 @@ from app.models import (
     Setting,
     SplitPoint,
     User,
+    VersionEvent,
 )
 
 
@@ -32,3 +33,4 @@ def test_foundation_models_are_registered_in_metadata() -> None:
     assert PodcastEpisode.__tablename__ in Base.metadata.tables
     assert SplitPoint.__tablename__ in Base.metadata.tables
     assert Setting.__tablename__ in Base.metadata.tables
+    assert VersionEvent.__tablename__ in Base.metadata.tables

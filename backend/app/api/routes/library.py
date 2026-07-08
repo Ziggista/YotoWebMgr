@@ -1,4 +1,5 @@
 from typing import Annotated
+import json
 from pathlib import Path
 from uuid import uuid4
 import xml.etree.ElementTree as ET
@@ -7,7 +8,7 @@ from urllib.parse import urlparse
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse, RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -23,6 +24,7 @@ from app.models import (
     Setting,
     SplitPoint,
     User,
+    VersionEvent,
 )
 from app.schemas.foundation import (
     CardPlanPartResponse,
@@ -48,6 +50,7 @@ from app.schemas.foundation import (
     SplitPointCreate,
     SplitPointResponse,
     TrackIconApplyRequest,
+    VersionEventResponse,
 )
 
 
@@ -243,6 +246,107 @@ def _detail_for_item(db: Session, item: LibraryItem) -> LibraryItemDetailRespons
         podcast_feeds=[_build_podcast_feed_response(db, feed) for feed in feeds],
         split_points=[_build_split_point_response(split_point) for split_point in split_points],
     )
+
+
+def _version_snapshot(db: Session, item: LibraryItem) -> str:
+    tracks = list(
+        db.scalars(
+            select(PlaylistTrack)
+            .where(PlaylistTrack.library_item_id == item.id)
+            .order_by(PlaylistTrack.track_number.asc(), PlaylistTrack.id.asc())
+        )
+    )
+    split_points = list(
+        db.scalars(
+            select(SplitPoint)
+            .where(SplitPoint.library_item_id == item.id)
+            .order_by(SplitPoint.timestamp_seconds.asc(), SplitPoint.id.asc())
+        )
+    )
+    feeds = list(
+        db.scalars(
+            select(PodcastFeed)
+            .where(PodcastFeed.library_item_id == item.id)
+            .order_by(PodcastFeed.id.asc())
+        )
+    )
+    snapshot = {
+        "item": {
+            "id": item.id,
+            "title": item.title,
+            "content_type": item.content_type,
+            "status": item.status,
+            "cover_art_path": item.cover_art_path,
+            "playlist_always_play_from_start": item.playlist_always_play_from_start,
+            "playlist_shuffle_tracks": item.playlist_shuffle_tracks,
+            "playlist_hide_track_numbers": item.playlist_hide_track_numbers,
+            "readiness_status": item.readiness_status,
+            "readiness_detail": item.readiness_detail,
+            "notes": item.notes,
+            "source_import_id": item.source_import_id,
+        },
+        "tracks": [
+            {
+                "id": track.id,
+                "title": track.title,
+                "track_number": track.track_number,
+                "duration_seconds": track.duration_seconds,
+                "icon_path": track.icon_path,
+                "track_behavior": track.track_behavior,
+                "is_stream": track.is_stream,
+                "source_path": track.source_path,
+                "source_url": track.source_url,
+                "stream_url": track.stream_url,
+                "podcast_episode_guid": track.podcast_episode_guid,
+            }
+            for track in tracks
+        ],
+        "podcast_feeds": [
+            {
+                "id": feed.id,
+                "rss_url": feed.rss_url,
+                "title": feed.title,
+                "description": feed.description,
+                "artwork_url": feed.artwork_url,
+            }
+            for feed in feeds
+        ],
+        "split_points": [
+            {
+                "id": split_point.id,
+                "timestamp_seconds": split_point.timestamp_seconds,
+                "title": split_point.title,
+                "part_number": split_point.part_number,
+            }
+            for split_point in split_points
+        ],
+    }
+    return json.dumps(snapshot, sort_keys=True)
+
+
+def _record_library_version(
+    db: Session,
+    item: LibraryItem,
+    event_type: str,
+    summary: str,
+    created_by_user_id: int | None = None,
+) -> VersionEvent:
+    latest_version = db.scalar(
+        select(func.max(VersionEvent.version_number))
+        .where(VersionEvent.entity_type == "library_item")
+        .where(VersionEvent.entity_id == item.id)
+    )
+    event = VersionEvent(
+        entity_type="library_item",
+        entity_id=item.id,
+        version_number=(latest_version or 0) + 1,
+        event_type=event_type,
+        summary=summary,
+        snapshot_json=_version_snapshot(db, item),
+        created_by_user_id=created_by_user_id,
+    )
+    db.add(event)
+    return event
 
 
 def _estimate_track_size_mb(
@@ -551,6 +655,23 @@ async def get_library_item_detail(
     return _detail_for_item(db, item)
 
 
+@router.get("/{item_id}/versions", response_model=list[VersionEventResponse])
+async def list_library_item_versions(
+    item_id: int,
+    db: Annotated[Session, Depends(get_db_session)],
+) -> list[VersionEventResponse]:
+    item = db.get(LibraryItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Library item not found")
+    events = db.scalars(
+        select(VersionEvent)
+        .where(VersionEvent.entity_type == "library_item")
+        .where(VersionEvent.entity_id == item.id)
+        .order_by(VersionEvent.version_number.desc(), VersionEvent.id.desc())
+    )
+    return [VersionEventResponse.model_validate(event, from_attributes=True) for event in events]
+
+
 @router.get("/{item_id}/media")
 async def get_library_item_media(
     item_id: int,
@@ -614,6 +735,8 @@ async def create_library_item(
         owner_user_id=owner.id if owner else None,
     )
     db.add(item)
+    db.flush()
+    _record_library_version(db, item, "library_item_created", "Library item created.")
     db.commit()
     db.refresh(item)
     return _build_library_item_response(db, item)
@@ -632,6 +755,8 @@ async def update_library_item_settings(
     for key, value in payload.model_dump(exclude_unset=True).items():
         setattr(item, key, value)
     db.add(item)
+    db.flush()
+    _record_library_version(db, item, "settings_updated", "Playlist/card settings updated.")
     db.commit()
     db.refresh(item)
     return _build_library_item_response(db, item)
@@ -661,6 +786,8 @@ async def upload_library_item_cover_art(
     item.cover_art_path = str(destination)
     item.status = "artwork_uploaded"
     db.add(item)
+    db.flush()
+    _record_library_version(db, item, "cover_art_uploaded", "Cover artwork uploaded.")
     db.commit()
     db.refresh(item)
     return _build_library_item_response(db, item)
@@ -677,6 +804,8 @@ async def create_playlist_track(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Library item not found")
     track = PlaylistTrack(library_item_id=item.id, **payload.model_dump())
     db.add(track)
+    db.flush()
+    _record_library_version(db, item, "track_created", f"Track added: {track.title}.")
     db.commit()
     db.refresh(track)
     return _build_track_response(track)
@@ -701,6 +830,8 @@ async def update_playlist_track(
     for key, value in updates.items():
         setattr(track, key, value)
     db.add(track)
+    db.flush()
+    _record_library_version(db, item, "track_updated", f"Track updated: {track.title}.")
     db.commit()
     db.refresh(track)
     return _build_track_response(track)
@@ -719,6 +850,8 @@ async def apply_icon_to_tracks(
     for track in tracks:
         track.icon_path = payload.icon_path
         db.add(track)
+    db.flush()
+    _record_library_version(db, item, "track_icons_applied", "Track icon applied to all tracks.")
     db.commit()
     return [_build_track_response(track) for track in tracks]
 
@@ -759,6 +892,8 @@ async def create_radio_stream_track(
     db.add(track)
     db.add(job)
     db.add(item)
+    db.flush()
+    _record_library_version(db, item, "radio_stream_created", f"Radio stream added: {track.title}.")
     db.commit()
     db.refresh(track)
     return _build_track_response(track)
@@ -806,6 +941,8 @@ async def create_podcast_feed(
     item.status = "podcast_feed_queued"
     db.add(job)
     db.add(item)
+    db.flush()
+    _record_library_version(db, item, "podcast_feed_created", f"Podcast feed added: {feed.title or feed.rss_url}.")
     db.commit()
     db.refresh(feed)
     return _build_podcast_feed_response(db, feed)
@@ -824,6 +961,8 @@ async def create_split_point(
     item.status = "split_plan_draft"
     db.add(split_point)
     db.add(item)
+    db.flush()
+    _record_library_version(db, item, "split_point_added", f"Split point added: {split_point.title}.")
     db.commit()
     db.refresh(split_point)
     return _build_split_point_response(split_point)
@@ -895,6 +1034,8 @@ async def link_library_item_to_card(
 
     db.add(item)
     db.add(card)
+    db.flush()
+    _record_library_version(db, item, "card_link_queued", f"Queued link to {card.display_name}.")
     db.commit()
     db.refresh(item)
     db.refresh(card)

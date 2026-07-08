@@ -192,6 +192,18 @@ class LibraryItemDetailResponse(BaseModel):
     split_points: list[SplitPointResponse]
 
 
+class VersionEventResponse(BaseModel):
+    id: int
+    entity_type: str
+    entity_id: int
+    version_number: int
+    event_type: str
+    summary: str
+    snapshot_json: str
+    created_by_user_id: int | None
+    created_at: datetime
+
+
 class ReadinessCheck(BaseModel):
     key: str
     label: str

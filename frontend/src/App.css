@@ -580,7 +580,7 @@ a {
 
 .detail-summary-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 12px;
   margin: 18px 0;
 }
@@ -633,13 +633,15 @@ a {
 
 .compact-table,
 .compact-list,
-.card-plan-list {
+.card-plan-list,
+.version-list {
   display: grid;
   gap: 10px;
 }
 
 .compact-table-row,
-.job-detail-row {
+.job-detail-row,
+.version-row {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) minmax(120px, auto);
   align-items: center;
@@ -651,8 +653,13 @@ a {
 }
 
 .compact-table-row p,
-.job-detail-row p {
+.job-detail-row p,
+.version-row p {
   margin: 4px 0 0;
+}
+
+.version-row {
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
 .card-plan-part {
@@ -791,7 +798,8 @@ a {
   }
 
   .compact-table-row,
-  .job-detail-row {
+  .job-detail-row,
+  .version-row {
     grid-template-columns: 1fr;
     align-items: start;
   }

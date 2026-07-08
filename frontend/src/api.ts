@@ -126,6 +126,18 @@ export interface LibraryItemDetail {
   split_points: SplitPoint[];
 }
 
+export interface VersionEvent {
+  id: number;
+  entity_type: string;
+  entity_id: number;
+  version_number: number;
+  event_type: string;
+  summary: string;
+  snapshot_json: string;
+  created_by_user_id: number | null;
+  created_at: string;
+}
+
 export interface ReadinessCheck {
   key: string;
   label: string;
@@ -322,6 +334,14 @@ export async function fetchLibraryItemDetail(itemId: number): Promise<LibraryIte
     throw new Error(await errorMessage(response, "Failed to load library item."));
   }
   return response.json() as Promise<LibraryItemDetail>;
+}
+
+export async function fetchLibraryItemVersions(itemId: number): Promise<VersionEvent[]> {
+  const response = await fetch(`/api/v1/library/${itemId}/versions`);
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to load version history."));
+  }
+  return response.json() as Promise<VersionEvent[]>;
 }
 
 export async function updateLibraryItemSettings(

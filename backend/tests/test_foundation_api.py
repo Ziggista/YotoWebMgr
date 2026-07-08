@@ -13,7 +13,7 @@ from app.api.routes.library import _playlist_stream_url_from_text
 from app.db.base import Base
 from app.db.session import get_db_session
 from app.main import app
-from app.models import Job, LibraryItem, PhysicalCard, PlaylistTrack, Setting, User
+from app.models import Job, LibraryItem, PhysicalCard, PlaylistTrack, Setting, User, VersionEvent
 
 
 pytestmark = pytest.mark.asyncio
@@ -448,6 +448,38 @@ async def test_library_playlist_settings_tracks_icons_and_readiness(
     assert icon_apply.json()[0]["icon_path"] == "/icons/moon.png"
     assert readiness.status_code == 200
     assert readiness.json()["status"] == "ready"
+
+
+async def test_library_version_events_record_mutations(
+    api_client: AsyncClient,
+    db_session: Session,
+) -> None:
+    async with api_client as client:
+        created = await client.post(
+            "/api/v1/library",
+            json={"title": "Versioned Story", "content_type": "Audiobook"},
+        )
+        item_id = created.json()["id"]
+        await client.put(
+            f"/api/v1/library/{item_id}/settings",
+            json={"playlist_shuffle_tracks": True},
+        )
+        await client.post(
+            f"/api/v1/library/{item_id}/tracks",
+            json={"title": "Chapter One", "track_number": 1, "duration_seconds": 180},
+        )
+        versions = await client.get(f"/api/v1/library/{item_id}/versions")
+
+    assert versions.status_code == 200
+    payload = versions.json()
+    assert [event["version_number"] for event in payload] == [3, 2, 1]
+    assert payload[0]["event_type"] == "track_created"
+    assert "Chapter One" in payload[0]["snapshot_json"]
+    assert payload[1]["event_type"] == "settings_updated"
+    assert payload[2]["event_type"] == "library_item_created"
+
+    event_count = len(db_session.scalars(select(VersionEvent)).all())
+    assert event_count == 3
 
 
 async def test_radio_stream_creates_validation_job(api_client: AsyncClient, db_session: Session) -> None:
