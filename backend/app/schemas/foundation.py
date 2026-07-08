@@ -346,3 +346,18 @@ class LinkCardResponse(BaseModel):
     job: JobResponse
     requires_split_plan: bool
     estimated_source_size_mb: float | None
+
+
+class YotoConfigResponse(BaseModel):
+    enabled: bool
+    api_base_url: str
+    auth_base_url: str
+    client_id_configured: bool
+    redirect_uri_configured: bool
+    oauth_scope: str
+
+
+class YotoPlaylistPreviewResponse(BaseModel):
+    library_item_id: int
+    payload: dict[str, object]
+    live_api_call: bool = False

@@ -644,3 +644,39 @@ async def test_cover_art_upload_sets_library_cover_path(
     cover_path = response.json()["cover_art_path"]
     assert cover_path.startswith(import_storage_paths["artwork"])
     assert Path(cover_path).read_bytes() == b"png bytes"
+
+
+async def test_yoto_config_and_playlist_preview(api_client: AsyncClient) -> None:
+    async with api_client as client:
+        config = await client.get("/api/v1/yoto/config")
+        created = await client.post(
+            "/api/v1/library",
+            json={
+                "title": "Bedtime Mix",
+                "content_type": "Custom Playlist",
+                "cover_art_path": "/art/bedtime.png",
+                "playlist_always_play_from_start": True,
+            },
+        )
+        item_id = created.json()["id"]
+        await client.post(
+            f"/api/v1/library/{item_id}/tracks",
+            json={
+                "title": "Story One",
+                "track_number": 1,
+                "duration_seconds": 120,
+                "icon_path": "/icons/story.png",
+            },
+        )
+        preview = await client.get(f"/api/v1/yoto/library/{item_id}/playlist-preview")
+
+    assert config.status_code == 200
+    assert config.json()["enabled"] is False
+    assert config.json()["api_base_url"] == "https://api.yotoplay.com"
+    assert preview.status_code == 200
+    payload = preview.json()
+    assert payload["live_api_call"] is False
+    assert payload["payload"]["title"] == "Bedtime Mix"
+    assert payload["payload"]["playback"]["always_play_from_start"] is True
+    assert payload["payload"]["chapters"][0]["title"] == "Story One"
+    assert payload["payload"]["chapters"][0]["offline_available"] is True

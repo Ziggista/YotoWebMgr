@@ -35,6 +35,17 @@ playlist, and transcode-polling workflows are confirmed against live credentials
 HTTP route handlers should enqueue Yoto work and return quickly; uploads, playlist updates, token
 refresh, and transcode polling belong in worker jobs.
 
+## Local Preview Endpoints
+
+The API exposes local-only Yoto scaffolding endpoints:
+
+- `GET /api/v1/yoto/config` reports non-secret Yoto configuration state.
+- `GET /api/v1/yoto/library/{item_id}/playlist-preview` maps a local library item and its tracks
+  into a Yoto-shaped playlist payload without making a live Yoto API call.
+
+The preview endpoint is deliberately not an upload action. It exists so request mapping, card
+planning, and future worker jobs can converge on one integration-layer payload shape.
+
 ## Physical Card Inventory
 
 Physical MYO cards remain a local inventory concept until the supported Yoto linking workflow is
