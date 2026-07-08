@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
-import { NavLink, Route, Routes } from "react-router-dom";
+import { Link, NavLink, Route, Routes, useParams } from "react-router-dom";
 import AudioPlayer from "react-h5-audio-player";
 import "react-h5-audio-player/lib/styles.css";
 import {
@@ -69,6 +69,17 @@ function PlaceholderPage({ title }: { title: string }) {
 
 function EmptyState({ message }: { message: string }) {
   return <p className="muted">{message}</p>;
+}
+
+function formatDuration(seconds: number | null): string {
+  if (seconds === null) return "Unknown";
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainingSeconds = seconds % 60;
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, "0")}:${String(remainingSeconds).padStart(2, "0")}`;
+  }
+  return `${minutes}:${String(remainingSeconds).padStart(2, "0")}`;
 }
 
 function LibraryPage() {
@@ -369,6 +380,9 @@ function LibraryPage() {
                 ) : null}
               </div>
               <div className="row-actions">
+                <Link className="ghost-button" to={`/library/${item.id}`}>
+                  Details
+                </Link>
                 <button
                   className="ghost-button"
                   onClick={() => void openDetailPanel(item.id)}
@@ -655,6 +669,246 @@ function LibraryPage() {
         </div>
       ) : null}
       {linkMessage ? <p className="muted">{linkMessage}</p> : null}
+    </section>
+  );
+}
+
+function LibraryDetailPage() {
+  const { itemId } = useParams();
+  const numericItemId = Number(itemId);
+  const [detail, setDetail] = useState<LibraryItemDetail | null>(null);
+  const [readiness, setReadiness] = useState<ReadinessResponse | null>(null);
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  async function refreshPage() {
+    if (!Number.isFinite(numericItemId)) {
+      throw new Error("Invalid library item.");
+    }
+    const [nextDetail, nextReadiness, nextJobs] = await Promise.all([
+      fetchLibraryItemDetail(numericItemId),
+      fetchReadiness(numericItemId),
+      fetchJobs(),
+    ]);
+    setDetail(nextDetail);
+    setReadiness(nextReadiness);
+    setJobs(nextJobs.filter((job) => job.related_library_item_id === numericItemId));
+  }
+
+  useEffect(() => {
+    setLoading(true);
+    void refreshPage()
+      .catch((loadError) =>
+        setError(loadError instanceof Error ? loadError.message : "Failed to load item detail."),
+      )
+      .finally(() => setLoading(false));
+  }, [numericItemId]);
+
+  async function handleRetry(jobId: number) {
+    setError(null);
+    try {
+      await retryJob(jobId);
+      await refreshPage();
+    } catch (retryError) {
+      setError(retryError instanceof Error ? retryError.message : "Retry failed.");
+    }
+  }
+
+  if (loading) {
+    return (
+      <section className="panel">
+        <p className="eyebrow">Library</p>
+        <h2>Loading item</h2>
+      </section>
+    );
+  }
+
+  if (!detail) {
+    return (
+      <section className="panel">
+        <p className="eyebrow">Library</p>
+        <h2>Item unavailable</h2>
+        {error ? <p className="auth-error">{error}</p> : null}
+        <Link className="ghost-button" to="/">
+          Back to library
+        </Link>
+      </section>
+    );
+  }
+
+  const totalDuration = detail.tracks.reduce(
+    (total, track) => total + (track.duration_seconds ?? 0),
+    0,
+  );
+
+  return (
+    <section className="panel">
+      <div className="section-header">
+        <div>
+          <p className="eyebrow">Library detail</p>
+          <h2>{detail.item.title}</h2>
+          <p className="muted">
+            {detail.item.content_type} · {detail.item.status} · {detail.item.readiness_status}
+          </p>
+        </div>
+        <div className="row-actions">
+          <button className="ghost-button" onClick={() => void refreshPage()} type="button">
+            Refresh
+          </button>
+          <Link className="ghost-button" to="/">
+            Back
+          </Link>
+        </div>
+      </div>
+
+      {error ? <p className="auth-error">{error}</p> : null}
+
+      {detail.item.media_url || detail.item.stream_url ? (
+        <div className="library-player detail-player">
+          <AudioPlayer
+            customAdditionalControls={[]}
+            customVolumeControls={[]}
+            layout="horizontal-reverse"
+            preload={detail.item.stream_url ? "none" : "metadata"}
+            showJumpControls={false}
+            src={detail.item.media_url ?? detail.item.stream_url ?? undefined}
+          />
+        </div>
+      ) : null}
+
+      <div className="detail-summary-grid">
+        <div className="summary-tile">
+          <span className="summary-label">Tracks</span>
+          <strong>{detail.tracks.length}</strong>
+        </div>
+        <div className="summary-tile">
+          <span className="summary-label">Duration</span>
+          <strong>{totalDuration ? formatDuration(totalDuration) : "Unknown"}</strong>
+        </div>
+        <div className="summary-tile">
+          <span className="summary-label">Split points</span>
+          <strong>{detail.split_points.length}</strong>
+        </div>
+        <div className="summary-tile">
+          <span className="summary-label">Jobs</span>
+          <strong>{jobs.length}</strong>
+        </div>
+      </div>
+
+      {detail.item.readiness_detail ? (
+        <div className="detail-note">
+          <p className="eyebrow">Inspection</p>
+          <p>{detail.item.readiness_detail}</p>
+        </div>
+      ) : null}
+
+      <div className="detail-two-column">
+        <div className="prep-block">
+          <h3>Readiness</h3>
+          {readiness ? (
+            <div className="check-list">
+              {readiness.checks.map((check) => (
+                <div className="check-row" key={check.key}>
+                  <span className={check.ok ? "check-ok" : "check-warn"}>
+                    {check.ok ? "OK" : "Review"}
+                  </span>
+                  <div>
+                    <strong>{check.label}</strong>
+                    <p className="muted">{check.detail}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <EmptyState message="No readiness checks available." />
+          )}
+        </div>
+
+        <div className="prep-block">
+          <h3>Playlist settings</h3>
+          <p className="muted">Cover: {detail.item.cover_art_path ?? "Not set"}</p>
+          <p className="muted">
+            {detail.item.playlist_always_play_from_start ? "Play from start" : "Resume allowed"} ·{" "}
+            {detail.item.playlist_shuffle_tracks ? "Shuffle" : "Ordered"} ·{" "}
+            {detail.item.playlist_hide_track_numbers ? "Track numbers hidden" : "Track numbers shown"}
+          </p>
+        </div>
+      </div>
+
+      <div className="detail-section">
+        <div className="section-header">
+          <div>
+            <p className="eyebrow">Tracks</p>
+            <h2>Playlist tracks</h2>
+          </div>
+          <span className="status-pill">{detail.tracks.length} tracks</span>
+        </div>
+        {detail.tracks.length === 0 ? (
+          <EmptyState message="No tracks discovered yet." />
+        ) : (
+          <div className="compact-table">
+            {detail.tracks.map((track) => (
+              <div className="compact-table-row" key={track.id}>
+                <span className="status-pill status-pill-muted">#{track.track_number}</span>
+                <div>
+                  <strong>{track.title}</strong>
+                  <p className="muted">
+                    {formatDuration(track.duration_seconds)} ·{" "}
+                    {track.is_stream ? "Stream" : track.track_behavior}
+                  </p>
+                </div>
+                <span className="muted">{track.icon_path ?? "No icon"}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="detail-two-column">
+        <div className="prep-block">
+          <h3>Split points</h3>
+          {detail.split_points.length === 0 ? (
+            <EmptyState message="No manual split points." />
+          ) : (
+            <div className="compact-list">
+              {detail.split_points.map((splitPoint) => (
+                <p className="muted" key={splitPoint.id}>
+                  {formatDuration(splitPoint.timestamp_seconds)} · {splitPoint.title}
+                  {splitPoint.part_number ? ` · Part ${splitPoint.part_number}` : ""}
+                </p>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="prep-block">
+          <h3>Related jobs</h3>
+          {jobs.length === 0 ? (
+            <EmptyState message="No jobs linked to this item." />
+          ) : (
+            <div className="compact-list">
+              {jobs.map((job) => (
+                <div className="job-detail-row" key={job.id}>
+                  <div>
+                    <strong>{job.type}</strong>
+                    <p className="muted">
+                      {job.status} · {job.progress_percent}% · {job.progress_message}
+                    </p>
+                  </div>
+                  {job.status === "failed" ? (
+                    <button className="ghost-button" onClick={() => void handleRetry(job.id)} type="button">
+                      Retry
+                    </button>
+                  ) : (
+                    <span className="status-pill status-pill-muted">#{job.id}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
     </section>
   );
 }
@@ -1771,6 +2025,10 @@ export default function App() {
           <Route
             path="/"
             element={session ? <LibraryPage /> : <PlaceholderPage title="Home" />}
+          />
+          <Route
+            path="/library/:itemId"
+            element={session ? <LibraryDetailPage /> : <PlaceholderPage title="Home" />}
           />
           <Route
             path="/import"
