@@ -104,10 +104,12 @@ class PlaylistTrackCreate(BaseModel):
 
 class PlaylistTrackUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=240)
+    source_url: str | None = Field(default=None, max_length=2000)
     track_number: int | None = Field(default=None, gt=0)
     duration_seconds: int | None = Field(default=None, ge=0)
     icon_path: str | None = Field(default=None, max_length=2000)
     track_behavior: TrackBehavior | None = None
+    stream_url: str | None = Field(default=None, max_length=2000)
 
 
 class PlaylistTrackResponse(BaseModel):

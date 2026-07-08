@@ -188,7 +188,9 @@ a {
 .import-form input,
 .import-form select,
 .inline-link-panel select,
-.prep-block input {
+.prep-block input,
+.track-editor-row input,
+.track-editor-row select {
   width: 100%;
   padding: 12px 14px;
   border-radius: 14px;
@@ -277,6 +279,50 @@ a {
 .check-warn {
   color: #332313;
   background: #fed7aa;
+}
+
+.track-editor-panel {
+  display: grid;
+  gap: 14px;
+  margin-top: 4px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(255, 240, 214, 0.14);
+}
+
+.track-editor-list {
+  display: grid;
+  gap: 12px;
+}
+
+.track-editor-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.2fr) minmax(84px, 0.45fr) minmax(150px, 0.7fr) minmax(120px, 0.55fr);
+  gap: 10px;
+  padding: 14px;
+  border-radius: 8px;
+  background: rgba(6, 22, 26, 0.46);
+  border: 1px solid rgba(255, 240, 214, 0.12);
+}
+
+.track-editor-row label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: #ddd4c3;
+}
+
+.track-editor-row label:nth-of-type(5),
+.track-editor-row label:nth-of-type(6),
+.track-editor-row label:nth-of-type(7) {
+  grid-column: span 2;
+}
+
+.track-editor-actions {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 10px;
+  grid-column: span 2;
 }
 
 .segmented-control {
@@ -617,6 +663,23 @@ a {
   }
 
   .list-row {
+    flex-direction: column;
+  }
+
+  .track-editor-row,
+  .track-editor-row label:nth-of-type(5),
+  .track-editor-row label:nth-of-type(6),
+  .track-editor-row label:nth-of-type(7),
+  .track-editor-actions {
+    grid-column: 1;
+  }
+
+  .track-editor-row {
+    grid-template-columns: 1fr;
+  }
+
+  .track-editor-actions {
+    align-items: stretch;
     flex-direction: column;
   }
 

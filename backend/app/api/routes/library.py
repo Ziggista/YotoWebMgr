@@ -537,7 +537,10 @@ async def update_playlist_track(
     track = db.get(PlaylistTrack, track_id)
     if track is None or track.library_item_id != item.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Track not found")
-    for key, value in payload.model_dump(exclude_unset=True).items():
+    updates = payload.model_dump(exclude_unset=True)
+    if "stream_url" in updates and updates["stream_url"]:
+        _ensure_http_stream_url(updates["stream_url"])
+    for key, value in updates.items():
         setattr(track, key, value)
     db.add(track)
     db.commit()

@@ -326,6 +326,30 @@ export async function createRadioStreamTrack(
   return response.json() as Promise<PlaylistTrack>;
 }
 
+export async function updatePlaylistTrack(
+  itemId: number,
+  trackId: number,
+  payload: {
+    title?: string;
+    source_url?: string | null;
+    track_number?: number;
+    duration_seconds?: number | null;
+    icon_path?: string | null;
+    track_behavior?: string;
+    stream_url?: string | null;
+  },
+): Promise<PlaylistTrack> {
+  const response = await fetch(`/api/v1/library/${itemId}/tracks/${trackId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to update track."));
+  }
+  return response.json() as Promise<PlaylistTrack>;
+}
+
 export async function createPodcastFeed(
   itemId: number,
   payload: { rss_url: string; title?: string | null },

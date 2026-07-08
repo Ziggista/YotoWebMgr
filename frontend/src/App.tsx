@@ -33,6 +33,7 @@ import {
   loginWithPassword,
   quickSelectUser,
   retryJob,
+  updatePlaylistTrack,
   updateLibraryItemSettings,
   updateSettings,
   uploadImport,
@@ -182,6 +183,32 @@ function LibraryPage() {
       setLinkMessage("Track icon applied.");
     } catch (iconError) {
       setError(iconError instanceof Error ? iconError.message : "Failed to apply icon.");
+    }
+  }
+
+  async function handleUpdateTrack(event: FormEvent<HTMLFormElement>, trackId: number) {
+    event.preventDefault();
+    if (!detail) return;
+    const formData = new FormData(event.currentTarget);
+    const durationValue = String(formData.get("duration_seconds") ?? "");
+    const sourceUrl = String(formData.get("source_url") ?? "").trim();
+    const streamUrl = String(formData.get("stream_url") ?? "").trim();
+
+    setError(null);
+    try {
+      await updatePlaylistTrack(detail.item.id, trackId, {
+        title: String(formData.get("title") ?? ""),
+        source_url: sourceUrl || null,
+        track_number: Number(formData.get("track_number") ?? 1),
+        duration_seconds: durationValue ? Number(durationValue) : null,
+        icon_path: String(formData.get("icon_path") ?? "").trim() || null,
+        track_behavior: String(formData.get("track_behavior") ?? "continue"),
+        stream_url: streamUrl || null,
+      });
+      await refreshDetail(detail.item.id);
+      setLinkMessage("Track saved.");
+    } catch (trackError) {
+      setError(trackError instanceof Error ? trackError.message : "Failed to save track.");
     }
   }
 
@@ -549,6 +576,81 @@ function LibraryPage() {
                 </div>
               ) : null}
             </div>
+          </div>
+
+          <div className="track-editor-panel">
+            <div className="section-header">
+              <div>
+                <p className="eyebrow">Tracks</p>
+                <h2>Track editor</h2>
+              </div>
+              <span className="status-pill">{detail.tracks.length} tracks</span>
+            </div>
+            {detail.tracks.length === 0 ? (
+              <EmptyState message="No tracks yet. Add a radio stream or import a ZIP album to create track rows." />
+            ) : (
+              <div className="track-editor-list">
+                {detail.tracks.map((track) => (
+                  <form
+                    className="track-editor-row"
+                    key={track.id}
+                    onSubmit={(event) => void handleUpdateTrack(event, track.id)}
+                  >
+                    <label>
+                      Title
+                      <input defaultValue={track.title} name="title" required />
+                    </label>
+                    <label>
+                      Order
+                      <input
+                        defaultValue={track.track_number}
+                        min="1"
+                        name="track_number"
+                        required
+                        type="number"
+                      />
+                    </label>
+                    <label>
+                      Behavior
+                      <select defaultValue={track.track_behavior} name="track_behavior">
+                        <option value="continue">Continue</option>
+                        <option value="pause_for_button">Pause for button</option>
+                        <option value="repeat_track">Repeat track</option>
+                      </select>
+                    </label>
+                    <label>
+                      Duration seconds
+                      <input
+                        defaultValue={track.duration_seconds ?? ""}
+                        min="0"
+                        name="duration_seconds"
+                        type="number"
+                      />
+                    </label>
+                    <label>
+                      Icon path
+                      <input defaultValue={track.icon_path ?? ""} name="icon_path" />
+                    </label>
+                    <label>
+                      Source URL
+                      <input defaultValue={track.source_url ?? ""} name="source_url" />
+                    </label>
+                    <label>
+                      Stream URL
+                      <input defaultValue={track.stream_url ?? ""} name="stream_url" />
+                    </label>
+                    <div className="track-editor-actions">
+                      <span className="status-pill status-pill-muted">
+                        {track.is_stream ? "Stream" : `Track ${track.track_number}`}
+                      </span>
+                      <button className="primary-button" type="submit">
+                        Save track
+                      </button>
+                    </div>
+                  </form>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       ) : null}

@@ -473,6 +473,44 @@ async def test_radio_stream_creates_validation_job(api_client: AsyncClient, db_s
     assert "Wi-Fi" in job.progress_message
 
 
+async def test_playlist_track_can_be_edited(api_client: AsyncClient) -> None:
+    async with api_client as client:
+        created = await client.post(
+            "/api/v1/library",
+            json={"title": "Editable Radio", "content_type": "Radio Play"},
+        )
+        track = await client.post(
+            f"/api/v1/library/{created.json()['id']}/radio-streams",
+            json={"title": "Original Stream", "stream_url": "https://example.test/original.mp3"},
+        )
+        updated = await client.put(
+            f"/api/v1/library/{created.json()['id']}/tracks/{track.json()['id']}",
+            json={
+                "title": "Updated Stream",
+                "track_number": 3,
+                "duration_seconds": 120,
+                "icon_path": "/icons/radio.png",
+                "track_behavior": "repeat_track",
+                "stream_url": "https://example.test/updated.mp3",
+            },
+        )
+        rejected = await client.put(
+            f"/api/v1/library/{created.json()['id']}/tracks/{track.json()['id']}",
+            json={"stream_url": "file:///etc/passwd"},
+        )
+        detail = await client.get(f"/api/v1/library/{created.json()['id']}")
+
+    assert updated.status_code == 200
+    assert updated.json()["title"] == "Updated Stream"
+    assert updated.json()["track_number"] == 3
+    assert updated.json()["duration_seconds"] == 120
+    assert updated.json()["icon_path"] == "/icons/radio.png"
+    assert updated.json()["track_behavior"] == "repeat_track"
+    assert updated.json()["stream_url"] == "https://example.test/updated.mp3"
+    assert rejected.status_code == 422
+    assert detail.json()["tracks"][0]["title"] == "Updated Stream"
+
+
 async def test_radio_stream_rejects_non_http_urls(api_client: AsyncClient) -> None:
     async with api_client as client:
         created = await client.post(
