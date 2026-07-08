@@ -26,3 +26,14 @@ Media processing will be orchestrated in Python and delegated to `ffprobe` and `
 - Never overwrite original media.
 - Reuse processed assets by checksum and settings where possible.
 - Capture ffmpeg stderr in job logs on failure.
+
+## Inspection
+
+The worker handles `inspect_media` and ZIP album inspection jobs with `ffprobe`.
+
+- Single-file imports are inspected from the staged import path.
+- ZIP album imports inspect each extracted track path that the API created during safe extraction.
+- Embedded chapters become playlist track rows when present.
+- Files without embedded chapters become one playlist track per source file.
+- Library items move to `inspected` with `needs_card_plan` readiness after successful inspection.
+- Inspection details record duration, codec, channels, and embedded chapter count in the local readiness detail.
