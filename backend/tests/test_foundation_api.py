@@ -482,6 +482,78 @@ async def test_library_version_events_record_mutations(
     assert event_count == 3
 
 
+async def test_library_version_restore_creates_new_version(
+    api_client: AsyncClient,
+) -> None:
+    async with api_client as client:
+        created = await client.post(
+            "/api/v1/library",
+            json={
+                "title": "Original Story",
+                "content_type": "Audiobook",
+                "cover_art_path": "/art/original.png",
+                "playlist_shuffle_tracks": False,
+            },
+        )
+        item_id = created.json()["id"]
+        first_track = await client.post(
+            f"/api/v1/library/{item_id}/tracks",
+            json={
+                "title": "Original Chapter",
+                "track_number": 1,
+                "duration_seconds": 120,
+                "icon_path": "/icons/original.png",
+            },
+        )
+        await client.post(
+            f"/api/v1/library/{item_id}/split-points",
+            json={"timestamp_seconds": 60, "title": "Original Split", "part_number": 2},
+        )
+        versions_before_update = await client.get(f"/api/v1/library/{item_id}/versions")
+        restore_target_id = next(
+            event["id"]
+            for event in versions_before_update.json()
+            if event["event_type"] == "track_created"
+        )
+
+        await client.put(
+            f"/api/v1/library/{item_id}/settings",
+            json={
+                "cover_art_path": "/art/updated.png",
+                "playlist_shuffle_tracks": True,
+                "notes": "Updated notes",
+            },
+        )
+        await client.put(
+            f"/api/v1/library/{item_id}/tracks/{first_track.json()['id']}",
+            json={"title": "Updated Chapter", "track_number": 3},
+        )
+        await client.post(
+            f"/api/v1/library/{item_id}/tracks",
+            json={"title": "Extra Chapter", "track_number": 4},
+        )
+
+        restored = await client.post(f"/api/v1/library/{item_id}/versions/{restore_target_id}/restore")
+        detail = await client.get(f"/api/v1/library/{item_id}")
+        versions_after_restore = await client.get(f"/api/v1/library/{item_id}/versions")
+
+    assert restored.status_code == 200
+    restored_payload = restored.json()
+    assert restored_payload["restored_from_version_id"] == restore_target_id
+    assert restored_payload["version_event"]["event_type"] == "version_restored"
+
+    detail_payload = detail.json()
+    assert detail_payload["item"]["cover_art_path"] == "/art/original.png"
+    assert detail_payload["item"]["playlist_shuffle_tracks"] is False
+    assert [track["title"] for track in detail_payload["tracks"]] == ["Original Chapter"]
+    assert detail_payload["tracks"][0]["track_number"] == 1
+    assert detail_payload["split_points"] == []
+
+    versions_payload = versions_after_restore.json()
+    assert versions_payload[0]["event_type"] == "version_restored"
+    assert len(versions_payload) == 7
+
+
 async def test_radio_stream_creates_validation_job(api_client: AsyncClient, db_session: Session) -> None:
     async with api_client as client:
         created = await client.post(

@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse, RedirectResponse
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -50,6 +50,7 @@ from app.schemas.foundation import (
     SplitPointCreate,
     SplitPointResponse,
     TrackIconApplyRequest,
+    VersionRestoreResponse,
     VersionEventResponse,
 )
 
@@ -347,6 +348,88 @@ def _record_library_version(
     )
     db.add(event)
     return event
+
+
+def _restore_library_item_from_snapshot(db: Session, item: LibraryItem, snapshot_json: str) -> None:
+    try:
+        snapshot = json.loads(snapshot_json)
+    except json.JSONDecodeError as error:
+        raise HTTPException(status_code=422, detail="Version snapshot is not valid JSON.") from error
+
+    if not isinstance(snapshot, dict) or not isinstance(snapshot.get("item"), dict):
+        raise HTTPException(status_code=422, detail="Version snapshot cannot be restored.")
+
+    item_snapshot = snapshot["item"]
+    for key in [
+        "title",
+        "content_type",
+        "status",
+        "cover_art_path",
+        "playlist_always_play_from_start",
+        "playlist_shuffle_tracks",
+        "playlist_hide_track_numbers",
+        "readiness_status",
+        "readiness_detail",
+        "notes",
+        "source_import_id",
+    ]:
+        if key in item_snapshot:
+            setattr(item, key, item_snapshot[key])
+    db.add(item)
+
+    feed_ids = list(
+        db.scalars(select(PodcastFeed.id).where(PodcastFeed.library_item_id == item.id))
+    )
+    if feed_ids:
+        db.execute(delete(PodcastEpisode).where(PodcastEpisode.feed_id.in_(feed_ids)))
+    db.execute(delete(PodcastFeed).where(PodcastFeed.library_item_id == item.id))
+    db.execute(delete(PlaylistTrack).where(PlaylistTrack.library_item_id == item.id))
+    db.execute(delete(SplitPoint).where(SplitPoint.library_item_id == item.id))
+    db.flush()
+
+    for track_snapshot in snapshot.get("tracks", []):
+        if not isinstance(track_snapshot, dict):
+            continue
+        db.add(
+            PlaylistTrack(
+                library_item_id=item.id,
+                title=str(track_snapshot.get("title") or "Untitled track")[:240],
+                source_path=track_snapshot.get("source_path"),
+                source_url=track_snapshot.get("source_url"),
+                track_number=int(track_snapshot.get("track_number") or 1),
+                duration_seconds=track_snapshot.get("duration_seconds"),
+                icon_path=track_snapshot.get("icon_path"),
+                track_behavior=track_snapshot.get("track_behavior") or "continue",
+                is_stream=bool(track_snapshot.get("is_stream")),
+                stream_url=track_snapshot.get("stream_url"),
+                podcast_episode_guid=track_snapshot.get("podcast_episode_guid"),
+            )
+        )
+
+    for feed_snapshot in snapshot.get("podcast_feeds", []):
+        if not isinstance(feed_snapshot, dict) or not feed_snapshot.get("rss_url"):
+            continue
+        db.add(
+            PodcastFeed(
+                library_item_id=item.id,
+                rss_url=feed_snapshot["rss_url"],
+                title=feed_snapshot.get("title"),
+                description=feed_snapshot.get("description"),
+                artwork_url=feed_snapshot.get("artwork_url"),
+            )
+        )
+
+    for split_snapshot in snapshot.get("split_points", []):
+        if not isinstance(split_snapshot, dict):
+            continue
+        db.add(
+            SplitPoint(
+                library_item_id=item.id,
+                timestamp_seconds=int(split_snapshot.get("timestamp_seconds") or 0),
+                title=str(split_snapshot.get("title") or "Split point")[:240],
+                part_number=split_snapshot.get("part_number"),
+            )
+        )
 
 
 def _estimate_track_size_mb(
@@ -670,6 +753,40 @@ async def list_library_item_versions(
         .order_by(VersionEvent.version_number.desc(), VersionEvent.id.desc())
     )
     return [VersionEventResponse.model_validate(event, from_attributes=True) for event in events]
+
+
+@router.post("/{item_id}/versions/{version_id}/restore", response_model=VersionRestoreResponse)
+async def restore_library_item_version(
+    item_id: int,
+    version_id: int,
+    db: Annotated[Session, Depends(get_db_session)],
+) -> VersionRestoreResponse:
+    item = db.get(LibraryItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Library item not found")
+    version = db.get(VersionEvent, version_id)
+    if version is None or version.entity_type != "library_item" or version.entity_id != item.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Version event not found")
+
+    _restore_library_item_from_snapshot(db, item, version.snapshot_json)
+    db.flush()
+    restored_event = _record_library_version(
+        db,
+        item,
+        "version_restored",
+        f"Restored from version {version.version_number}.",
+        version.created_by_user_id,
+    )
+    db.commit()
+    db.refresh(item)
+    db.refresh(restored_event)
+
+    return VersionRestoreResponse(
+        restored_from_version_id=version.id,
+        restored_version_number=version.version_number,
+        library_item=_detail_for_item(db, item),
+        version_event=VersionEventResponse.model_validate(restored_event, from_attributes=True),
+    )
 
 
 @router.get("/{item_id}/media")

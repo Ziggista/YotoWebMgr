@@ -138,6 +138,13 @@ export interface VersionEvent {
   created_at: string;
 }
 
+export interface VersionRestoreResponse {
+  restored_from_version_id: number;
+  restored_version_number: number;
+  library_item: LibraryItemDetail;
+  version_event: VersionEvent;
+}
+
 export interface ReadinessCheck {
   key: string;
   label: string;
@@ -342,6 +349,19 @@ export async function fetchLibraryItemVersions(itemId: number): Promise<VersionE
     throw new Error(await errorMessage(response, "Failed to load version history."));
   }
   return response.json() as Promise<VersionEvent[]>;
+}
+
+export async function restoreLibraryItemVersion(
+  itemId: number,
+  versionId: number,
+): Promise<VersionRestoreResponse> {
+  const response = await fetch(`/api/v1/library/${itemId}/versions/${versionId}/restore`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to restore version."));
+  }
+  return response.json() as Promise<VersionRestoreResponse>;
 }
 
 export async function updateLibraryItemSettings(

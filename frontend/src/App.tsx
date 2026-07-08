@@ -36,6 +36,7 @@ import {
   linkLibraryItemToCard,
   loginWithPassword,
   quickSelectUser,
+  restoreLibraryItemVersion,
   retryJob,
   updatePlaylistTrack,
   updateLibraryItemSettings,
@@ -758,6 +759,21 @@ function LibraryDetailPage() {
     }
   }
 
+  async function handleRestoreVersion(version: VersionEvent) {
+    const confirmed = window.confirm(
+      `Restore ${detail?.item.title ?? "this item"} to version ${version.version_number}? This will create a new version event.`,
+    );
+    if (!confirmed) return;
+
+    setError(null);
+    try {
+      await restoreLibraryItemVersion(numericItemId, version.id);
+      await refreshPage();
+    } catch (restoreError) {
+      setError(restoreError instanceof Error ? restoreError.message : "Restore failed.");
+    }
+  }
+
   if (loading) {
     return (
       <section className="panel">
@@ -1021,7 +1037,16 @@ function LibraryDetailPage() {
                   <h3>Version {version.version_number}</h3>
                   <p className="muted">{version.summary}</p>
                 </div>
-                <span className="status-pill status-pill-muted">{version.event_type}</span>
+                <div className="version-actions">
+                  <span className="status-pill status-pill-muted">{version.event_type}</span>
+                  <button
+                    className="ghost-button"
+                    onClick={() => void handleRestoreVersion(version)}
+                    type="button"
+                  >
+                    Restore
+                  </button>
+                </div>
               </article>
             ))}
           </div>

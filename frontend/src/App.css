@@ -662,6 +662,13 @@ a {
   grid-template-columns: minmax(0, 1fr) auto;
 }
 
+.version-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .card-plan-part {
   display: grid;
   gap: 10px;
@@ -802,5 +809,10 @@ a {
   .version-row {
     grid-template-columns: 1fr;
     align-items: start;
+  }
+
+  .version-actions {
+    width: 100%;
+    justify-content: space-between;
   }
 }

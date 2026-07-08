@@ -204,6 +204,13 @@ class VersionEventResponse(BaseModel):
     created_at: datetime
 
 
+class VersionRestoreResponse(BaseModel):
+    restored_from_version_id: int
+    restored_version_number: int
+    library_item: LibraryItemDetailResponse
+    version_event: VersionEventResponse
+
+
 class ReadinessCheck(BaseModel):
     key: str
     label: str
