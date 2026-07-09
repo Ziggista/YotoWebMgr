@@ -734,6 +734,16 @@ a {
   margin: 0;
 }
 
+.review-panel {
+  display: grid;
+  gap: 12px;
+  margin: 18px 0;
+  padding: 16px;
+  border-radius: 8px;
+  background: rgba(6, 22, 26, 0.52);
+  border: 1px solid rgba(255, 240, 214, 0.12);
+}
+
 .detail-two-column {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

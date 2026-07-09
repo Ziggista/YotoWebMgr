@@ -14,6 +14,24 @@
 
 Future areas will include library, tags, imports, playlists, cards, jobs, artwork, and settings.
 
+## Imports
+
+- `GET /api/v1/imports/sources`
+- `GET /api/v1/imports`
+- `POST /api/v1/imports`
+- `POST /api/v1/imports/uploads`
+- `PUT /api/v1/imports/{import_id}/review`
+- `POST /api/v1/imports/{import_id}/approve`
+- `POST /api/v1/imports/{import_id}/hide`
+
+Filesystem imports are constrained to the configured import drop path. Browser uploads are staged
+under the configured upload path and never written to the read-only CD/media source directory. ZIP
+uploads are safely extracted under the upload path, reject path traversal entries, and create
+ordered playlist tracks for supported audio files.
+
+Import review endpoints let the UI correct title/content type, save review notes, and mark an
+import approved while preserving the queued processing job and linked library item.
+
 ## Library Processing
 
 - `POST /api/v1/library/{item_id}/process`

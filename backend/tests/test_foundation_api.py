@@ -146,6 +146,7 @@ async def test_import_creates_library_item_and_job(
     assert response.status_code == 201
     payload = response.json()
     assert payload["status"] == "queued"
+    assert payload["review_status"] == "needs_review"
     assert payload["related_library_item_id"] is not None
     assert payload["related_job_id"] is not None
 
@@ -156,6 +157,51 @@ async def test_import_creates_library_item_and_job(
     assert job is not None
     assert job.type == "import_from_filesystem"
     assert payload["source_path"] == f"{import_storage_paths['drop']}/dragon-stories.m4b"
+
+
+async def test_import_review_updates_import_and_library_item(
+    api_client: AsyncClient,
+    db_session: Session,
+) -> None:
+    async with api_client as client:
+        created = await client.post(
+            "/api/v1/imports",
+            json={
+                "title": "Ruff Title",
+                "source_type": "filesystem",
+                "source_path": "rough-title.m4b",
+                "content_type": "Other Audio",
+                "requested_by_user_slug": "krystin",
+            },
+        )
+        reviewed = await client.put(
+            f"/api/v1/imports/{created.json()['id']}/review",
+            json={
+                "title": "Clean Title",
+                "content_type": "Audiobook",
+                "review_notes": "Corrected during import review.",
+                "reviewed_by_user_slug": "dale",
+            },
+        )
+        approved = await client.post(
+            f"/api/v1/imports/{created.json()['id']}/approve",
+            json={"approved_by_user_slug": "krystin"},
+        )
+
+    assert reviewed.status_code == 200
+    assert reviewed.json()["title"] == "Clean Title"
+    assert reviewed.json()["content_type"] == "Audiobook"
+    assert reviewed.json()["review_status"] == "reviewed"
+    assert reviewed.json()["review_notes"] == "Corrected during import review."
+    assert reviewed.json()["reviewed_at"] is not None
+    assert approved.status_code == 200
+    assert approved.json()["review_status"] == "approved"
+    assert approved.json()["approved_at"] is not None
+
+    library_item = db_session.get(LibraryItem, reviewed.json()["related_library_item_id"])
+    assert library_item is not None
+    assert library_item.title == "Clean Title"
+    assert library_item.content_type == "Audiobook"
 
 
 async def test_import_sources_exposes_mounted_paths(

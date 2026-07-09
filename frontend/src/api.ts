@@ -240,6 +240,10 @@ export interface ImportRequest {
   source_path: string | null;
   content_type: string;
   status: string;
+  review_status: string;
+  review_notes: string | null;
+  reviewed_at: string | null;
+  approved_at: string | null;
   pending_delete: boolean;
   created_at: string;
   related_library_item_id: number | null;
@@ -794,6 +798,41 @@ export async function hideImport(importId: number): Promise<ImportRequest> {
   const response = await fetch(`/api/v1/imports/${importId}/hide`, { method: "POST" });
   if (!response.ok) {
     throw new Error("Failed to hide import.");
+  }
+  return response.json() as Promise<ImportRequest>;
+}
+
+export async function updateImportReview(
+  importId: number,
+  payload: {
+    title?: string;
+    content_type?: string;
+    review_notes?: string | null;
+    reviewed_by_user_slug?: string;
+  },
+): Promise<ImportRequest> {
+  const response = await fetch(`/api/v1/imports/${importId}/review`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to save import review."));
+  }
+  return response.json() as Promise<ImportRequest>;
+}
+
+export async function approveImportReview(
+  importId: number,
+  approvedByUserSlug?: string,
+): Promise<ImportRequest> {
+  const response = await fetch(`/api/v1/imports/${importId}/approve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ approved_by_user_slug: approvedByUserSlug }),
+  });
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to approve import."));
   }
   return response.json() as Promise<ImportRequest>;
 }

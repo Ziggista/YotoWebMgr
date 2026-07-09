@@ -21,6 +21,7 @@ import {
   YotoPlaylistDraft,
   YotoPlaylistVersion,
   applyTrackIcon,
+  approveImportReview,
   createCard,
   createImport,
   createTag,
@@ -64,6 +65,7 @@ import {
   updateSettings,
   uploadCoverArt,
   uploadImport,
+  updateImportReview,
 } from "./api";
 import "./App.css";
 
@@ -1427,6 +1429,12 @@ function ImportPage({ session }: { session: SessionResponse }) {
     source_path: "",
     content_type: "Audiobook",
   });
+  const [reviewingImportId, setReviewingImportId] = useState<number | null>(null);
+  const [reviewForm, setReviewForm] = useState({
+    title: "",
+    content_type: "Audiobook",
+    review_notes: "",
+  });
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -1482,6 +1490,52 @@ function ImportPage({ session }: { session: SessionResponse }) {
       await refreshImports();
     } catch (hideError) {
       setError(hideError instanceof Error ? hideError.message : "Hide failed.");
+    }
+  }
+
+  function handleSelectReview(importRequest: ImportRequest) {
+    setReviewingImportId(importRequest.id);
+    setReviewForm({
+      title: importRequest.title,
+      content_type: importRequest.content_type,
+      review_notes: importRequest.review_notes ?? "",
+    });
+  }
+
+  async function handleSaveReview() {
+    if (reviewingImportId === null) {
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      await updateImportReview(reviewingImportId, {
+        title: reviewForm.title,
+        content_type: reviewForm.content_type,
+        review_notes: reviewForm.review_notes || null,
+        reviewed_by_user_slug: session.user.slug,
+      });
+      await refreshImports();
+    } catch (reviewError) {
+      setError(reviewError instanceof Error ? reviewError.message : "Import review failed.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleApproveReview() {
+    if (reviewingImportId === null) {
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      await approveImportReview(reviewingImportId, session.user.slug);
+      await refreshImports();
+    } catch (approveError) {
+      setError(approveError instanceof Error ? approveError.message : "Import approval failed.");
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -1584,6 +1638,71 @@ function ImportPage({ session }: { session: SessionResponse }) {
       </form>
       {error ? <p className="auth-error">{error}</p> : null}
 
+      {reviewingImportId !== null ? (
+        <div className="review-panel">
+          <div className="section-header">
+            <div>
+              <p className="eyebrow">Review</p>
+              <h3>Import metadata</h3>
+            </div>
+            <span className="status-pill">
+              {imports.find((item) => item.id === reviewingImportId)?.review_status ?? "review"}
+            </span>
+          </div>
+          <div className="import-grid">
+            <label>
+              Title
+              <input
+                onChange={(event) =>
+                  setReviewForm((current) => ({ ...current, title: event.target.value }))
+                }
+                value={reviewForm.title}
+              />
+            </label>
+            <label>
+              Content type
+              <select
+                onChange={(event) =>
+                  setReviewForm((current) => ({ ...current, content_type: event.target.value }))
+                }
+                value={reviewForm.content_type}
+              >
+                {contentTypes.map((contentType) => (
+                  <option key={contentType}>{contentType}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Notes
+              <input
+                onChange={(event) =>
+                  setReviewForm((current) => ({ ...current, review_notes: event.target.value }))
+                }
+                value={reviewForm.review_notes}
+              />
+            </label>
+          </div>
+          <div className="button-row">
+            <button
+              className="secondary-button"
+              disabled={submitting}
+              onClick={() => void handleSaveReview()}
+              type="button"
+            >
+              Save review
+            </button>
+            <button
+              className="primary-button"
+              disabled={submitting}
+              onClick={() => void handleApproveReview()}
+              type="button"
+            >
+              Approve import
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       <h3 className="subsection-title">Recent imports</h3>
       <div className="item-list">
         {imports.length === 0 ? (
@@ -1596,11 +1715,22 @@ function ImportPage({ session }: { session: SessionResponse }) {
                 <p className="muted">
                   {item.source_type} · {item.content_type} · {item.status}
                 </p>
+                <p className="muted">
+                  Review: {item.review_status}
+                  {item.review_notes ? ` · ${item.review_notes}` : ""}
+                </p>
               </div>
               <div className="row-actions">
                 <span className="status-pill status-pill-muted">
                   Job {item.related_job_id ?? "pending"}
                 </span>
+                <button
+                  className="ghost-button"
+                  onClick={() => handleSelectReview(item)}
+                  type="button"
+                >
+                  Review
+                </button>
                 <button
                   aria-label={`Hide ${item.title}`}
                   className="danger-icon-button"

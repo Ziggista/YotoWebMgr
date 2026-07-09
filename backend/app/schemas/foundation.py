@@ -336,6 +336,17 @@ class ImportCreate(BaseModel):
     requested_by_user_slug: str | None = Field(default=None, min_length=1)
 
 
+class ImportReviewUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=240)
+    content_type: ContentType | None = None
+    review_notes: str | None = Field(default=None, max_length=4000)
+    reviewed_by_user_slug: str | None = Field(default=None, min_length=1)
+
+
+class ImportReviewApprove(BaseModel):
+    approved_by_user_slug: str | None = Field(default=None, min_length=1)
+
+
 class ImportSourceInfo(BaseModel):
     filesystem_drop_path: str
     browser_upload_path: str
@@ -349,6 +360,10 @@ class ImportResponse(BaseModel):
     source_path: str | None
     content_type: str
     status: str
+    review_status: str
+    review_notes: str | None = None
+    reviewed_at: datetime | None = None
+    approved_at: datetime | None = None
     pending_delete: bool = False
     created_at: datetime
     related_library_item_id: int | None = None

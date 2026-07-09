@@ -1,4 +1,5 @@
 from typing import Annotated
+from datetime import UTC, datetime
 from pathlib import Path
 from re import sub
 from uuid import uuid4
@@ -11,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.db.session import get_db_session
 from app.models import ImportRequest, Job, LibraryItem, PlaylistTrack, User
-from app.schemas.foundation import ImportCreate, ImportResponse, ImportSourceInfo
+from app.schemas.foundation import ImportCreate, ImportResponse, ImportReviewApprove, ImportReviewUpdate, ImportSourceInfo
 
 
 router = APIRouter()
@@ -117,6 +118,10 @@ def _build_import_response(db: Session, import_request: ImportRequest) -> Import
         source_path=import_request.source_path,
         content_type=import_request.content_type,
         status=import_request.status,
+        review_status=import_request.review_status,
+        review_notes=import_request.review_notes,
+        reviewed_at=import_request.reviewed_at,
+        approved_at=import_request.approved_at,
         pending_delete=import_request.pending_delete,
         created_at=import_request.created_at,
         related_library_item_id=library_item.id if library_item else None,
@@ -201,6 +206,10 @@ def _create_import_records(
         source_path=import_request.source_path,
         content_type=import_request.content_type,
         status=import_request.status,
+        review_status=import_request.review_status,
+        review_notes=import_request.review_notes,
+        reviewed_at=import_request.reviewed_at,
+        approved_at=import_request.approved_at,
         pending_delete=import_request.pending_delete,
         created_at=import_request.created_at,
         related_library_item_id=library_item.id,
@@ -237,6 +246,64 @@ async def create_import(
     db: Annotated[Session, Depends(get_db_session)],
 ) -> ImportResponse:
     return _create_import_records(db, payload)
+
+
+@router.put("/{import_id}/review", response_model=ImportResponse)
+async def update_import_review(
+    import_id: int,
+    payload: ImportReviewUpdate,
+    db: Annotated[Session, Depends(get_db_session)],
+) -> ImportResponse:
+    import_request = db.get(ImportRequest, import_id)
+    if import_request is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Import not found")
+
+    reviewer = None
+    if payload.reviewed_by_user_slug:
+        reviewer = db.scalar(select(User).where(User.slug == payload.reviewed_by_user_slug))
+
+    library_item = db.scalar(select(LibraryItem).where(LibraryItem.source_import_id == import_request.id))
+    if payload.title is not None:
+        import_request.title = payload.title
+        if library_item is not None:
+            library_item.title = payload.title
+    if payload.content_type is not None:
+        import_request.content_type = payload.content_type
+        if library_item is not None:
+            library_item.content_type = payload.content_type
+    import_request.review_notes = payload.review_notes
+    import_request.review_status = "reviewed"
+    import_request.reviewed_at = datetime.now(UTC)
+    import_request.reviewed_by_user_id = reviewer.id if reviewer else None
+    db.add(import_request)
+    if library_item is not None:
+        db.add(library_item)
+    db.commit()
+    db.refresh(import_request)
+    return _build_import_response(db, import_request)
+
+
+@router.post("/{import_id}/approve", response_model=ImportResponse)
+async def approve_import_review(
+    import_id: int,
+    payload: ImportReviewApprove,
+    db: Annotated[Session, Depends(get_db_session)],
+) -> ImportResponse:
+    import_request = db.get(ImportRequest, import_id)
+    if import_request is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Import not found")
+
+    approver = None
+    if payload.approved_by_user_slug:
+        approver = db.scalar(select(User).where(User.slug == payload.approved_by_user_slug))
+
+    import_request.review_status = "approved"
+    import_request.approved_at = datetime.now(UTC)
+    import_request.approved_by_user_id = approver.id if approver else None
+    db.add(import_request)
+    db.commit()
+    db.refresh(import_request)
+    return _build_import_response(db, import_request)
 
 
 @router.post("/{import_id}/hide", response_model=ImportResponse)
