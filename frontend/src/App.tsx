@@ -28,6 +28,7 @@ import {
   createPodcastFeed,
   createRadioStreamTrack,
   createSplitPoint,
+  completeYotoOAuth,
   disconnectYotoCredentials,
   fetchCard,
   fetchCardHistory,
@@ -82,6 +83,7 @@ const contentTypes = [
   "Other Audio",
 ];
 const defaultNdefFormatCommand = "A2:03:E1:10:06:00,A2:04:03:04:D8:00,A2:05:00:00:FE:00";
+const yotoPkceStorageKey = "yotowebmgr.yoto.pkce";
 
 function PlaceholderPage({ title }: { title: string }) {
   return (
@@ -119,6 +121,30 @@ function cardPlanAssignments(plan: CardPlan | null): Record<number, number> {
     });
   });
   return assignments;
+}
+
+function base64UrlEncode(bytes: Uint8Array): string {
+  let binary = "";
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return window
+    .btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+async function createPkcePair(): Promise<{ verifier: string; challenge: string }> {
+  const verifierBytes = new Uint8Array(64);
+  window.crypto.getRandomValues(verifierBytes);
+  const verifier = base64UrlEncode(verifierBytes);
+  const encodedVerifier = new TextEncoder().encode(verifier);
+  const digest = await window.crypto.subtle.digest("SHA-256", encodedVerifier);
+  return {
+    verifier,
+    challenge: base64UrlEncode(new Uint8Array(digest)),
+  };
 }
 
 function LibraryPage() {
@@ -2583,9 +2609,15 @@ function SettingsPage() {
     setSaving(true);
     setError(null);
     try {
-      const result = await startYotoOAuth(yotoAccountLabel);
+      const pkce = await createPkcePair();
+      const result = await startYotoOAuth(yotoAccountLabel, pkce.challenge);
       setYotoCredential(result.credential);
       setPreparedAuthUrl(result.authorization_url);
+      window.sessionStorage.setItem(
+        yotoPkceStorageKey,
+        JSON.stringify({ verifier: pkce.verifier, state: result.oauth_state }),
+      );
+      window.location.href = result.authorization_url;
     } catch (startError) {
       setError(startError instanceof Error ? startError.message : "Failed to prepare Yoto OAuth.");
     } finally {
@@ -2833,7 +2865,7 @@ function SettingsPage() {
               onClick={() => void handlePrepareYotoOAuth()}
               type="button"
             >
-              Prepare auth link
+              Test browser auth
             </button>
             <button
               className="secondary-button"
@@ -2846,11 +2878,11 @@ function SettingsPage() {
           </div>
           {preparedAuthUrl ? (
             <p className="settings-note auth-url-break">
-              Auth URL: <a href={preparedAuthUrl}>{preparedAuthUrl}</a>
+              Last auth URL: <a href={preparedAuthUrl}>{preparedAuthUrl}</a>
             </p>
           ) : (
             <p className="settings-note">
-              Set the client ID and redirect URI, save settings, then prepare an auth link.
+              Set the client ID and redirect URI, save settings, then test browser auth.
             </p>
           )}
           {yotoCredential?.error_summary ? (
@@ -2862,6 +2894,71 @@ function SettingsPage() {
         </button>
       </form>
       {error ? <p className="auth-error">{error}</p> : null}
+    </section>
+  );
+}
+
+function YotoOAuthCallbackPage() {
+  const [statusMessage, setStatusMessage] = useState("Completing Yoto browser auth...");
+  const [error, setError] = useState<string | null>(null);
+  const [credential, setCredential] = useState<YotoCredentialStatus | null>(null);
+
+  useEffect(() => {
+    async function finishAuth() {
+      const params = new URLSearchParams(window.location.search);
+      const code = params.get("code");
+      const state = params.get("state");
+      const storedValue = window.sessionStorage.getItem(yotoPkceStorageKey);
+      if (!code || !state) {
+        setError("Yoto did not return both code and state.");
+        return;
+      }
+      if (!storedValue) {
+        setError("The PKCE verifier is missing from this browser session.");
+        return;
+      }
+      let stored: { verifier?: string; state?: string };
+      try {
+        stored = JSON.parse(storedValue) as { verifier?: string; state?: string };
+      } catch {
+        setError("The stored PKCE verifier could not be read.");
+        return;
+      }
+      if (!stored.verifier || stored.state !== state) {
+        setError("The returned Yoto OAuth state does not match this browser session.");
+        return;
+      }
+      try {
+        const result = await completeYotoOAuth({
+          code,
+          state,
+          code_verifier: stored.verifier,
+        });
+        window.sessionStorage.removeItem(yotoPkceStorageKey);
+        setCredential(result.credential);
+        setStatusMessage("Yoto browser auth completed.");
+      } catch (callbackError) {
+        setError(callbackError instanceof Error ? callbackError.message : "Failed to complete Yoto auth.");
+      }
+    }
+
+    void finishAuth();
+  }, []);
+
+  return (
+    <section className="panel">
+      <p className="eyebrow">Yoto API</p>
+      <h2>Browser auth callback</h2>
+      {error ? <p className="auth-error">{error}</p> : <p className="settings-note">{statusMessage}</p>}
+      {credential ? (
+        <div className="settings-connection-panel">
+          <p className="settings-note">Status: {credential.status}</p>
+          <p className="settings-note">{credential.error_summary}</p>
+          <Link className="secondary-button" to="/settings">
+            Back to settings
+          </Link>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -3107,6 +3204,7 @@ export default function App() {
             path="/settings"
             element={session ? <SettingsPage /> : <PlaceholderPage title="Home" />}
           />
+          <Route path="/settings/yoto/callback" element={<YotoOAuthCallbackPage />} />
         </Routes>
       </main>
     </div>

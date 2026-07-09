@@ -43,8 +43,12 @@ The API exposes local-only Yoto scaffolding endpoints:
 - `GET /api/v1/yoto/credentials/status` reports the locally stored Yoto connection state without
   exposing tokens or secrets.
 - `POST /api/v1/yoto/credentials/start` validates the configured client ID and redirect URI,
-  stores an `authorization_started` credential record, and returns a prepared OAuth authorization
-  URL. It does not exchange a code or call Yoto.
+  stores an `authorization_started` credential record, and returns a Yoto browser-auth
+  `/authorize` URL using the browser-generated PKCE code challenge. It does not call Yoto.
+- `POST /api/v1/yoto/credentials/callback` validates the returned OAuth state and exchanges the
+  authorization code with Yoto's `/oauth/token` endpoint using the browser-held PKCE verifier. This
+  is a live auth call, but it records only connection metadata; raw access and refresh tokens are
+  not persisted yet.
 - `POST /api/v1/yoto/credentials/disconnect` clears local token references and marks the stored
   credential state as `revoked`. It does not make a live revoke call.
 - `GET /api/v1/yoto/playlists/{playlist_id}/versions` lists immutable local payload snapshots for a
@@ -62,10 +66,15 @@ it persists the payload, creates a trackable worker job, and currently advances 
 `ready_to_link` for the manual Yoto-app linking workflow. Live OAuth/upload calls will be added
 behind the same worker job once the exact supported flow is confirmed.
 
+For local browser testing, set the redirect URI to the frontend callback route, for example
+`http://127.0.0.1:5175/settings/yoto/callback`, and register the same URI with the Yoto developer
+application.
+
 The credential scaffold stores only connection metadata such as account label, scope, masked
 account fields, authorization URL, OAuth state, expiry timestamps, status, and an optional
 `token_storage_ref`. Actual refresh tokens, access tokens, client secrets, or encrypted token
-material must live in Kubernetes Secrets or a future encrypted token store.
+material must live in Kubernetes Secrets or a future encrypted token store. Until that storage is
+implemented, a successful callback uses a `not_persisted:browser_pkce:{id}` token reference.
 
 Playlist versions are local payload snapshots only. A restore changes the local draft that future
 jobs will use, but it does not alter any remote Yoto playlist until the live upload/update mapping

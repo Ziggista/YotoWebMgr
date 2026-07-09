@@ -504,12 +504,29 @@ class YotoCredentialStatusResponse(BaseModel):
 
 class StartYotoOAuthRequest(BaseModel):
     account_label: str = Field(default="Household Yoto", min_length=1, max_length=120)
+    code_challenge: str = Field(min_length=43, max_length=128)
+    code_challenge_method: str = Field(default="S256", pattern="^S256$")
 
 
 class StartYotoOAuthResponse(BaseModel):
     credential: YotoCredentialStatusResponse
     authorization_url: str
+    oauth_state: str
     live_api_call: bool = False
+
+
+class CompleteYotoOAuthRequest(BaseModel):
+    code: str = Field(min_length=1, max_length=2000)
+    state: str = Field(min_length=1, max_length=240)
+    code_verifier: str = Field(min_length=43, max_length=128)
+
+
+class CompleteYotoOAuthResponse(BaseModel):
+    credential: YotoCredentialStatusResponse
+    token_type: str | None = None
+    scope: str | None = None
+    expires_in: int | None = None
+    live_api_call: bool = True
 
 
 class YotoPlaylistPreviewResponse(BaseModel):

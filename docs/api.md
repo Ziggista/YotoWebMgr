@@ -77,6 +77,7 @@ flags, notes, and assignment events for a single physical card.
 - `GET /api/v1/yoto/config`
 - `GET /api/v1/yoto/credentials/status`
 - `POST /api/v1/yoto/credentials/start`
+- `POST /api/v1/yoto/credentials/callback`
 - `POST /api/v1/yoto/credentials/disconnect`
 - `GET /api/v1/yoto/playlists/{playlist_id}/versions`
 - `POST /api/v1/yoto/playlists/{playlist_id}/versions/{version_id}/restore`
@@ -84,9 +85,12 @@ flags, notes, and assignment events for a single physical card.
 - `GET /api/v1/yoto/library/{item_id}/playlists`
 - `POST /api/v1/yoto/library/{item_id}/playlists`
 
-The credential endpoints store local Yoto connection state and prepare an OAuth authorization URL
-without exchanging tokens or calling the live API. Token values and client secrets are intentionally
-excluded from API responses and from the settings table.
+The credential endpoints support Yoto browser-based OAuth with PKCE. `start` stores local OAuth
+state and returns a Yoto `/authorize` URL using the configured client ID, redirect URI, audience,
+scope, and browser-generated code challenge. `callback` exchanges the returned code with Yoto's
+token endpoint to prove authentication, then records connection metadata without persisting raw
+access or refresh tokens. Token values and client secrets are intentionally excluded from API
+responses and from the settings table.
 
 The playlist preview maps local library tracks into the Yoto-shaped payload without a live API call.
 Posting to `playlists` stores that payload as a durable local draft and queues a `create_yoto_playlist`

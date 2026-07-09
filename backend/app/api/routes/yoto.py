@@ -1,8 +1,11 @@
-from typing import Annotated
+from datetime import datetime, timedelta, timezone
+from typing import Annotated, Any
+import base64
 import json
 from secrets import token_urlsafe
 from urllib.parse import urlencode, urljoin
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -20,6 +23,8 @@ from app.models import (
     YotoPlaylistVersion,
 )
 from app.schemas.foundation import (
+    CompleteYotoOAuthRequest,
+    CompleteYotoOAuthResponse,
     JobResponse,
     QueueYotoPlaylistResponse,
     StartYotoOAuthRequest,
@@ -93,18 +98,65 @@ def _credential_response(db: Session, credential: YotoCredentialState | None) ->
     )
 
 
-def _authorization_url(db: Session, oauth_state: str) -> str:
+def _authorization_url(db: Session, oauth_state: str, code_challenge: str) -> str:
     auth_base_url = _setting(db, "yoto_auth_base_url", "https://login.yotoplay.com").rstrip("/")
     query = urlencode(
         {
+            "audience": _setting(db, "yoto_api_base_url", "https://api.yotoplay.com"),
             "response_type": "code",
             "client_id": _setting(db, "yoto_client_id"),
             "redirect_uri": _setting(db, "yoto_redirect_uri"),
             "scope": _setting(db, "yoto_oauth_scope", "openid offline_access"),
+            "code_challenge": code_challenge,
+            "code_challenge_method": "S256",
             "state": oauth_state,
         }
     )
-    return f"{urljoin(auth_base_url + '/', 'oauth2/authorize')}?{query}"
+    return f"{urljoin(auth_base_url + '/', 'authorize')}?{query}"
+
+
+def _decode_jwt_payload(token: str) -> dict[str, Any]:
+    parts = token.split(".")
+    if len(parts) < 2:
+        return {}
+    payload = parts[1]
+    padding = "=" * (-len(payload) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode(f"{payload}{padding}")
+        value = json.loads(decoded)
+    except (ValueError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+async def _exchange_oauth_code(
+    *,
+    auth_base_url: str,
+    client_id: str,
+    redirect_uri: str,
+    code: str,
+    code_verifier: str,
+) -> dict[str, Any]:
+    token_url = urljoin(auth_base_url.rstrip("/") + "/", "oauth/token")
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.post(
+            token_url,
+            data={
+                "grant_type": "authorization_code",
+                "client_id": client_id,
+                "code_verifier": code_verifier,
+                "code": code,
+                "redirect_uri": redirect_uri,
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+    if response.status_code >= 400:
+        detail = response.text[:500] if response.text else "Yoto token exchange failed."
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=detail)
+    payload = response.json()
+    if not isinstance(payload, dict) or not payload.get("access_token"):
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Yoto token response did not include an access token.")
+    return payload
 
 
 def _tracks_for_item(db: Session, item: LibraryItem) -> list[PlaylistTrack]:
@@ -217,7 +269,7 @@ async def start_yoto_oauth(
     credential.status = "authorization_started"
     credential.scopes = _setting(db, "yoto_oauth_scope", "openid offline_access")
     credential.oauth_state = token_urlsafe(24)
-    credential.authorization_url = _authorization_url(db, credential.oauth_state)
+    credential.authorization_url = _authorization_url(db, credential.oauth_state, payload.code_challenge)
     credential.error_summary = None
     db.add(credential)
     db.commit()
@@ -225,7 +277,65 @@ async def start_yoto_oauth(
     return StartYotoOAuthResponse(
         credential=_credential_response(db, credential),
         authorization_url=credential.authorization_url or "",
+        oauth_state=credential.oauth_state,
         live_api_call=False,
+    )
+
+
+@router.post("/credentials/callback", response_model=CompleteYotoOAuthResponse)
+async def complete_yoto_oauth(
+    payload: CompleteYotoOAuthRequest,
+    db: Annotated[Session, Depends(get_db_session)],
+) -> CompleteYotoOAuthResponse:
+    credential = db.scalar(select(YotoCredentialState).where(YotoCredentialState.oauth_state == payload.state))
+    if credential is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Yoto OAuth state was not found or has expired.")
+    if credential.status != "authorization_started":
+        raise HTTPException(status_code=409, detail="Yoto OAuth state has already been used.")
+
+    client_id = _setting(db, "yoto_client_id")
+    redirect_uri = _setting(db, "yoto_redirect_uri")
+    if not client_id or not redirect_uri:
+        raise HTTPException(status_code=422, detail="Yoto client ID and redirect URI must be configured before callback exchange.")
+
+    token_payload = await _exchange_oauth_code(
+        auth_base_url=_setting(db, "yoto_auth_base_url", "https://login.yotoplay.com"),
+        client_id=client_id,
+        redirect_uri=redirect_uri,
+        code=payload.code,
+        code_verifier=payload.code_verifier,
+    )
+    access_token = str(token_payload["access_token"])
+    decoded = _decode_jwt_payload(access_token)
+    expires_in = token_payload.get("expires_in")
+    expires_at: datetime | None = None
+    if isinstance(decoded.get("exp"), int):
+        expires_at = datetime.fromtimestamp(decoded["exp"], tz=timezone.utc)
+    elif isinstance(expires_in, int):
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+
+    credential.status = "connected_tested"
+    credential.token_storage_ref = f"not_persisted:browser_pkce:{credential.id}"
+    credential.masked_account_id = str(decoded.get("sub"))[-8:] if decoded.get("sub") else None
+    credential.masked_email = None
+    credential.scopes = str(token_payload.get("scope") or credential.scopes)
+    credential.authorization_url = None
+    credential.oauth_state = None
+    credential.last_refreshed_at = datetime.now(timezone.utc)
+    credential.expires_at = expires_at
+    credential.error_summary = (
+        "Browser OAuth exchange succeeded. Access and refresh tokens were not persisted; "
+        "secure token storage is still pending."
+    )
+    db.add(credential)
+    db.commit()
+    db.refresh(credential)
+    return CompleteYotoOAuthResponse(
+        credential=_credential_response(db, credential),
+        token_type=token_payload.get("token_type"),
+        scope=token_payload.get("scope"),
+        expires_in=expires_in if isinstance(expires_in, int) else None,
+        live_api_call=True,
     )
 
 

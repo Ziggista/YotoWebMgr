@@ -1,5 +1,8 @@
 from collections.abc import AsyncGenerator, Generator
+import base64
+import json
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 import zipfile
 
 import pytest
@@ -8,6 +11,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.api.routes import yoto as yoto_routes
 from app.core.config import get_settings
 from app.api.routes.library import _playlist_stream_url_from_text
 from app.db.base import Base
@@ -1025,19 +1029,27 @@ async def test_yoto_oauth_scaffold_records_local_credential_state(
         initial = await client.get("/api/v1/yoto/credentials/status")
         missing_config = await client.post(
             "/api/v1/yoto/credentials/start",
-            json={"account_label": "Family Yoto"},
+            json={
+                "account_label": "Family Yoto",
+                "code_challenge": "a" * 43,
+                "code_challenge_method": "S256",
+            },
         )
         await client.put(
             "/api/v1/settings",
             json={
                 "yoto_client_id": "client-test",
-                "yoto_redirect_uri": "http://localhost:5175/yoto/callback",
+                "yoto_redirect_uri": "http://localhost:5175/settings/yoto/callback",
                 "yoto_oauth_scope": "openid offline_access playlist.write",
             },
         )
         started = await client.post(
             "/api/v1/yoto/credentials/start",
-            json={"account_label": "Family Yoto"},
+            json={
+                "account_label": "Family Yoto",
+                "code_challenge": "b" * 43,
+                "code_challenge_method": "S256",
+            },
         )
         status_response = await client.get("/api/v1/yoto/credentials/status")
         disconnected = await client.post("/api/v1/yoto/credentials/disconnect")
@@ -1048,8 +1060,16 @@ async def test_yoto_oauth_scaffold_records_local_credential_state(
     assert started.status_code == 202
     payload = started.json()
     assert payload["live_api_call"] is False
-    assert "client_id=client-test" in payload["authorization_url"]
-    assert "playlist.write" in payload["authorization_url"]
+    parsed_auth_url = urlparse(payload["authorization_url"])
+    auth_params = parse_qs(parsed_auth_url.query)
+    assert parsed_auth_url.path == "/authorize"
+    assert auth_params["audience"] == ["https://api.yotoplay.com"]
+    assert auth_params["client_id"] == ["client-test"]
+    assert auth_params["redirect_uri"] == ["http://localhost:5175/settings/yoto/callback"]
+    assert auth_params["code_challenge"] == ["b" * 43]
+    assert auth_params["code_challenge_method"] == ["S256"]
+    assert auth_params["scope"] == ["openid offline_access playlist.write"]
+    assert payload["oauth_state"] == auth_params["state"][0]
     assert payload["credential"]["status"] == "authorization_started"
     assert status_response.json()["account_label"] == "Family Yoto"
     assert disconnected.json()["status"] == "revoked"
@@ -1058,6 +1078,67 @@ async def test_yoto_oauth_scaffold_records_local_credential_state(
     assert credential is not None
     assert credential.token_storage_ref is None
     assert credential.status == "revoked"
+
+
+async def test_yoto_oauth_callback_exchanges_code_without_persisting_tokens(
+    api_client: AsyncClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    header = base64.urlsafe_b64encode(json.dumps({"alg": "none"}).encode()).decode().rstrip("=")
+    body = base64.urlsafe_b64encode(json.dumps({"sub": "family-account-12345678", "exp": 4_102_444_800}).encode()).decode().rstrip("=")
+    access_token = f"{header}.{body}."
+
+    async def fake_exchange_oauth_code(**_: object) -> dict[str, object]:
+        return {
+            "access_token": access_token,
+            "refresh_token": "refresh-token-not-stored",
+            "token_type": "Bearer",
+            "scope": "openid offline_access family:library:view",
+            "expires_in": 3600,
+        }
+
+    monkeypatch.setattr(yoto_routes, "_exchange_oauth_code", fake_exchange_oauth_code)
+
+    async with api_client as client:
+        await client.put(
+            "/api/v1/settings",
+            json={
+                "yoto_client_id": "client-test",
+                "yoto_redirect_uri": "http://localhost:5175/settings/yoto/callback",
+                "yoto_oauth_scope": "openid offline_access family:library:view",
+            },
+        )
+        started = await client.post(
+            "/api/v1/yoto/credentials/start",
+            json={
+                "account_label": "Family Yoto",
+                "code_challenge": "c" * 43,
+                "code_challenge_method": "S256",
+            },
+        )
+        completed = await client.post(
+            "/api/v1/yoto/credentials/callback",
+            json={
+                "code": "auth-code",
+                "state": started.json()["oauth_state"],
+                "code_verifier": "v" * 43,
+            },
+        )
+
+    assert completed.status_code == 200
+    payload = completed.json()
+    assert payload["live_api_call"] is True
+    assert payload["credential"]["status"] == "connected_tested"
+    assert payload["credential"]["token_storage_ref"].startswith("not_persisted:browser_pkce:")
+    assert payload["credential"]["masked_account_id"] == "12345678"
+    assert "not persisted" in payload["credential"]["error_summary"]
+
+    credential = db_session.scalar(select(YotoCredentialState))
+    assert credential is not None
+    assert credential.oauth_state is None
+    assert credential.authorization_url is None
+    assert credential.token_storage_ref == f"not_persisted:browser_pkce:{credential.id}"
 
 
 async def test_yoto_playlist_queue_persists_draft_and_job(

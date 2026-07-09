@@ -382,6 +382,15 @@ export interface YotoCredentialStatus {
 export interface StartYotoOAuthResponse {
   credential: YotoCredentialStatus;
   authorization_url: string;
+  oauth_state: string;
+  live_api_call: boolean;
+}
+
+export interface CompleteYotoOAuthResponse {
+  credential: YotoCredentialStatus;
+  token_type: string | null;
+  scope: string | null;
+  expires_in: number | null;
   live_api_call: boolean;
 }
 
@@ -740,9 +749,16 @@ export async function fetchYotoCredentialStatus(): Promise<YotoCredentialStatus>
   return response.json() as Promise<YotoCredentialStatus>;
 }
 
-export async function startYotoOAuth(accountLabel: string): Promise<StartYotoOAuthResponse> {
+export async function startYotoOAuth(
+  accountLabel: string,
+  codeChallenge: string,
+): Promise<StartYotoOAuthResponse> {
   const response = await fetch("/api/v1/yoto/credentials/start", {
-    body: JSON.stringify({ account_label: accountLabel }),
+    body: JSON.stringify({
+      account_label: accountLabel,
+      code_challenge: codeChallenge,
+      code_challenge_method: "S256",
+    }),
     headers: { "Content-Type": "application/json" },
     method: "POST",
   });
@@ -750,6 +766,22 @@ export async function startYotoOAuth(accountLabel: string): Promise<StartYotoOAu
     throw new Error(await errorMessage(response, "Failed to prepare Yoto OAuth."));
   }
   return response.json() as Promise<StartYotoOAuthResponse>;
+}
+
+export async function completeYotoOAuth(payload: {
+  code: string;
+  state: string;
+  code_verifier: string;
+}): Promise<CompleteYotoOAuthResponse> {
+  const response = await fetch("/api/v1/yoto/credentials/callback", {
+    body: JSON.stringify(payload),
+    headers: { "Content-Type": "application/json" },
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to complete Yoto OAuth."));
+  }
+  return response.json() as Promise<CompleteYotoOAuthResponse>;
 }
 
 export async function disconnectYotoCredentials(): Promise<YotoCredentialStatus> {
