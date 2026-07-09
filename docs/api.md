@@ -54,9 +54,16 @@ summary so card restore workflows can be built without overwriting past state.
 ## Yoto Playlist Drafts
 
 - `GET /api/v1/yoto/config`
+- `GET /api/v1/yoto/credentials/status`
+- `POST /api/v1/yoto/credentials/start`
+- `POST /api/v1/yoto/credentials/disconnect`
 - `GET /api/v1/yoto/library/{item_id}/playlist-preview`
 - `GET /api/v1/yoto/library/{item_id}/playlists`
 - `POST /api/v1/yoto/library/{item_id}/playlists`
+
+The credential endpoints store local Yoto connection state and prepare an OAuth authorization URL
+without exchanging tokens or calling the live API. Token values and client secrets are intentionally
+excluded from API responses and from the settings table.
 
 The playlist preview maps local library tracks into the Yoto-shaped payload without a live API call.
 Posting to `playlists` stores that payload as a durable local draft and queues a `create_yoto_playlist`

@@ -468,6 +468,35 @@ class YotoConfigResponse(BaseModel):
     oauth_scope: str
 
 
+class YotoCredentialStatusResponse(BaseModel):
+    id: int | None
+    account_label: str
+    status: str
+    token_storage_ref: str | None
+    masked_account_id: str | None
+    masked_email: str | None
+    scopes: str
+    authorization_url: str | None
+    oauth_state: str | None
+    last_refreshed_at: datetime | None
+    expires_at: datetime | None
+    error_summary: str | None
+    enabled: bool
+    client_id_configured: bool
+    redirect_uri_configured: bool
+    live_api_call: bool = False
+
+
+class StartYotoOAuthRequest(BaseModel):
+    account_label: str = Field(default="Household Yoto", min_length=1, max_length=120)
+
+
+class StartYotoOAuthResponse(BaseModel):
+    credential: YotoCredentialStatusResponse
+    authorization_url: str
+    live_api_call: bool = False
+
+
 class YotoPlaylistPreviewResponse(BaseModel):
     library_item_id: int
     payload: dict[str, object]

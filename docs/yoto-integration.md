@@ -40,6 +40,13 @@ refresh, and transcode polling belong in worker jobs.
 The API exposes local-only Yoto scaffolding endpoints:
 
 - `GET /api/v1/yoto/config` reports non-secret Yoto configuration state.
+- `GET /api/v1/yoto/credentials/status` reports the locally stored Yoto connection state without
+  exposing tokens or secrets.
+- `POST /api/v1/yoto/credentials/start` validates the configured client ID and redirect URI,
+  stores an `authorization_started` credential record, and returns a prepared OAuth authorization
+  URL. It does not exchange a code or call Yoto.
+- `POST /api/v1/yoto/credentials/disconnect` clears local token references and marks the stored
+  credential state as `revoked`. It does not make a live revoke call.
 - `GET /api/v1/yoto/library/{item_id}/playlist-preview` maps a local library item and its tracks
   into a Yoto-shaped playlist payload without making a live Yoto API call.
 - `GET /api/v1/yoto/library/{item_id}/playlists` lists stored local playlist drafts.
@@ -50,6 +57,11 @@ The preview endpoint is deliberately not an upload action. The queue endpoint is
 it persists the payload, creates a trackable worker job, and currently advances the item to
 `ready_to_link` for the manual Yoto-app linking workflow. Live OAuth/upload calls will be added
 behind the same worker job once the exact supported flow is confirmed.
+
+The credential scaffold stores only connection metadata such as account label, scope, masked
+account fields, authorization URL, OAuth state, expiry timestamps, status, and an optional
+`token_storage_ref`. Actual refresh tokens, access tokens, client secrets, or encrypted token
+material must live in Kubernetes Secrets or a future encrypted token store.
 
 ## Physical Card Inventory
 

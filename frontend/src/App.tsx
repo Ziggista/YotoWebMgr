@@ -16,6 +16,7 @@ import {
   SessionResponse,
   Tag,
   VersionEvent,
+  YotoCredentialStatus,
   YotoPlaylistDraft,
   applyTrackIcon,
   createCard,
@@ -24,6 +25,7 @@ import {
   createPodcastFeed,
   createRadioStreamTrack,
   createSplitPoint,
+  disconnectYotoCredentials,
   fetchCards,
   fetchCardPlan,
   fetchImportSources,
@@ -36,6 +38,7 @@ import {
   fetchSavedCardPlan,
   fetchSettings,
   fetchTags,
+  fetchYotoCredentialStatus,
   fetchYotoPlaylists,
   hideImport,
   fetchAuthProviders,
@@ -49,6 +52,7 @@ import {
   retryJob,
   saveCardPlan,
   setLibraryItemTags,
+  startYotoOAuth,
   updatePlaylistTrack,
   updateLibraryItemSettings,
   updateSettings,
@@ -2118,12 +2122,20 @@ function CardsPage() {
 
 function SettingsPage() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [yotoCredential, setYotoCredential] = useState<YotoCredentialStatus | null>(null);
+  const [yotoAccountLabel, setYotoAccountLabel] = useState("Household Yoto");
+  const [preparedAuthUrl, setPreparedAuthUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    void fetchSettings()
-      .then(setSettings)
+    void Promise.all([fetchSettings(), fetchYotoCredentialStatus()])
+      .then(([nextSettings, nextCredential]) => {
+        setSettings(nextSettings);
+        setYotoCredential(nextCredential);
+        setYotoAccountLabel(nextCredential.account_label);
+        setPreparedAuthUrl(nextCredential.authorization_url);
+      })
       .catch((loadError) =>
         setError(loadError instanceof Error ? loadError.message : "Failed to load settings."),
       );
@@ -2140,6 +2152,34 @@ function SettingsPage() {
       setSettings(await updateSettings(settings));
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "Failed to save settings.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handlePrepareYotoOAuth() {
+    setSaving(true);
+    setError(null);
+    try {
+      const result = await startYotoOAuth(yotoAccountLabel);
+      setYotoCredential(result.credential);
+      setPreparedAuthUrl(result.authorization_url);
+    } catch (startError) {
+      setError(startError instanceof Error ? startError.message : "Failed to prepare Yoto OAuth.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDisconnectYoto() {
+    setSaving(true);
+    setError(null);
+    try {
+      const result = await disconnectYotoCredentials();
+      setYotoCredential(result);
+      setPreparedAuthUrl(null);
+    } catch (disconnectError) {
+      setError(disconnectError instanceof Error ? disconnectError.message : "Failed to disconnect Yoto.");
     } finally {
       setSaving(false);
     }
@@ -2350,6 +2390,51 @@ function SettingsPage() {
         <p className="settings-note">
           Store refresh tokens and client secrets in Kubernetes Secrets, not application settings.
         </p>
+        <div className="settings-connection-panel">
+          <div>
+            <h3 className="settings-section-title">Yoto connection</h3>
+            <p className="settings-note">
+              Status: {yotoCredential?.status ?? "loading"} · Live API call: no
+            </p>
+          </div>
+          <label>
+            Account label
+            <input
+              onChange={(event) => setYotoAccountLabel(event.target.value)}
+              value={yotoAccountLabel}
+            />
+          </label>
+          <div className="button-row">
+            <button
+              className="secondary-button"
+              disabled={saving}
+              onClick={() => void handlePrepareYotoOAuth()}
+              type="button"
+            >
+              Prepare auth link
+            </button>
+            <button
+              className="secondary-button"
+              disabled={saving || !yotoCredential?.id}
+              onClick={() => void handleDisconnectYoto()}
+              type="button"
+            >
+              Disconnect locally
+            </button>
+          </div>
+          {preparedAuthUrl ? (
+            <p className="settings-note auth-url-break">
+              Auth URL: <a href={preparedAuthUrl}>{preparedAuthUrl}</a>
+            </p>
+          ) : (
+            <p className="settings-note">
+              Set the client ID and redirect URI, save settings, then prepare an auth link.
+            </p>
+          )}
+          {yotoCredential?.error_summary ? (
+            <p className="settings-note">{yotoCredential.error_summary}</p>
+          ) : null}
+        </div>
         <button className="primary-button" disabled={saving} type="submit">
           Save settings
         </button>

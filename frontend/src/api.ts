@@ -343,6 +343,31 @@ export interface QueueYotoPlaylistResponse {
   live_api_call: boolean;
 }
 
+export interface YotoCredentialStatus {
+  id: number | null;
+  account_label: string;
+  status: string;
+  token_storage_ref: string | null;
+  masked_account_id: string | null;
+  masked_email: string | null;
+  scopes: string;
+  authorization_url: string | null;
+  oauth_state: string | null;
+  last_refreshed_at: string | null;
+  expires_at: string | null;
+  error_summary: string | null;
+  enabled: boolean;
+  client_id_configured: boolean;
+  redirect_uri_configured: boolean;
+  live_api_call: boolean;
+}
+
+export interface StartYotoOAuthResponse {
+  credential: YotoCredentialStatus;
+  authorization_url: string;
+  live_api_call: boolean;
+}
+
 async function errorMessage(response: Response, fallback: string): Promise<string> {
   try {
     const payload = (await response.json()) as { detail?: string };
@@ -667,6 +692,34 @@ export async function queueYotoPlaylist(itemId: number): Promise<QueueYotoPlayli
     throw new Error(await errorMessage(response, "Failed to queue Yoto playlist."));
   }
   return response.json() as Promise<QueueYotoPlaylistResponse>;
+}
+
+export async function fetchYotoCredentialStatus(): Promise<YotoCredentialStatus> {
+  const response = await fetch("/api/v1/yoto/credentials/status");
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to load Yoto credential status."));
+  }
+  return response.json() as Promise<YotoCredentialStatus>;
+}
+
+export async function startYotoOAuth(accountLabel: string): Promise<StartYotoOAuthResponse> {
+  const response = await fetch("/api/v1/yoto/credentials/start", {
+    body: JSON.stringify({ account_label: accountLabel }),
+    headers: { "Content-Type": "application/json" },
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to prepare Yoto OAuth."));
+  }
+  return response.json() as Promise<StartYotoOAuthResponse>;
+}
+
+export async function disconnectYotoCredentials(): Promise<YotoCredentialStatus> {
+  const response = await fetch("/api/v1/yoto/credentials/disconnect", { method: "POST" });
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to disconnect Yoto credentials."));
+  }
+  return response.json() as Promise<YotoCredentialStatus>;
 }
 
 export async function fetchImports(): Promise<ImportRequest[]> {

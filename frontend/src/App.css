@@ -493,6 +493,20 @@ a {
   color: #ddd4c3;
 }
 
+.settings-connection-panel {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(255, 240, 214, 0.14);
+  border-radius: 8px;
+  background: rgba(6, 22, 26, 0.36);
+}
+
+.auth-url-break {
+  overflow-wrap: anywhere;
+}
+
 .checkbox-row {
   display: flex !important;
   grid-template-columns: auto 1fr;
@@ -517,6 +531,22 @@ a {
   color: #1f1b16;
   font: inherit;
   font-weight: 600;
+}
+
+.secondary-button {
+  padding: 12px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 240, 214, 0.18);
+  background: rgba(255, 248, 232, 0.08);
+  color: #f4efe6;
+  font: inherit;
+  font-weight: 600;
+}
+
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
 .ghost-button {

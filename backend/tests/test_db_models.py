@@ -18,6 +18,7 @@ from app.models import (
     TagAssignment,
     User,
     VersionEvent,
+    YotoCredentialState,
     YotoPlaylistDraft,
 )
 
@@ -49,4 +50,5 @@ def test_foundation_models_are_registered_in_metadata() -> None:
     assert TagAssignment.__tablename__ in Base.metadata.tables
     assert Setting.__tablename__ in Base.metadata.tables
     assert VersionEvent.__tablename__ in Base.metadata.tables
+    assert YotoCredentialState.__tablename__ in Base.metadata.tables
     assert YotoPlaylistDraft.__tablename__ in Base.metadata.tables

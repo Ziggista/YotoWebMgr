@@ -19,6 +19,7 @@ from app.models.setting import Setting
 from app.models.tag import Tag, TagAssignment
 from app.models.user import User
 from app.models.version import VersionEvent
+from app.models.yoto import YotoCredentialState
 
 __all__ = [
     "ImportRequest",
@@ -40,4 +41,5 @@ __all__ = [
     "User",
     "VersionEvent",
     "YotoPlaylistDraft",
+    "YotoCredentialState",
 ]

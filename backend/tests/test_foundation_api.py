@@ -26,6 +26,7 @@ from app.models import (
     TagAssignment,
     User,
     VersionEvent,
+    YotoCredentialState,
     YotoPlaylistDraft,
 )
 
@@ -964,6 +965,49 @@ async def test_yoto_config_and_playlist_preview(api_client: AsyncClient) -> None
     assert payload["payload"]["playback"]["always_play_from_start"] is True
     assert payload["payload"]["chapters"][0]["title"] == "Story One"
     assert payload["payload"]["chapters"][0]["offline_available"] is True
+
+
+async def test_yoto_oauth_scaffold_records_local_credential_state(
+    api_client: AsyncClient,
+    db_session: Session,
+) -> None:
+    async with api_client as client:
+        initial = await client.get("/api/v1/yoto/credentials/status")
+        missing_config = await client.post(
+            "/api/v1/yoto/credentials/start",
+            json={"account_label": "Family Yoto"},
+        )
+        await client.put(
+            "/api/v1/settings",
+            json={
+                "yoto_client_id": "client-test",
+                "yoto_redirect_uri": "http://localhost:5175/yoto/callback",
+                "yoto_oauth_scope": "openid offline_access playlist.write",
+            },
+        )
+        started = await client.post(
+            "/api/v1/yoto/credentials/start",
+            json={"account_label": "Family Yoto"},
+        )
+        status_response = await client.get("/api/v1/yoto/credentials/status")
+        disconnected = await client.post("/api/v1/yoto/credentials/disconnect")
+
+    assert initial.status_code == 200
+    assert initial.json()["status"] == "not_connected"
+    assert missing_config.status_code == 422
+    assert started.status_code == 202
+    payload = started.json()
+    assert payload["live_api_call"] is False
+    assert "client_id=client-test" in payload["authorization_url"]
+    assert "playlist.write" in payload["authorization_url"]
+    assert payload["credential"]["status"] == "authorization_started"
+    assert status_response.json()["account_label"] == "Family Yoto"
+    assert disconnected.json()["status"] == "revoked"
+
+    credential = db_session.scalar(select(YotoCredentialState))
+    assert credential is not None
+    assert credential.token_storage_ref is None
+    assert credential.status == "revoked"
 
 
 async def test_yoto_playlist_queue_persists_draft_and_job(

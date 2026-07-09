@@ -1,5 +1,7 @@
 from typing import Annotated
 import json
+from secrets import token_urlsafe
+from urllib.parse import urlencode, urljoin
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, select
@@ -7,11 +9,14 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db_session
 from app.integrations.yoto.playlist import build_playlist_preview
-from app.models import Job, LibraryItem, PlaylistTrack, Setting, VersionEvent, YotoPlaylistDraft
+from app.models import Job, LibraryItem, PlaylistTrack, Setting, VersionEvent, YotoCredentialState, YotoPlaylistDraft
 from app.schemas.foundation import (
     JobResponse,
     QueueYotoPlaylistResponse,
+    StartYotoOAuthRequest,
+    StartYotoOAuthResponse,
     YotoConfigResponse,
+    YotoCredentialStatusResponse,
     YotoPlaylistDraftResponse,
     YotoPlaylistPreviewResponse,
 )
@@ -23,6 +28,73 @@ router = APIRouter()
 def _setting(db: Session, key: str, fallback: str = "") -> str:
     setting = db.scalar(select(Setting).where(Setting.key == key))
     return setting.value if setting is not None else fallback
+
+
+def _latest_credential(db: Session) -> YotoCredentialState | None:
+    return db.scalar(
+        select(YotoCredentialState).order_by(
+            YotoCredentialState.updated_at.desc(),
+            YotoCredentialState.id.desc(),
+        )
+    )
+
+
+def _credential_response(db: Session, credential: YotoCredentialState | None) -> YotoCredentialStatusResponse:
+    enabled = _setting(db, "yoto_api_enabled", "false").lower() == "true"
+    client_id = _setting(db, "yoto_client_id")
+    redirect_uri = _setting(db, "yoto_redirect_uri")
+    scopes = _setting(db, "yoto_oauth_scope", "openid offline_access")
+    if credential is None:
+        return YotoCredentialStatusResponse(
+            id=None,
+            account_label="Household Yoto",
+            status="not_connected",
+            token_storage_ref=None,
+            masked_account_id=None,
+            masked_email=None,
+            scopes=scopes,
+            authorization_url=None,
+            oauth_state=None,
+            last_refreshed_at=None,
+            expires_at=None,
+            error_summary=None,
+            enabled=enabled,
+            client_id_configured=bool(client_id),
+            redirect_uri_configured=bool(redirect_uri),
+            live_api_call=False,
+        )
+    return YotoCredentialStatusResponse(
+        id=credential.id,
+        account_label=credential.account_label,
+        status=credential.status,
+        token_storage_ref=credential.token_storage_ref,
+        masked_account_id=credential.masked_account_id,
+        masked_email=credential.masked_email,
+        scopes=credential.scopes,
+        authorization_url=credential.authorization_url,
+        oauth_state=credential.oauth_state,
+        last_refreshed_at=credential.last_refreshed_at,
+        expires_at=credential.expires_at,
+        error_summary=credential.error_summary,
+        enabled=enabled,
+        client_id_configured=bool(client_id),
+        redirect_uri_configured=bool(redirect_uri),
+        live_api_call=False,
+    )
+
+
+def _authorization_url(db: Session, oauth_state: str) -> str:
+    auth_base_url = _setting(db, "yoto_auth_base_url", "https://login.yotoplay.com").rstrip("/")
+    query = urlencode(
+        {
+            "response_type": "code",
+            "client_id": _setting(db, "yoto_client_id"),
+            "redirect_uri": _setting(db, "yoto_redirect_uri"),
+            "scope": _setting(db, "yoto_oauth_scope", "openid offline_access"),
+            "state": oauth_state,
+        }
+    )
+    return f"{urljoin(auth_base_url + '/', 'oauth2/authorize')}?{query}"
 
 
 def _tracks_for_item(db: Session, item: LibraryItem) -> list[PlaylistTrack]:
@@ -61,6 +133,60 @@ def _next_library_version(db: Session, item_id: int) -> int:
         .where(VersionEvent.entity_id == item_id)
     )
     return (latest_version or 0) + 1
+
+
+@router.get("/credentials/status", response_model=YotoCredentialStatusResponse)
+async def get_yoto_credential_status(
+    db: Annotated[Session, Depends(get_db_session)],
+) -> YotoCredentialStatusResponse:
+    return _credential_response(db, _latest_credential(db))
+
+
+@router.post("/credentials/start", response_model=StartYotoOAuthResponse, status_code=202)
+async def start_yoto_oauth(
+    payload: StartYotoOAuthRequest,
+    db: Annotated[Session, Depends(get_db_session)],
+) -> StartYotoOAuthResponse:
+    if not _setting(db, "yoto_client_id"):
+        raise HTTPException(status_code=422, detail="Set a Yoto client ID before preparing OAuth.")
+    if not _setting(db, "yoto_redirect_uri"):
+        raise HTTPException(status_code=422, detail="Set a Yoto redirect URI before preparing OAuth.")
+
+    credential = _latest_credential(db)
+    if credential is None:
+        credential = YotoCredentialState(account_label=payload.account_label)
+    credential.account_label = payload.account_label
+    credential.status = "authorization_started"
+    credential.scopes = _setting(db, "yoto_oauth_scope", "openid offline_access")
+    credential.oauth_state = token_urlsafe(24)
+    credential.authorization_url = _authorization_url(db, credential.oauth_state)
+    credential.error_summary = None
+    db.add(credential)
+    db.commit()
+    db.refresh(credential)
+    return StartYotoOAuthResponse(
+        credential=_credential_response(db, credential),
+        authorization_url=credential.authorization_url or "",
+        live_api_call=False,
+    )
+
+
+@router.post("/credentials/disconnect", response_model=YotoCredentialStatusResponse)
+async def disconnect_yoto_credentials(
+    db: Annotated[Session, Depends(get_db_session)],
+) -> YotoCredentialStatusResponse:
+    credential = _latest_credential(db)
+    if credential is None:
+        return _credential_response(db, None)
+    credential.status = "revoked"
+    credential.token_storage_ref = None
+    credential.authorization_url = None
+    credential.oauth_state = None
+    credential.error_summary = "Disconnected locally. No live Yoto revoke call was made."
+    db.add(credential)
+    db.commit()
+    db.refresh(credential)
+    return _credential_response(db, credential)
 
 
 @router.get("/config", response_model=YotoConfigResponse)
