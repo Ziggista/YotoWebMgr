@@ -25,7 +25,7 @@ microk8s kubectl -n yotowebmgr rollout status deployment/frontend --timeout=180s
 
 echo
 echo "Dev deployment is ready."
-echo "Run this in another terminal to open the Kubernetes app:"
-echo "  k8s/scripts/open-dev.sh"
-echo "Then browse to:"
+echo "Ensuring the Kubernetes frontend is forwarded locally."
+bash "${ROOT_DIR}/k8s/scripts/ensure-dev-port-forward.sh"
+echo "Browse to:"
 echo "  http://127.0.0.1:5175/"

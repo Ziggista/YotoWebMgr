@@ -66,7 +66,8 @@ The dev overlay also sets `RESET_DATABASE_ON_START=true`, which makes the API dr
 PostgreSQL's `public` schema before migrations run. That is intentionally destructive and should
 stay disabled outside disposable dev deployments.
 
-Open the Kubernetes frontend with the dedicated helper:
+The deployment script starts or refreshes the local frontend port-forward automatically. To check or
+restart it later, run the dedicated helper:
 
 ```bash
 k8s/scripts/open-dev.sh
@@ -88,7 +89,7 @@ Common commands are wrapped so routine checks use less typing:
 ```bash
 scripts/dev/verify.sh      # backend tests, frontend build, shell syntax checks
 scripts/dev/redeploy.sh    # destructive MicroK8s rebuild/redeploy from scratch
-k8s/scripts/open-dev.sh    # open the Kubernetes frontend on http://127.0.0.1:5175/
+k8s/scripts/open-dev.sh    # ensure the Kubernetes frontend is forwarded on http://127.0.0.1:5175/
 scripts/dev/status.sh      # pods, services, recent API logs
 scripts/dev/seed-radio.sh  # add the ABC Triple J test stream to the current dev API
 ```

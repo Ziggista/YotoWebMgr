@@ -40,7 +40,8 @@ Keep `RESET_DATABASE_ON_START=false` outside disposable dev deployments.
 k8s/scripts/deploy-dev.sh
 ```
 
-To open the frontend service after deployment:
+The deployment script starts or refreshes the local frontend port-forward automatically. To check or
+restart the frontend service forward after deployment:
 
 ```bash
 k8s/scripts/open-dev.sh
@@ -60,7 +61,7 @@ frontend cannot be confused with the deployed cluster.
 ```bash
 scripts/dev/verify.sh      # backend tests, frontend build, shell syntax checks
 scripts/dev/redeploy.sh    # destructive MicroK8s rebuild/redeploy from scratch
-k8s/scripts/open-dev.sh    # open the Kubernetes frontend on http://127.0.0.1:5175/
+k8s/scripts/open-dev.sh    # ensure the Kubernetes frontend is forwarded on http://127.0.0.1:5175/
 scripts/dev/status.sh      # pods, services, recent API logs
 scripts/dev/seed-radio.sh  # add the ABC Triple J test stream to the current dev API
 ```

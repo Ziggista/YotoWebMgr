@@ -18,6 +18,7 @@ echo
 echo "Checking shell script syntax"
 bash -n "${ROOT_DIR}/k8s/scripts/build-images.sh"
 bash -n "${ROOT_DIR}/k8s/scripts/deploy-dev.sh"
+bash -n "${ROOT_DIR}/k8s/scripts/ensure-dev-port-forward.sh"
 bash -n "${ROOT_DIR}/k8s/scripts/open-dev.sh"
 bash -n "${ROOT_DIR}/scripts/dev/redeploy.sh"
 bash -n "${ROOT_DIR}/scripts/dev/verify.sh"
