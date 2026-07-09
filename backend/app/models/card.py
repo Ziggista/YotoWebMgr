@@ -46,3 +46,21 @@ class PhysicalCard(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+
+
+class CardAssignmentEvent(Base):
+    __tablename__ = "card_assignment_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    card_id: Mapped[int] = mapped_column(ForeignKey("physical_cards.id"), index=True)
+    event_type: Mapped[str] = mapped_column(String(120), index=True)
+    previous_library_item_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    library_item_id: Mapped[int | None] = mapped_column(ForeignKey("library_items.id"), nullable=True, index=True)
+    job_id: Mapped[int | None] = mapped_column(ForeignKey("jobs.id"), nullable=True, index=True)
+    previous_status: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    new_status: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    previous_yoto_playlist_uri: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    yoto_playlist_uri: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    summary: Mapped[str] = mapped_column(String(240))
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

@@ -15,6 +15,7 @@ from app.db.session import get_db_session
 from app.main import app
 from app.models import (
     ArtworkAsset,
+    CardAssignmentEvent,
     Job,
     LibraryItem,
     PhysicalCard,
@@ -292,6 +293,7 @@ async def test_library_item_can_be_linked_to_card(api_client: AsyncClient) -> No
             f"/api/v1/library/{upload.json()['related_library_item_id']}/link-card",
             json={"card_id": card.json()["id"]},
         )
+        history = await client.get(f"/api/v1/cards/{card.json()['id']}/history")
 
     assert linked.status_code == 202
     payload = linked.json()
@@ -302,6 +304,10 @@ async def test_library_item_can_be_linked_to_card(api_client: AsyncClient) -> No
     assert payload["card"]["pending_job_id"] == payload["job"]["id"]
     assert payload["card"]["status"] == "upload_queued"
     assert payload["card"]["ready_to_link_in_app"] is True
+    assert history.status_code == 200
+    assert history.json()[0]["event_type"] == "link_queued"
+    assert history.json()[0]["library_item_id"] == upload.json()["related_library_item_id"]
+    assert history.json()[0]["job_id"] == payload["job"]["id"]
 
 
 async def test_library_item_link_queues_split_plan_when_source_exceeds_target(

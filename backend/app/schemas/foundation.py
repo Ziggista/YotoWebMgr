@@ -431,6 +431,22 @@ class CardResponse(BaseModel):
     created_at: datetime
 
 
+class CardAssignmentEventResponse(BaseModel):
+    id: int
+    card_id: int
+    event_type: str
+    previous_library_item_id: int | None
+    library_item_id: int | None
+    job_id: int | None
+    previous_status: str | None
+    new_status: str | None
+    previous_yoto_playlist_uri: str | None
+    yoto_playlist_uri: str | None
+    summary: str
+    created_by_user_id: int | None
+    created_at: datetime
+
+
 class LinkCardRequest(BaseModel):
     card_id: int = Field(gt=0)
 

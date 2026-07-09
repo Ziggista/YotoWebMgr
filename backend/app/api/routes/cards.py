@@ -6,8 +6,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db_session
-from app.models import PhysicalCard
-from app.schemas.foundation import CardCreate, CardResponse
+from app.models import CardAssignmentEvent, PhysicalCard
+from app.schemas.foundation import CardAssignmentEventResponse, CardCreate, CardResponse
 
 
 router = APIRouter()
@@ -47,10 +47,30 @@ def _build_card_response(card: PhysicalCard) -> CardResponse:
     )
 
 
+def _build_card_assignment_event_response(event: CardAssignmentEvent) -> CardAssignmentEventResponse:
+    return CardAssignmentEventResponse.model_validate(event, from_attributes=True)
+
+
 @router.get("", response_model=list[CardResponse])
 async def list_cards(db: Annotated[Session, Depends(get_db_session)]) -> list[CardResponse]:
     query = select(PhysicalCard).order_by(PhysicalCard.card_code.asc(), PhysicalCard.id.asc())
     return [_build_card_response(card) for card in db.scalars(query)]
+
+
+@router.get("/{card_id}/history", response_model=list[CardAssignmentEventResponse])
+async def list_card_assignment_history(
+    card_id: int,
+    db: Annotated[Session, Depends(get_db_session)],
+) -> list[CardAssignmentEventResponse]:
+    card = db.get(PhysicalCard, card_id)
+    if card is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Card not found")
+    events = db.scalars(
+        select(CardAssignmentEvent)
+        .where(CardAssignmentEvent.card_id == card.id)
+        .order_by(CardAssignmentEvent.created_at.desc(), CardAssignmentEvent.id.desc())
+    )
+    return [_build_card_assignment_event_response(event) for event in events]
 
 
 @router.post("", response_model=CardResponse, status_code=201)

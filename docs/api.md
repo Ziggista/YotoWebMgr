@@ -41,6 +41,16 @@ Tags are reusable household labels with normalized names and optional colors. Li
 their assigned tags in list/detail responses and can be filtered with `tag_id`, `content_type`, and
 `search` query parameters on `GET /api/v1/library`.
 
+## Cards
+
+- `GET /api/v1/cards`
+- `POST /api/v1/cards`
+- `GET /api/v1/cards/{card_id}/history`
+
+Card link operations append immutable assignment history events. The history captures previous and
+new library item/status values, related worker job IDs, playlist URIs when known, and a user-facing
+summary so card restore workflows can be built without overwriting past state.
+
 ## Yoto Playlist Drafts
 
 - `GET /api/v1/yoto/config`

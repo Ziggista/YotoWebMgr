@@ -300,6 +300,22 @@ export interface PhysicalCard {
   created_at: string;
 }
 
+export interface CardAssignmentEvent {
+  id: number;
+  card_id: number;
+  event_type: string;
+  previous_library_item_id: number | null;
+  library_item_id: number | null;
+  job_id: number | null;
+  previous_status: string | null;
+  new_status: string | null;
+  previous_yoto_playlist_uri: string | null;
+  yoto_playlist_uri: string | null;
+  summary: string;
+  created_by_user_id: number | null;
+  created_at: string;
+}
+
 export interface LinkCardResponse {
   library_item: LibraryItem;
   card: PhysicalCard;
@@ -777,6 +793,14 @@ export async function createCard(payload: {
     throw new Error(response.status === 409 ? "That card ID already exists." : "Failed to create card.");
   }
   return response.json() as Promise<PhysicalCard>;
+}
+
+export async function fetchCardHistory(cardId: number): Promise<CardAssignmentEvent[]> {
+  const response = await fetch(`/api/v1/cards/${cardId}/history`);
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to load card history."));
+  }
+  return response.json() as Promise<CardAssignmentEvent[]>;
 }
 
 export async function linkLibraryItemToCard(

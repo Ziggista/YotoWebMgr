@@ -17,6 +17,8 @@ YotoWebMgr is split into four main runtime areas:
 - Integrations such as Yoto and Plex are isolated behind service layers.
 - Tags are reusable records with generic assignments so the same tag model can apply to library
   items first and later extend to cards, playlists, or versions without duplicating tag names.
+- Physical cards keep a mutable current assignment for quick display plus immutable assignment
+  events for audit/history and future restore workflows.
 
 ## Initial Runtime Topology
 

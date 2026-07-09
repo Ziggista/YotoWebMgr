@@ -1,6 +1,7 @@
 from app.db.base import Base
 from app.models import (
     ArtworkAsset,
+    CardAssignmentEvent,
     CardPlanPart,
     CardPlanTrackAssignment,
     ImportRequest,
@@ -33,6 +34,7 @@ def test_user_model_is_registered_in_metadata() -> None:
 def test_foundation_models_are_registered_in_metadata() -> None:
     assert LibraryItem.__tablename__ in Base.metadata.tables
     assert ArtworkAsset.__tablename__ in Base.metadata.tables
+    assert CardAssignmentEvent.__tablename__ in Base.metadata.tables
     assert CardPlanPart.__tablename__ in Base.metadata.tables
     assert CardPlanTrackAssignment.__tablename__ in Base.metadata.tables
     assert ImportRequest.__tablename__ in Base.metadata.tables

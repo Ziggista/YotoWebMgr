@@ -15,6 +15,7 @@ from app.core.config import get_settings
 from app.db.session import get_db_session
 from app.models import (
     ArtworkAsset,
+    CardAssignmentEvent,
     CardPlanPart,
     CardPlanTrackAssignment,
     ImportRequest,
@@ -1415,6 +1416,9 @@ async def link_library_item_to_card(
     if card is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Card not found")
 
+    previous_library_item_id = card.current_library_item_id
+    previous_status = card.status
+    previous_yoto_playlist_uri = card.yoto_playlist_uri
     source_size_mb = _source_size_mb(db, item)
     requires_split_plan = source_size_mb is not None and source_size_mb > _target_size_mb(db)
     job_type = "build_card_plan" if requires_split_plan else "upload_yoto_asset"
@@ -1446,6 +1450,20 @@ async def link_library_item_to_card(
     db.add(item)
     db.add(card)
     db.flush()
+    db.add(
+        CardAssignmentEvent(
+            card_id=card.id,
+            event_type="link_queued",
+            previous_library_item_id=previous_library_item_id,
+            library_item_id=item.id,
+            job_id=job.id,
+            previous_status=previous_status,
+            new_status=card.status,
+            previous_yoto_playlist_uri=previous_yoto_playlist_uri,
+            yoto_playlist_uri=card.yoto_playlist_uri,
+            summary=f"Queued {card.display_name} for {item.title}.",
+        )
+    )
     _record_library_version(db, item, "card_link_queued", f"Queued link to {card.display_name}.")
     db.commit()
     db.refresh(item)
