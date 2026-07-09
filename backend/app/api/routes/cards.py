@@ -57,6 +57,17 @@ async def list_cards(db: Annotated[Session, Depends(get_db_session)]) -> list[Ca
     return [_build_card_response(card) for card in db.scalars(query)]
 
 
+@router.get("/{card_id}", response_model=CardResponse)
+async def get_card(
+    card_id: int,
+    db: Annotated[Session, Depends(get_db_session)],
+) -> CardResponse:
+    card = db.get(PhysicalCard, card_id)
+    if card is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Card not found")
+    return _build_card_response(card)
+
+
 @router.get("/{card_id}/history", response_model=list[CardAssignmentEventResponse])
 async def list_card_assignment_history(
     card_id: int,

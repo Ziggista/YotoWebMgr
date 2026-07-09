@@ -438,6 +438,7 @@ async def test_card_inventory_accepts_nfc_workflow_fields(
             "/api/v1/cards",
             json={"card_code": "CARD01", "display_name": "Duplicate"},
         )
+        fetched = await client.get(f"/api/v1/cards/{created.json()['id']}")
         listed = await client.get("/api/v1/cards")
 
     assert created.status_code == 201
@@ -453,6 +454,8 @@ async def test_card_inventory_accepts_nfc_workflow_fields(
     assert payload["overwrite_ok"] is True
     assert payload["downloaded_to_player_confirmed"] is True
     assert duplicate.status_code == 409
+    assert fetched.status_code == 200
+    assert fetched.json()["display_name"] == "Card 01"
     assert listed.status_code == 200
     assert listed.json()[0]["display_name"] == "Card 01"
     assert db_session.scalar(select(PhysicalCard).where(PhysicalCard.card_code == "CARD01")) is not None

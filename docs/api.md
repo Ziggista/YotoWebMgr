@@ -45,11 +45,14 @@ their assigned tags in list/detail responses and can be filtered with `tag_id`, 
 
 - `GET /api/v1/cards`
 - `POST /api/v1/cards`
+- `GET /api/v1/cards/{card_id}`
 - `GET /api/v1/cards/{card_id}/history`
 
 Card link operations append immutable assignment history events. The history captures previous and
 new library item/status values, related worker job IDs, playlist URIs when known, and a user-facing
 summary so card restore workflows can be built without overwriting past state.
+The frontend card detail page uses these endpoints to show identifiers, NFC metadata, workflow
+flags, notes, and assignment events for a single physical card.
 
 ## Yoto Playlist Drafts
 

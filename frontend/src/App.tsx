@@ -5,6 +5,7 @@ import "react-h5-audio-player/lib/styles.css";
 import {
   AppSettings,
   AuthProvidersResponse,
+  CardAssignmentEvent,
   CardPlan,
   ImportSourceInfo,
   ImportRequest,
@@ -27,6 +28,8 @@ import {
   createRadioStreamTrack,
   createSplitPoint,
   disconnectYotoCredentials,
+  fetchCard,
+  fetchCardHistory,
   fetchCards,
   fetchCardPlan,
   fetchImportSources,
@@ -2125,7 +2128,9 @@ function CardsPage() {
           cards.map((card) => (
             <article className="list-row" key={card.id}>
               <div>
-                <h3>{card.display_name}</h3>
+                <h3>
+                  <Link to={`/cards/${card.id}`}>{card.display_name}</Link>
+                </h3>
                 <p className="muted">
                   {card.card_code} · {card.card_kind} · {card.status}
                 </p>
@@ -2146,6 +2151,141 @@ function CardsPage() {
               </div>
             </article>
           ))
+        )}
+      </div>
+    </section>
+  );
+}
+
+function CardDetailPage() {
+  const { cardId } = useParams();
+  const numericCardId = Number(cardId);
+  const [card, setCard] = useState<PhysicalCard | null>(null);
+  const [history, setHistory] = useState<CardAssignmentEvent[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!Number.isFinite(numericCardId)) {
+      setError("Invalid card.");
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    void Promise.all([fetchCard(numericCardId), fetchCardHistory(numericCardId)])
+      .then(([nextCard, nextHistory]) => {
+        setCard(nextCard);
+        setHistory(nextHistory);
+      })
+      .catch((loadError) =>
+        setError(loadError instanceof Error ? loadError.message : "Failed to load card."),
+      )
+      .finally(() => setLoading(false));
+  }, [numericCardId]);
+
+  if (loading) {
+    return (
+      <section className="panel">
+        <p className="eyebrow">Cards</p>
+        <h2>Loading card</h2>
+      </section>
+    );
+  }
+
+  if (error || !card) {
+    return (
+      <section className="panel">
+        <p className="eyebrow">Cards</p>
+        <h2>Card detail</h2>
+        <p className="auth-error">{error ?? "Card not found."}</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="panel">
+      <div className="section-header">
+        <div>
+          <p className="eyebrow">Card</p>
+          <h2>{card.display_name}</h2>
+          <p className="muted">
+            {card.card_code} · {card.card_kind} · {card.status}
+          </p>
+        </div>
+        <Link className="secondary-button" to="/cards">
+          Back to cards
+        </Link>
+      </div>
+
+      <div className="detail-grid">
+        <article className="detail-block">
+          <h3>Identifiers</h3>
+          <p className="muted">Programmable ID: {card.programmable_id ?? "Not recorded"}</p>
+          <p className="muted">Playlist URI: {card.yoto_playlist_uri ?? "Not linked"}</p>
+          <p className="muted">
+            Current library item: {card.current_library_item_id ?? "None"} · Pending job:{" "}
+            {card.pending_job_id ?? "None"}
+          </p>
+        </article>
+        <article className="detail-block">
+          <h3>NFC details</h3>
+          <p className="muted">{card.nfc_technology ?? "NFC technology unknown"}</p>
+          <p className="muted">
+            {card.chip_type ?? "Chip unknown"} ·{" "}
+            {card.memory_size_bytes ? `${card.memory_size_bytes} bytes` : "Memory unknown"}
+          </p>
+          <p className="muted">Programming app: {card.programming_app ?? "Not recorded"}</p>
+        </article>
+        <article className="detail-block">
+          <h3>Workflow</h3>
+          <div className="tag-chip-row">
+            {card.ndef_prepared ? <span className="status-pill">NDEF prepared</span> : null}
+            {card.ready_to_link_in_app ? <span className="status-pill">Ready to link</span> : null}
+            {card.linked_manually ? <span className="status-pill">Linked manually</span> : null}
+            {card.overwrite_ok ? <span className="status-pill">Overwrite OK</span> : null}
+            {card.needs_player_download ? <span className="status-pill">Needs download</span> : null}
+            {card.downloaded_to_player_confirmed ? <span className="status-pill">Downloaded</span> : null}
+            {card.tested ? <span className="status-pill status-pill-muted">Tested</span> : null}
+          </div>
+        </article>
+        <article className="detail-block">
+          <h3>Notes</h3>
+          <p className="muted">{card.notes ?? "No notes recorded."}</p>
+          <p className="muted">Source card: {card.source_card_code ?? "None"}</p>
+          <p className="muted">Reusable transfer card: {card.is_reusable_transfer_card ? "Yes" : "No"}</p>
+        </article>
+      </div>
+
+      <div className="detail-section">
+        <div className="section-header">
+          <div>
+            <p className="eyebrow">History</p>
+            <h2>Assignment history</h2>
+          </div>
+          <span className="status-pill">{history.length} events</span>
+        </div>
+        {history.length === 0 ? (
+          <EmptyState message="No assignment history yet." />
+        ) : (
+          <div className="compact-table">
+            {history.map((event) => (
+              <div className="compact-table-row" key={event.id}>
+                <span className="status-pill status-pill-muted">{event.event_type}</span>
+                <div>
+                  <strong>{event.summary}</strong>
+                  <p className="muted">
+                    Library item {event.previous_library_item_id ?? "none"} to{" "}
+                    {event.library_item_id ?? "none"} · Job {event.job_id ?? "none"}
+                  </p>
+                  <p className="muted">
+                    {event.previous_status ?? "none"} to {event.new_status ?? "none"} ·{" "}
+                    {new Date(event.created_at).toLocaleString()}
+                  </p>
+                </div>
+                <span className="muted">{event.yoto_playlist_uri ?? "No playlist URI"}</span>
+              </div>
+            ))}
+          </div>
         )}
       </div>
     </section>
@@ -2700,6 +2840,10 @@ export default function App() {
           <Route
             path="/cards"
             element={session ? <CardsPage /> : <PlaceholderPage title="Home" />}
+          />
+          <Route
+            path="/cards/:cardId"
+            element={session ? <CardDetailPage /> : <PlaceholderPage title="Home" />}
           />
           <Route
             path="/jobs"

@@ -846,6 +846,14 @@ export async function fetchCards(): Promise<PhysicalCard[]> {
   return response.json() as Promise<PhysicalCard[]>;
 }
 
+export async function fetchCard(cardId: number): Promise<PhysicalCard> {
+  const response = await fetch(`/api/v1/cards/${cardId}`);
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to load card."));
+  }
+  return response.json() as Promise<PhysicalCard>;
+}
+
 export async function createCard(payload: {
   card_code: string;
   programmable_id?: string | null;

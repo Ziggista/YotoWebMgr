@@ -673,6 +673,32 @@ a {
   margin: 18px 0;
 }
 
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin: 18px 0;
+}
+
+.detail-block {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-height: 120px;
+  padding: 16px;
+  border-radius: 8px;
+  background: rgba(6, 22, 26, 0.52);
+  border: 1px solid rgba(255, 240, 214, 0.12);
+}
+
+.detail-block h3 {
+  margin: 0;
+}
+
+.detail-block p {
+  margin: 0;
+}
+
 .summary-tile {
   display: grid;
   gap: 8px;
