@@ -47,6 +47,10 @@ The API exposes local-only Yoto scaffolding endpoints:
   URL. It does not exchange a code or call Yoto.
 - `POST /api/v1/yoto/credentials/disconnect` clears local token references and marks the stored
   credential state as `revoked`. It does not make a live revoke call.
+- `GET /api/v1/yoto/playlists/{playlist_id}/versions` lists immutable local payload snapshots for a
+  queued Yoto playlist draft.
+- `POST /api/v1/yoto/playlists/{playlist_id}/versions/{version_id}/restore` restores a draft to a
+  prior local snapshot and records a newer `restored` version.
 - `GET /api/v1/yoto/library/{item_id}/playlist-preview` maps a local library item and its tracks
   into a Yoto-shaped playlist payload without making a live Yoto API call.
 - `GET /api/v1/yoto/library/{item_id}/playlists` lists stored local playlist drafts.
@@ -62,6 +66,10 @@ The credential scaffold stores only connection metadata such as account label, s
 account fields, authorization URL, OAuth state, expiry timestamps, status, and an optional
 `token_storage_ref`. Actual refresh tokens, access tokens, client secrets, or encrypted token
 material must live in Kubernetes Secrets or a future encrypted token store.
+
+Playlist versions are local payload snapshots only. A restore changes the local draft that future
+jobs will use, but it does not alter any remote Yoto playlist until the live upload/update mapping
+is implemented and explicitly queued.
 
 ## Physical Card Inventory
 

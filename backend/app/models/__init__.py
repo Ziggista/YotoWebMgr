@@ -13,6 +13,7 @@ from app.models.playlist import (
     PodcastFeed,
     SplitPoint,
     YotoPlaylistDraft,
+    YotoPlaylistVersion,
 )
 from app.models.processed_asset import ProcessedAsset
 from app.models.setting import Setting
@@ -41,5 +42,6 @@ __all__ = [
     "User",
     "VersionEvent",
     "YotoPlaylistDraft",
+    "YotoPlaylistVersion",
     "YotoCredentialState",
 ]

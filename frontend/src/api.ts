@@ -337,6 +337,19 @@ export interface YotoPlaylistDraft {
   created_at: string;
 }
 
+export interface YotoPlaylistVersion {
+  id: number;
+  playlist_draft_id: number;
+  library_item_id: number;
+  version_number: number;
+  title: string;
+  status: string;
+  summary: string;
+  source_event: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+}
+
 export interface QueueYotoPlaylistResponse {
   playlist: YotoPlaylistDraft;
   job: Job;
@@ -692,6 +705,27 @@ export async function queueYotoPlaylist(itemId: number): Promise<QueueYotoPlayli
     throw new Error(await errorMessage(response, "Failed to queue Yoto playlist."));
   }
   return response.json() as Promise<QueueYotoPlaylistResponse>;
+}
+
+export async function fetchYotoPlaylistVersions(playlistId: number): Promise<YotoPlaylistVersion[]> {
+  const response = await fetch(`/api/v1/yoto/playlists/${playlistId}/versions`);
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to load Yoto playlist versions."));
+  }
+  return response.json() as Promise<YotoPlaylistVersion[]>;
+}
+
+export async function restoreYotoPlaylistVersion(
+  playlistId: number,
+  versionId: number,
+): Promise<YotoPlaylistVersion> {
+  const response = await fetch(`/api/v1/yoto/playlists/${playlistId}/versions/${versionId}/restore`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to restore Yoto playlist version."));
+  }
+  return response.json() as Promise<YotoPlaylistVersion>;
 }
 
 export async function fetchYotoCredentialStatus(): Promise<YotoCredentialStatus> {

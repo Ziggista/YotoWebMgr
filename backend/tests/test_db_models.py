@@ -20,6 +20,7 @@ from app.models import (
     VersionEvent,
     YotoCredentialState,
     YotoPlaylistDraft,
+    YotoPlaylistVersion,
 )
 
 
@@ -52,3 +53,4 @@ def test_foundation_models_are_registered_in_metadata() -> None:
     assert VersionEvent.__tablename__ in Base.metadata.tables
     assert YotoCredentialState.__tablename__ in Base.metadata.tables
     assert YotoPlaylistDraft.__tablename__ in Base.metadata.tables
+    assert YotoPlaylistVersion.__tablename__ in Base.metadata.tables

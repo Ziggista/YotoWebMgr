@@ -516,6 +516,19 @@ class YotoPlaylistDraftResponse(BaseModel):
     created_at: datetime
 
 
+class YotoPlaylistVersionResponse(BaseModel):
+    id: int
+    playlist_draft_id: int
+    library_item_id: int
+    version_number: int
+    title: str
+    status: str
+    summary: str
+    source_event: str
+    payload: dict[str, object]
+    created_at: datetime
+
+
 class QueueYotoPlaylistResponse(BaseModel):
     playlist: YotoPlaylistDraftResponse
     job: JobResponse

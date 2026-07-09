@@ -57,6 +57,8 @@ summary so card restore workflows can be built without overwriting past state.
 - `GET /api/v1/yoto/credentials/status`
 - `POST /api/v1/yoto/credentials/start`
 - `POST /api/v1/yoto/credentials/disconnect`
+- `GET /api/v1/yoto/playlists/{playlist_id}/versions`
+- `POST /api/v1/yoto/playlists/{playlist_id}/versions/{version_id}/restore`
 - `GET /api/v1/yoto/library/{item_id}/playlist-preview`
 - `GET /api/v1/yoto/library/{item_id}/playlists`
 - `POST /api/v1/yoto/library/{item_id}/playlists`
@@ -69,6 +71,10 @@ The playlist preview maps local library tracks into the Yoto-shaped payload with
 Posting to `playlists` stores that payload as a durable local draft and queues a `create_yoto_playlist`
 job. Until the confirmed live Yoto upload flow is implemented, the worker marks the draft ready for
 manual linking rather than calling the remote API.
+
+Each queued playlist draft records immutable playlist version snapshots. Restoring a playlist
+version updates the local draft payload and creates a newer `restored` version; older versions remain
+available.
 
 ## Card Planning
 

@@ -9,7 +9,16 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db_session
 from app.integrations.yoto.playlist import build_playlist_preview
-from app.models import Job, LibraryItem, PlaylistTrack, Setting, VersionEvent, YotoCredentialState, YotoPlaylistDraft
+from app.models import (
+    Job,
+    LibraryItem,
+    PlaylistTrack,
+    Setting,
+    VersionEvent,
+    YotoCredentialState,
+    YotoPlaylistDraft,
+    YotoPlaylistVersion,
+)
 from app.schemas.foundation import (
     JobResponse,
     QueueYotoPlaylistResponse,
@@ -19,6 +28,7 @@ from app.schemas.foundation import (
     YotoCredentialStatusResponse,
     YotoPlaylistDraftResponse,
     YotoPlaylistPreviewResponse,
+    YotoPlaylistVersionResponse,
 )
 
 
@@ -126,6 +136,25 @@ def _draft_response(draft: YotoPlaylistDraft) -> YotoPlaylistDraftResponse:
     )
 
 
+def _playlist_version_response(version: YotoPlaylistVersion) -> YotoPlaylistVersionResponse:
+    try:
+        payload = json.loads(version.payload_json)
+    except json.JSONDecodeError:
+        payload = {"error": "Stored playlist version payload is not valid JSON."}
+    return YotoPlaylistVersionResponse(
+        id=version.id,
+        playlist_draft_id=version.playlist_draft_id,
+        library_item_id=version.library_item_id,
+        version_number=version.version_number,
+        title=version.title,
+        status=version.status,
+        summary=version.summary,
+        source_event=version.source_event,
+        payload=payload if isinstance(payload, dict) else {"payload": payload},
+        created_at=version.created_at,
+    )
+
+
 def _next_library_version(db: Session, item_id: int) -> int:
     latest_version = db.scalar(
         select(func.max(VersionEvent.version_number))
@@ -133,6 +162,35 @@ def _next_library_version(db: Session, item_id: int) -> int:
         .where(VersionEvent.entity_id == item_id)
     )
     return (latest_version or 0) + 1
+
+
+def _next_playlist_version(db: Session, draft_id: int) -> int:
+    latest_version = db.scalar(
+        select(func.max(YotoPlaylistVersion.version_number)).where(YotoPlaylistVersion.playlist_draft_id == draft_id)
+    )
+    return (latest_version or 0) + 1
+
+
+def _record_playlist_version(
+    db: Session,
+    draft: YotoPlaylistDraft,
+    *,
+    status: str,
+    summary: str,
+    source_event: str,
+) -> YotoPlaylistVersion:
+    version = YotoPlaylistVersion(
+        playlist_draft_id=draft.id,
+        library_item_id=draft.library_item_id,
+        version_number=_next_playlist_version(db, draft.id),
+        title=draft.title,
+        status=status,
+        summary=summary,
+        source_event=source_event,
+        payload_json=draft.payload_json,
+    )
+    db.add(version)
+    return version
 
 
 @router.get("/credentials/status", response_model=YotoCredentialStatusResponse)
@@ -201,6 +259,55 @@ async def get_yoto_config(db: Annotated[Session, Depends(get_db_session)]) -> Yo
     )
 
 
+@router.get("/playlists/{playlist_id}/versions", response_model=list[YotoPlaylistVersionResponse])
+async def list_yoto_playlist_versions(
+    playlist_id: int,
+    db: Annotated[Session, Depends(get_db_session)],
+) -> list[YotoPlaylistVersionResponse]:
+    draft = db.get(YotoPlaylistDraft, playlist_id)
+    if draft is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Yoto playlist draft not found")
+    versions = db.scalars(
+        select(YotoPlaylistVersion)
+        .where(YotoPlaylistVersion.playlist_draft_id == draft.id)
+        .order_by(YotoPlaylistVersion.version_number.desc(), YotoPlaylistVersion.id.desc())
+    )
+    return [_playlist_version_response(version) for version in versions]
+
+
+@router.post(
+    "/playlists/{playlist_id}/versions/{version_id}/restore",
+    response_model=YotoPlaylistVersionResponse,
+    status_code=201,
+)
+async def restore_yoto_playlist_version(
+    playlist_id: int,
+    version_id: int,
+    db: Annotated[Session, Depends(get_db_session)],
+) -> YotoPlaylistVersionResponse:
+    draft = db.get(YotoPlaylistDraft, playlist_id)
+    if draft is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Yoto playlist draft not found")
+    source_version = db.get(YotoPlaylistVersion, version_id)
+    if source_version is None or source_version.playlist_draft_id != draft.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Yoto playlist version not found")
+
+    draft.title = source_version.title
+    draft.payload_json = source_version.payload_json
+    draft.status = "restored"
+    draft.last_error = None
+    restored = _record_playlist_version(
+        db,
+        draft,
+        status="restored",
+        summary=f"Restored from playlist version {source_version.version_number}.",
+        source_event="playlist_version_restored",
+    )
+    db.commit()
+    db.refresh(restored)
+    return _playlist_version_response(restored)
+
+
 @router.get("/library/{item_id}/playlist-preview", response_model=YotoPlaylistPreviewResponse)
 async def preview_yoto_playlist(
     item_id: int,
@@ -267,6 +374,13 @@ async def queue_yoto_playlist(
     db.flush()
 
     draft.related_job_id = job.id
+    _record_playlist_version(
+        db,
+        draft,
+        status="queued",
+        summary="Initial local Yoto playlist draft.",
+        source_event="yoto_playlist_queued",
+    )
     item.status = "yoto_playlist_queued"
     item.readiness_status = "yoto_playlist_queued"
     item.readiness_detail = "Yoto playlist draft queued. Live upload will be added behind this job."

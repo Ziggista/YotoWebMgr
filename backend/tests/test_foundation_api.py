@@ -28,6 +28,7 @@ from app.models import (
     VersionEvent,
     YotoCredentialState,
     YotoPlaylistDraft,
+    YotoPlaylistVersion,
 )
 
 
@@ -1044,3 +1045,56 @@ async def test_yoto_playlist_queue_persists_draft_and_job(
     assert draft.related_job_id == job.id
     assert item is not None
     assert item.status == "yoto_playlist_queued"
+
+
+async def test_yoto_playlist_versions_are_recorded_and_restorable(
+    api_client: AsyncClient,
+    db_session: Session,
+) -> None:
+    async with api_client as client:
+        created = await client.post(
+            "/api/v1/library",
+            json={"title": "Versioned Mix", "content_type": "Custom Playlist"},
+        )
+        item_id = created.json()["id"]
+        await client.post(
+            f"/api/v1/library/{item_id}/tracks",
+            json={"title": "First", "track_number": 1, "duration_seconds": 60},
+        )
+        queued = await client.post(f"/api/v1/yoto/library/{item_id}/playlists")
+        playlist_id = queued.json()["playlist"]["id"]
+        versions = await client.get(f"/api/v1/yoto/playlists/{playlist_id}/versions")
+
+        draft = db_session.get(YotoPlaylistDraft, playlist_id)
+        assert draft is not None
+        draft.title = "Changed Mix"
+        draft.payload_json = '{"title":"Changed Mix","chapters":[]}'
+        db_session.add(
+            YotoPlaylistVersion(
+                playlist_draft_id=draft.id,
+                library_item_id=item_id,
+                version_number=2,
+                title=draft.title,
+                status="edited",
+                summary="Edited locally.",
+                source_event="manual_test_edit",
+                payload_json=draft.payload_json,
+            )
+        )
+        db_session.commit()
+
+        restored = await client.post(f"/api/v1/yoto/playlists/{playlist_id}/versions/{versions.json()[0]['id']}/restore")
+        restored_versions = await client.get(f"/api/v1/yoto/playlists/{playlist_id}/versions")
+
+    assert versions.status_code == 200
+    assert versions.json()[0]["version_number"] == 1
+    assert versions.json()[0]["payload"]["title"] == "Versioned Mix"
+    assert restored.status_code == 201
+    assert restored.json()["version_number"] == 3
+    assert restored.json()["status"] == "restored"
+    assert restored.json()["payload"]["title"] == "Versioned Mix"
+    assert restored_versions.json()[0]["version_number"] == 3
+
+    refreshed_draft = db_session.get(YotoPlaylistDraft, playlist_id)
+    assert refreshed_draft is not None
+    assert refreshed_draft.title == "Versioned Mix"

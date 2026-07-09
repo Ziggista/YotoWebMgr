@@ -549,6 +549,17 @@ a {
   gap: 10px;
 }
 
+.inline-button {
+  margin-left: 8px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 240, 214, 0.18);
+  background: rgba(255, 248, 232, 0.08);
+  color: #f4efe6;
+  font: inherit;
+  font-size: 0.85rem;
+}
+
 .ghost-button {
   padding: 12px 14px;
   border-radius: 14px;

@@ -130,3 +130,18 @@ class YotoPlaylistDraft(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+
+
+class YotoPlaylistVersion(Base):
+    __tablename__ = "yoto_playlist_versions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    playlist_draft_id: Mapped[int] = mapped_column(ForeignKey("yoto_playlist_drafts.id"), index=True)
+    library_item_id: Mapped[int] = mapped_column(ForeignKey("library_items.id"), index=True)
+    version_number: Mapped[int] = mapped_column(Integer)
+    title: Mapped[str] = mapped_column(String(240))
+    status: Mapped[str] = mapped_column(String(80), default="snapshot", index=True)
+    summary: Mapped[str] = mapped_column(String(240))
+    source_event: Mapped[str] = mapped_column(String(120), default="playlist_snapshot")
+    payload_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

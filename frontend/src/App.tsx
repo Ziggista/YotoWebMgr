@@ -18,6 +18,7 @@ import {
   VersionEvent,
   YotoCredentialStatus,
   YotoPlaylistDraft,
+  YotoPlaylistVersion,
   applyTrackIcon,
   createCard,
   createImport,
@@ -40,6 +41,7 @@ import {
   fetchTags,
   fetchYotoCredentialStatus,
   fetchYotoPlaylists,
+  fetchYotoPlaylistVersions,
   hideImport,
   fetchAuthProviders,
   linkLibraryItemToCard,
@@ -49,6 +51,7 @@ import {
   queueLibraryItemProcessing,
   queueYotoPlaylist,
   restoreLibraryItemVersion,
+  restoreYotoPlaylistVersion,
   retryJob,
   saveCardPlan,
   setLibraryItemTags,
@@ -840,6 +843,7 @@ function LibraryDetailPage() {
   const [versions, setVersions] = useState<VersionEvent[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [yotoPlaylists, setYotoPlaylists] = useState<YotoPlaylistDraft[]>([]);
+  const [yotoPlaylistVersions, setYotoPlaylistVersions] = useState<Record<number, YotoPlaylistVersion[]>>({});
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -872,6 +876,10 @@ function LibraryDetailPage() {
     setVersions(nextVersions);
     setJobs(nextJobs.filter((job) => job.related_library_item_id === numericItemId));
     setYotoPlaylists(nextYotoPlaylists);
+    const versionEntries = await Promise.all(
+      nextYotoPlaylists.map(async (playlist) => [playlist.id, await fetchYotoPlaylistVersions(playlist.id)] as const),
+    );
+    setYotoPlaylistVersions(Object.fromEntries(versionEntries));
   }
 
   useEffect(() => {
@@ -910,6 +918,16 @@ function LibraryDetailPage() {
       await refreshPage();
     } catch (queueError) {
       setError(queueError instanceof Error ? queueError.message : "Yoto playlist queue failed.");
+    }
+  }
+
+  async function handleRestoreYotoPlaylistVersion(playlistId: number, versionId: number) {
+    setError(null);
+    try {
+      await restoreYotoPlaylistVersion(playlistId, versionId);
+      await refreshPage();
+    } catch (restoreError) {
+      setError(restoreError instanceof Error ? restoreError.message : "Yoto playlist restore failed.");
     }
   }
 
@@ -1336,6 +1354,20 @@ function LibraryDetailPage() {
                     Job {playlist.related_job_id ?? "pending"} ·{" "}
                     {playlist.remote_playlist_uri ?? "Manual link pending"}
                   </p>
+                  {(yotoPlaylistVersions[playlist.id] ?? []).slice(0, 3).map((version) => (
+                    <p className="muted" key={version.id}>
+                      Version {version.version_number}: {version.summary}
+                      {version.status !== "restored" ? (
+                        <button
+                          className="inline-button"
+                          onClick={() => void handleRestoreYotoPlaylistVersion(playlist.id, version.id)}
+                          type="button"
+                        >
+                          Restore
+                        </button>
+                      ) : null}
+                    </p>
+                  ))}
                 </div>
                 <span className="muted">
                   {Array.isArray(playlist.payload.chapters) ? playlist.payload.chapters.length : 0} tracks
