@@ -134,6 +134,7 @@ function LibraryPage() {
   const [coverArtPath, setCoverArtPath] = useState("");
   const [coverArtFile, setCoverArtFile] = useState<File | null>(null);
   const [trackIconPath, setTrackIconPath] = useState("");
+  const [bulkTrackBehavior, setBulkTrackBehavior] = useState("continue");
   const [radioForm, setRadioForm] = useState({ title: "", stream_url: "", icon_path: "" });
   const [podcastForm, setPodcastForm] = useState({ title: "", rss_url: "" });
   const [splitForm, setSplitForm] = useState({ timestamp_seconds: "", title: "", part_number: "" });
@@ -186,6 +187,7 @@ function LibraryPage() {
       setCoverArtPath(nextDetail.item.cover_art_path ?? "");
       setCoverArtFile(null);
       setTrackIconPath("");
+      setBulkTrackBehavior("continue");
       setSelectedTagIds(nextDetail.item.tags.map((tag) => tag.id));
       setRadioForm({ title: "", stream_url: "", icon_path: "" });
       setPodcastForm({ title: "", rss_url: "" });
@@ -283,6 +285,8 @@ function LibraryPage() {
     if (!detail) return;
     const formData = new FormData(event.currentTarget);
     const durationValue = String(formData.get("duration_seconds") ?? "");
+    const startValue = String(formData.get("source_start_seconds") ?? "");
+    const endValue = String(formData.get("source_end_seconds") ?? "");
     const sourceUrl = String(formData.get("source_url") ?? "").trim();
     const streamUrl = String(formData.get("stream_url") ?? "").trim();
 
@@ -291,6 +295,8 @@ function LibraryPage() {
       await updatePlaylistTrack(detail.item.id, trackId, {
         title: String(formData.get("title") ?? ""),
         source_url: sourceUrl || null,
+        source_start_seconds: startValue ? Number(startValue) : null,
+        source_end_seconds: endValue ? Number(endValue) : null,
         track_number: Number(formData.get("track_number") ?? 1),
         duration_seconds: durationValue ? Number(durationValue) : null,
         icon_path: String(formData.get("icon_path") ?? "").trim() || null,
@@ -301,6 +307,64 @@ function LibraryPage() {
       setLinkMessage("Track saved.");
     } catch (trackError) {
       setError(trackError instanceof Error ? trackError.message : "Failed to save track.");
+    }
+  }
+
+  async function handleMoveTrack(trackId: number, direction: -1 | 1) {
+    if (!detail) return;
+    const sortedTracks = [...detail.tracks].sort((first, second) => first.track_number - second.track_number);
+    const index = sortedTracks.findIndex((track) => track.id === trackId);
+    const swapWith = index + direction;
+    if (index < 0 || swapWith < 0 || swapWith >= sortedTracks.length) {
+      return;
+    }
+    setError(null);
+    try {
+      await Promise.all([
+        updatePlaylistTrack(detail.item.id, sortedTracks[index].id, {
+          track_number: sortedTracks[swapWith].track_number,
+        }),
+        updatePlaylistTrack(detail.item.id, sortedTracks[swapWith].id, {
+          track_number: sortedTracks[index].track_number,
+        }),
+      ]);
+      await refreshDetail(detail.item.id);
+      setLinkMessage("Track order updated.");
+    } catch (moveError) {
+      setError(moveError instanceof Error ? moveError.message : "Failed to move track.");
+    }
+  }
+
+  async function handleRenumberTracks() {
+    if (!detail) return;
+    const sortedTracks = [...detail.tracks].sort((first, second) => first.track_number - second.track_number);
+    setError(null);
+    try {
+      await Promise.all(
+        sortedTracks.map((track, index) =>
+          updatePlaylistTrack(detail.item.id, track.id, { track_number: index + 1 }),
+        ),
+      );
+      await refreshDetail(detail.item.id);
+      setLinkMessage("Tracks renumbered.");
+    } catch (renumberError) {
+      setError(renumberError instanceof Error ? renumberError.message : "Failed to renumber tracks.");
+    }
+  }
+
+  async function handleApplyTrackBehavior() {
+    if (!detail) return;
+    setError(null);
+    try {
+      await Promise.all(
+        detail.tracks.map((track) =>
+          updatePlaylistTrack(detail.item.id, track.id, { track_behavior: bulkTrackBehavior }),
+        ),
+      );
+      await refreshDetail(detail.item.id);
+      setLinkMessage("Track behavior applied.");
+    } catch (behaviorError) {
+      setError(behaviorError instanceof Error ? behaviorError.message : "Failed to apply behavior.");
     }
   }
 
@@ -764,11 +828,32 @@ function LibraryPage() {
               </div>
               <span className="status-pill">{detail.tracks.length} tracks</span>
             </div>
+            {detail.tracks.length > 0 ? (
+              <div className="track-editor-toolbar">
+                <label>
+                  Bulk behavior
+                  <select
+                    onChange={(event) => setBulkTrackBehavior(event.target.value)}
+                    value={bulkTrackBehavior}
+                  >
+                    <option value="continue">Continue</option>
+                    <option value="pause_for_button">Pause for button</option>
+                    <option value="repeat_track">Repeat track</option>
+                  </select>
+                </label>
+                <button className="secondary-button" onClick={() => void handleApplyTrackBehavior()} type="button">
+                  Apply behavior
+                </button>
+                <button className="secondary-button" onClick={() => void handleRenumberTracks()} type="button">
+                  Renumber tracks
+                </button>
+              </div>
+            ) : null}
             {detail.tracks.length === 0 ? (
               <EmptyState message="No tracks yet. Add a radio stream or import a ZIP album to create track rows." />
             ) : (
               <div className="track-editor-list">
-                {detail.tracks.map((track) => (
+                {detail.tracks.map((track, trackIndex) => (
                   <form
                     className="track-editor-row"
                     key={track.id}
@@ -814,6 +899,24 @@ function LibraryPage() {
                       <input defaultValue={track.source_url ?? ""} name="source_url" />
                     </label>
                     <label>
+                      Start seconds
+                      <input
+                        defaultValue={track.source_start_seconds ?? ""}
+                        min="0"
+                        name="source_start_seconds"
+                        type="number"
+                      />
+                    </label>
+                    <label>
+                      End seconds
+                      <input
+                        defaultValue={track.source_end_seconds ?? ""}
+                        min="0"
+                        name="source_end_seconds"
+                        type="number"
+                      />
+                    </label>
+                    <label>
                       Stream URL
                       <input defaultValue={track.stream_url ?? ""} name="stream_url" />
                     </label>
@@ -821,6 +924,22 @@ function LibraryPage() {
                       <span className="status-pill status-pill-muted">
                         {track.is_stream ? "Stream" : `Track ${track.track_number}`}
                       </span>
+                      <button
+                        className="secondary-button"
+                        disabled={trackIndex === 0}
+                        onClick={() => void handleMoveTrack(track.id, -1)}
+                        type="button"
+                      >
+                        Up
+                      </button>
+                      <button
+                        className="secondary-button"
+                        disabled={trackIndex === detail.tracks.length - 1}
+                        onClick={() => void handleMoveTrack(track.id, 1)}
+                        type="button"
+                      >
+                        Down
+                      </button>
                       <button className="primary-button" type="submit">
                         Save track
                       </button>
@@ -1170,6 +1289,7 @@ function LibraryDetailPage() {
                     {formatDuration(track.duration_seconds)} ·{" "}
                     {track.is_stream ? "Stream" : track.track_behavior}
                     {track.source_start_seconds !== null ? ` · starts ${formatDuration(track.source_start_seconds)}` : ""}
+                    {track.source_end_seconds !== null ? ` · ends ${formatDuration(track.source_end_seconds)}` : ""}
                   </p>
                 </div>
                 <span className="muted">{track.icon_path ?? "No icon"}</span>

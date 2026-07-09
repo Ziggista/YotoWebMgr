@@ -38,6 +38,8 @@ The worker handles `inspect_media` and ZIP album inspection jobs with `ffprobe`.
 - Library items move to `inspected` with `needs_card_plan` readiness after successful inspection.
 - Inspection details record duration, codec, channels, and embedded chapter count in the local readiness detail.
 - Chapter rows store source start/end offsets so later processing can create separate Yoto-ready files without altering originals.
+- The frontend track editor can edit source start/end offsets, move tracks up/down, renumber tracks,
+  and apply a shared track behavior across all tracks while preserving the original source media.
 
 ## Processing
 
