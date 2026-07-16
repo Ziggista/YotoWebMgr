@@ -276,6 +276,10 @@ export interface PhysicalCard {
   id: number;
   card_code: string;
   programmable_id: string | null;
+  nfc_serial_number: string | null;
+  ndef_payload_text: string | null;
+  ndef_payload_hex: string | null;
+  scan_source: string | null;
   display_name: string;
   card_kind: string;
   nfc_technology: string | null;
@@ -297,6 +301,7 @@ export interface PhysicalCard {
   status: string;
   label_color: string | null;
   tested: boolean;
+  last_scanned_at: string | null;
   last_linked_at: string | null;
   last_programmed_at: string | null;
   last_tested_at: string | null;
@@ -928,6 +933,10 @@ export async function fetchCard(cardId: number): Promise<PhysicalCard> {
 export async function createCard(payload: {
   card_code: string;
   programmable_id?: string | null;
+  nfc_serial_number?: string | null;
+  ndef_payload_text?: string | null;
+  ndef_payload_hex?: string | null;
+  scan_source?: string | null;
   display_name: string;
   card_kind: string;
   nfc_technology?: string | null;
@@ -947,6 +956,7 @@ export async function createCard(payload: {
   status: string;
   label_color?: string | null;
   tested: boolean;
+  last_scanned_at?: string | null;
   last_linked_at?: string | null;
   notes?: string | null;
 }): Promise<PhysicalCard> {
@@ -966,6 +976,10 @@ export async function updateCard(
   payload: Partial<{
     card_code: string;
     programmable_id: string | null;
+    nfc_serial_number: string | null;
+    ndef_payload_text: string | null;
+    ndef_payload_hex: string | null;
+    scan_source: string | null;
     display_name: string;
     card_kind: string;
     nfc_technology: string | null;
@@ -985,6 +999,7 @@ export async function updateCard(
     status: string;
     label_color: string | null;
     tested: boolean;
+    last_scanned_at: string | null;
     notes: string | null;
   }>,
 ): Promise<PhysicalCard> {

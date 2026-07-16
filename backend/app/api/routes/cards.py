@@ -19,6 +19,10 @@ def _build_card_response(card: PhysicalCard) -> CardResponse:
         id=card.id,
         card_code=card.card_code,
         programmable_id=card.programmable_id,
+        nfc_serial_number=card.nfc_serial_number,
+        ndef_payload_text=card.ndef_payload_text,
+        ndef_payload_hex=card.ndef_payload_hex,
+        scan_source=card.scan_source,
         display_name=card.display_name,
         card_kind=card.card_kind,
         nfc_technology=card.nfc_technology,
@@ -40,6 +44,7 @@ def _build_card_response(card: PhysicalCard) -> CardResponse:
         status=card.status,
         label_color=card.label_color,
         tested=card.tested,
+        last_scanned_at=card.last_scanned_at,
         last_linked_at=card.last_linked_at,
         last_programmed_at=card.last_programmed_at,
         last_tested_at=card.last_tested_at,
@@ -90,7 +95,10 @@ async def create_card(
     payload: CardCreate,
     db: Annotated[Session, Depends(get_db_session)],
 ) -> CardResponse:
-    card = PhysicalCard(**payload.model_dump())
+    card_payload = payload.model_dump()
+    if not card_payload.get("programmable_id") and card_payload.get("nfc_serial_number"):
+        card_payload["programmable_id"] = card_payload["nfc_serial_number"]
+    card = PhysicalCard(**card_payload)
     db.add(card)
     try:
         db.commit()
@@ -119,6 +127,7 @@ async def update_card(
     previous_library_item_id = card.current_library_item_id
     updates = payload.model_dump(exclude_unset=True)
     now = datetime.now(UTC)
+    scan_fields = {"programmable_id", "nfc_serial_number", "ndef_payload_text", "ndef_payload_hex", "scan_source"}
 
     if updates.get("ndef_prepared") is True and not card.ndef_prepared:
         updates.setdefault("last_programmed_at", now)
@@ -128,6 +137,15 @@ async def update_card(
         updates["needs_player_download"] = False
     if updates.get("tested") is True and not card.tested:
         updates.setdefault("last_tested_at", now)
+    if any(field in updates for field in scan_fields):
+        updates.setdefault("last_scanned_at", now)
+    if (
+        not updates.get("programmable_id")
+        and "nfc_serial_number" in updates
+        and updates.get("nfc_serial_number")
+        and not card.programmable_id
+    ):
+        updates["programmable_id"] = updates["nfc_serial_number"]
 
     for field, value in updates.items():
         setattr(card, field, value)

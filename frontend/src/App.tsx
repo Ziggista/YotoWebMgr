@@ -93,17 +93,67 @@ type CardWorkflowStep = {
   detail: string;
 };
 
+type NdefRecordWithData = {
+  data?: ArrayBuffer | DataView | Uint8Array | null;
+};
+
+type NdefReadingEvent = Event & {
+  serialNumber?: string;
+  message: {
+    records: NdefRecordWithData[];
+  };
+};
+
 function isWebNfcAvailable(): boolean {
   return typeof window !== "undefined" && "NDEFReader" in window;
 }
 
+function normaliseRecordData(data: ArrayBuffer | DataView | Uint8Array): Uint8Array {
+  if (data instanceof Uint8Array) {
+    return data;
+  }
+  if (data instanceof DataView) {
+    return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  }
+  return new Uint8Array(data);
+}
+
+function decodeNdefRecords(records: NdefRecordWithData[]): { text: string | null; hex: string | null } {
+  const recordBytes = records
+    .map((record) => record.data)
+    .filter((data): data is ArrayBuffer | DataView | Uint8Array => Boolean(data))
+    .map(normaliseRecordData);
+
+  if (recordBytes.length === 0) {
+    return { text: null, hex: null };
+  }
+
+  const text = recordBytes
+    .map((bytes) => new TextDecoder().decode(bytes).trim())
+    .filter(Boolean)
+    .join(" | ");
+  const hex = recordBytes
+    .map((bytes) =>
+      Array.from(bytes)
+        .map((byte) => byte.toString(16).padStart(2, "0"))
+        .join(""),
+    )
+    .join(" ");
+
+  return {
+    text: text || null,
+    hex: hex || null,
+  };
+}
+
 function cardWorkflowSteps(card: PhysicalCard | null): CardWorkflowStep[] {
+  const readSummary = card?.nfc_serial_number ?? card?.programmable_id ?? card?.ndef_payload_text;
   return [
     {
       key: "scan",
       label: "Read card",
-      done: Boolean(card?.programmable_id),
-      detail: card?.programmable_id ?? "Capture the NFC serial or copied playlist payload.",
+      done: Boolean(readSummary),
+      detail: readSummary ?? "Capture the NFC serial or copied playlist payload.",
     },
     {
       key: "prepare",
@@ -2108,6 +2158,10 @@ function CardsPage() {
   const [form, setForm] = useState({
     card_code: "",
     programmable_id: "",
+    nfc_serial_number: "",
+    ndef_payload_text: "",
+    ndef_payload_hex: "",
+    scan_source: "manual",
     display_name: "",
     card_kind: "generic_mifare_ultralight_ev1",
     nfc_technology: "NFC Type 2",
@@ -2135,6 +2189,10 @@ function CardsPage() {
         id: 0,
         card_code: form.card_code,
         programmable_id: form.programmable_id || null,
+        nfc_serial_number: form.nfc_serial_number || null,
+        ndef_payload_text: form.ndef_payload_text || null,
+        ndef_payload_hex: form.ndef_payload_hex || null,
+        scan_source: form.scan_source || null,
         display_name: form.display_name || form.card_code,
         card_kind: form.card_kind,
         nfc_technology: form.nfc_technology || null,
@@ -2156,6 +2214,7 @@ function CardsPage() {
         status: form.status,
         label_color: form.label_color || null,
         tested: form.tested,
+        last_scanned_at: null,
         last_linked_at: null,
         last_programmed_at: null,
         last_tested_at: null,
@@ -2188,21 +2247,22 @@ function CardsPage() {
       await reader.scan();
       setScanMessage("Hold the card against the phone.");
       reader.onreading = (event) => {
-        const serialNumber = event.serialNumber || "";
-        const payloadText = event.message.records
-          .map((record) => record.data)
-          .filter(Boolean)
-          .map((data) => new TextDecoder().decode(data))
-          .join(" ")
-          .trim();
+        const readingEvent = event as NdefReadingEvent;
+        const serialNumber = readingEvent.serialNumber || "";
+        const decodedPayload = decodeNdefRecords(readingEvent.message.records);
+        const payloadText = decodedPayload.text || "";
         const nextProgrammableId = serialNumber || payloadText;
         if (nextProgrammableId) {
           setForm((current) => ({
             ...current,
             programmable_id: nextProgrammableId,
+            nfc_serial_number: serialNumber,
+            ndef_payload_text: payloadText,
+            ndef_payload_hex: decodedPayload.hex || current.ndef_payload_hex,
+            scan_source: "web_nfc",
             notes: current.notes || (payloadText ? `Read NDEF payload: ${payloadText}` : "Read by Android Web NFC."),
           }));
-          setScanMessage(`Read card ${nextProgrammableId}.`);
+          setScanMessage(`Read card ${nextProgrammableId}${serialNumber ? ` via ${serialNumber}` : ""}.`);
         } else {
           setScanMessage("Card read succeeded, but no serial or payload was exposed.");
         }
@@ -2226,6 +2286,10 @@ function CardsPage() {
       await createCard({
         card_code: form.card_code,
         programmable_id: form.programmable_id || null,
+        nfc_serial_number: form.nfc_serial_number || null,
+        ndef_payload_text: form.ndef_payload_text || null,
+        ndef_payload_hex: form.ndef_payload_hex || null,
+        scan_source: form.scan_source || null,
         display_name: form.display_name,
         card_kind: form.card_kind,
         nfc_technology: form.nfc_technology || null,
@@ -2251,6 +2315,10 @@ function CardsPage() {
         ...current,
         card_code: "",
         programmable_id: "",
+        nfc_serial_number: "",
+        ndef_payload_text: "",
+        ndef_payload_hex: "",
+        scan_source: "manual",
         display_name: "",
         source_card_code: "",
         yoto_playlist_uri: "",
@@ -2300,6 +2368,10 @@ function CardsPage() {
             </span>
           </div>
           {scanMessage ? <p className="muted">{scanMessage}</p> : null}
+          <p className="muted">
+            Capture the serial, decoded payload, and raw payload bytes separately so copied cards
+            and manual programming remain auditable.
+          </p>
         </article>
         <article className="card-console-panel">
           <p className="eyebrow">Workflow</p>
@@ -2329,6 +2401,16 @@ function CardsPage() {
               }
               placeholder="04A1B2C3D4"
               value={form.programmable_id}
+            />
+          </label>
+          <label>
+            NFC serial
+            <input
+              onChange={(event) =>
+                setForm((current) => ({ ...current, nfc_serial_number: event.target.value.toUpperCase() }))
+              }
+              placeholder="04A1B2C3D4"
+              value={form.nfc_serial_number}
             />
           </label>
           <label>
@@ -2399,6 +2481,20 @@ function CardsPage() {
               value={form.programming_app}
             />
           </label>
+          <label>
+            Scan source
+            <select
+              onChange={(event) =>
+                setForm((current) => ({ ...current, scan_source: event.target.value }))
+              }
+              value={form.scan_source}
+            >
+              <option value="manual">Manual entry</option>
+              <option value="web_nfc">Android Web NFC</option>
+              <option value="nfc_tools">NFC Tools</option>
+              <option value="transfer_card">Transfer card copy</option>
+            </select>
+          </label>
         </div>
 
         <div className="import-grid import-grid-wide">
@@ -2448,6 +2544,27 @@ function CardsPage() {
               value={form.ndef_format_command}
             />
           </label>
+          <label>
+            NDEF payload text
+            <input
+              onChange={(event) =>
+                setForm((current) => ({ ...current, ndef_payload_text: event.target.value }))
+              }
+              value={form.ndef_payload_text}
+            />
+          </label>
+          <label>
+            NDEF payload hex
+            <input
+              onChange={(event) =>
+                setForm((current) => ({ ...current, ndef_payload_hex: event.target.value }))
+              }
+              value={form.ndef_payload_hex}
+            />
+          </label>
+        </div>
+
+        <div className="import-grid">
           <label>
             Label colour
             <input

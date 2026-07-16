@@ -389,6 +389,10 @@ class JobResponse(BaseModel):
 class CardCreate(BaseModel):
     card_code: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9]+$")
     programmable_id: str | None = Field(default=None, max_length=160)
+    nfc_serial_number: str | None = Field(default=None, max_length=160)
+    ndef_payload_text: str | None = Field(default=None, max_length=2000)
+    ndef_payload_hex: str | None = Field(default=None, max_length=4000)
+    scan_source: str | None = Field(default=None, max_length=80)
     display_name: str = Field(min_length=1, max_length=160)
     card_kind: str = Field(default="official_myo", max_length=80)
     nfc_technology: str | None = Field(default=None, max_length=120)
@@ -408,6 +412,7 @@ class CardCreate(BaseModel):
     status: str = Field(default="available", max_length=80)
     label_color: str | None = Field(default=None, max_length=80)
     tested: bool = False
+    last_scanned_at: datetime | None = None
     last_linked_at: datetime | None = None
     last_programmed_at: datetime | None = None
     last_tested_at: datetime | None = None
@@ -417,6 +422,10 @@ class CardCreate(BaseModel):
 class CardUpdate(BaseModel):
     card_code: str | None = Field(default=None, min_length=1, max_length=80, pattern=r"^[A-Za-z0-9]+$")
     programmable_id: str | None = Field(default=None, max_length=160)
+    nfc_serial_number: str | None = Field(default=None, max_length=160)
+    ndef_payload_text: str | None = Field(default=None, max_length=2000)
+    ndef_payload_hex: str | None = Field(default=None, max_length=4000)
+    scan_source: str | None = Field(default=None, max_length=80)
     display_name: str | None = Field(default=None, min_length=1, max_length=160)
     card_kind: str | None = Field(default=None, max_length=80)
     nfc_technology: str | None = Field(default=None, max_length=120)
@@ -436,6 +445,7 @@ class CardUpdate(BaseModel):
     status: str | None = Field(default=None, max_length=80)
     label_color: str | None = Field(default=None, max_length=80)
     tested: bool | None = None
+    last_scanned_at: datetime | None = None
     last_linked_at: datetime | None = None
     last_programmed_at: datetime | None = None
     last_tested_at: datetime | None = None
@@ -446,6 +456,10 @@ class CardResponse(BaseModel):
     id: int
     card_code: str
     programmable_id: str | None
+    nfc_serial_number: str | None
+    ndef_payload_text: str | None
+    ndef_payload_hex: str | None
+    scan_source: str | None
     display_name: str
     card_kind: str
     nfc_technology: str | None
@@ -467,6 +481,7 @@ class CardResponse(BaseModel):
     status: str
     label_color: str | None
     tested: bool
+    last_scanned_at: datetime | None
     last_linked_at: datetime | None
     last_programmed_at: datetime | None
     last_tested_at: datetime | None

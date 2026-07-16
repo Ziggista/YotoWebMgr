@@ -464,6 +464,10 @@ async def test_card_inventory_accepts_nfc_workflow_fields(
             json={
                 "card_code": "CARD01",
                 "programmable_id": "yoto:playlist:abc123",
+                "nfc_serial_number": "04A1B2C3D4",
+                "ndef_payload_text": "https://my.yotoplay.com/playlist/abc123",
+                "ndef_payload_hex": "68747470733A2F2F6D792E796F746F706C61792E636F6D2F706C61796C6973742F616263313233",
+                "scan_source": "nfc_tools",
                 "display_name": "Card 01",
                 "card_kind": "generic_mifare_ultralight_ev1",
                 "nfc_technology": "NFC Type 2",
@@ -495,6 +499,9 @@ async def test_card_inventory_accepts_nfc_workflow_fields(
     payload = created.json()
     assert payload["card_code"] == "CARD01"
     assert payload["programmable_id"] == "yoto:playlist:abc123"
+    assert payload["nfc_serial_number"] == "04A1B2C3D4"
+    assert payload["ndef_payload_text"] == "https://my.yotoplay.com/playlist/abc123"
+    assert payload["scan_source"] == "nfc_tools"
     assert payload["chip_type"] == "MIFARE Ultralight EV1"
     assert payload["memory_size_bytes"] == 48
     assert payload["ndef_prepared"] is True
@@ -531,6 +538,10 @@ async def test_card_workflow_can_be_updated_after_scan(api_client: AsyncClient) 
             f"/api/v1/cards/{created.json()['id']}",
             json={
                 "programmable_id": "04A1B2C3D4",
+                "nfc_serial_number": "04A1B2C3D4",
+                "ndef_payload_text": "Yoto transfer payload",
+                "ndef_payload_hex": "596F746F207472616E73666572207061796C6F6164",
+                "scan_source": "web_nfc",
                 "nfc_technology": "NFC Type 2",
                 "chip_type": "MIFARE Ultralight EV1",
                 "memory_size_bytes": 48,
@@ -551,6 +562,9 @@ async def test_card_workflow_can_be_updated_after_scan(api_client: AsyncClient) 
     assert updated.status_code == 200
     payload = updated.json()
     assert payload["programmable_id"] == "04A1B2C3D4"
+    assert payload["nfc_serial_number"] == "04A1B2C3D4"
+    assert payload["ndef_payload_text"] == "Yoto transfer payload"
+    assert payload["scan_source"] == "web_nfc"
     assert payload["ndef_prepared"] is True
     assert payload["ready_to_link_in_app"] is True
     assert payload["linked_manually"] is True
@@ -558,6 +572,7 @@ async def test_card_workflow_can_be_updated_after_scan(api_client: AsyncClient) 
     assert payload["needs_player_download"] is False
     assert payload["tested"] is True
     assert payload["status"] == "linked"
+    assert payload["last_scanned_at"] is not None
     assert payload["last_programmed_at"] is not None
     assert payload["last_linked_at"] is not None
     assert payload["last_tested_at"] is not None
