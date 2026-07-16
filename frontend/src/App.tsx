@@ -63,6 +63,7 @@ import {
   startYotoOAuth,
   updatePlaylistTrack,
   updateLibraryItemSettings,
+  updateCard,
   updateSettings,
   uploadCoverArt,
   uploadImport,
@@ -85,6 +86,52 @@ const contentTypes = [
 const defaultNdefFormatCommand = "A2:03:E1:10:06:00,A2:04:03:04:D8:00,A2:05:00:00:FE:00";
 const yotoPkceStorageKey = "yotowebmgr.yoto.pkce";
 
+type CardWorkflowStep = {
+  key: string;
+  label: string;
+  done: boolean;
+  detail: string;
+};
+
+function isWebNfcAvailable(): boolean {
+  return typeof window !== "undefined" && "NDEFReader" in window;
+}
+
+function cardWorkflowSteps(card: PhysicalCard | null): CardWorkflowStep[] {
+  return [
+    {
+      key: "scan",
+      label: "Read card",
+      done: Boolean(card?.programmable_id),
+      detail: card?.programmable_id ?? "Capture the NFC serial or copied playlist payload.",
+    },
+    {
+      key: "prepare",
+      label: "Prepare NDEF",
+      done: Boolean(card?.ndef_prepared),
+      detail: card?.ndef_format_command ?? "Use the recorded NFC Tools format command.",
+    },
+    {
+      key: "link",
+      label: "Link playlist",
+      done: Boolean(card?.linked_manually || card?.ready_to_link_in_app),
+      detail: card?.yoto_playlist_uri ?? "Create the playlist, then link it through the Yoto app.",
+    },
+    {
+      key: "download",
+      label: "Download to player",
+      done: Boolean(card?.downloaded_to_player_confirmed),
+      detail: card?.needs_player_download ? "Still needs a player download check." : "Record the download check.",
+    },
+    {
+      key: "test",
+      label: "Test playback",
+      done: Boolean(card?.tested),
+      detail: card?.notes ?? "Tap the card on the player and record the result.",
+    },
+  ];
+}
+
 function PlaceholderPage({ title }: { title: string }) {
   return (
     <section className="panel">
@@ -100,6 +147,22 @@ function PlaceholderPage({ title }: { title: string }) {
 
 function EmptyState({ message }: { message: string }) {
   return <p className="muted">{message}</p>;
+}
+
+function CardWorkflowChecklist({ card }: { card: PhysicalCard | null }) {
+  return (
+    <div className="card-workflow-steps">
+      {cardWorkflowSteps(card).map((step, index) => (
+        <article className={`workflow-step${step.done ? " workflow-step-done" : ""}`} key={step.key}>
+          <span className="workflow-step-number">{step.done ? "OK" : index + 1}</span>
+          <div>
+            <strong>{step.label}</strong>
+            <p className="muted">{step.detail}</p>
+          </div>
+        </article>
+      ))}
+    </div>
+  );
 }
 
 function formatDuration(seconds: number | null): string {
@@ -2039,6 +2102,8 @@ function TagsPage() {
 function CardsPage() {
   const [cards, setCards] = useState<PhysicalCard[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [scanMessage, setScanMessage] = useState<string | null>(null);
+  const [scanning, setScanning] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [form, setForm] = useState({
     card_code: "",
@@ -2065,6 +2130,40 @@ function CardsPage() {
     notes: "",
   });
 
+  const draftCard: PhysicalCard | null = form.card_code
+    ? {
+        id: 0,
+        card_code: form.card_code,
+        programmable_id: form.programmable_id || null,
+        display_name: form.display_name || form.card_code,
+        card_kind: form.card_kind,
+        nfc_technology: form.nfc_technology || null,
+        chip_type: form.chip_type || null,
+        memory_size_bytes: form.memory_size_bytes ? Number(form.memory_size_bytes) : null,
+        ndef_prepared: form.ndef_prepared,
+        ndef_format_command: form.ndef_format_command || null,
+        programming_app: form.programming_app || null,
+        source_card_code: form.source_card_code || null,
+        is_reusable_transfer_card: form.is_reusable_transfer_card,
+        ready_to_link_in_app: form.ready_to_link_in_app,
+        linked_manually: form.linked_manually,
+        overwrite_ok: form.overwrite_ok,
+        downloaded_to_player_confirmed: form.downloaded_to_player_confirmed,
+        needs_player_download: form.needs_player_download,
+        current_library_item_id: null,
+        pending_job_id: null,
+        yoto_playlist_uri: form.yoto_playlist_uri || null,
+        status: form.status,
+        label_color: form.label_color || null,
+        tested: form.tested,
+        last_linked_at: null,
+        last_programmed_at: null,
+        last_tested_at: null,
+        notes: form.notes || null,
+        created_at: new Date().toISOString(),
+      }
+    : null;
+
   async function refreshCards() {
     setCards(await fetchCards());
   }
@@ -2074,6 +2173,50 @@ function CardsPage() {
       setError(loadError instanceof Error ? loadError.message : "Failed to load cards."),
     );
   }, []);
+
+  async function handleScanCard() {
+    setError(null);
+    setScanMessage(null);
+    if (!isWebNfcAvailable()) {
+      setScanMessage("Web NFC is not available in this browser. Enter the card ID manually or use NFC Tools.");
+      return;
+    }
+
+    setScanning(true);
+    try {
+      const reader = new window.NDEFReader();
+      await reader.scan();
+      setScanMessage("Hold the card against the phone.");
+      reader.onreading = (event) => {
+        const serialNumber = event.serialNumber || "";
+        const payloadText = event.message.records
+          .map((record) => record.data)
+          .filter(Boolean)
+          .map((data) => new TextDecoder().decode(data))
+          .join(" ")
+          .trim();
+        const nextProgrammableId = serialNumber || payloadText;
+        if (nextProgrammableId) {
+          setForm((current) => ({
+            ...current,
+            programmable_id: nextProgrammableId,
+            notes: current.notes || (payloadText ? `Read NDEF payload: ${payloadText}` : "Read by Android Web NFC."),
+          }));
+          setScanMessage(`Read card ${nextProgrammableId}.`);
+        } else {
+          setScanMessage("Card read succeeded, but no serial or payload was exposed.");
+        }
+        setScanning(false);
+      };
+      reader.onerror = () => {
+        setScanMessage("The NFC read failed. Try again or capture the value from NFC Tools.");
+        setScanning(false);
+      };
+    } catch (scanError) {
+      setScanning(false);
+      setScanMessage(scanError instanceof Error ? scanError.message : "Could not start NFC scan.");
+    }
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -2133,9 +2276,35 @@ function CardsPage() {
       <div className="section-header">
         <div>
           <p className="eyebrow">Cards</p>
-          <h2>Card inventory</h2>
+          <h2>Android card console</h2>
         </div>
         <span className="status-pill">{cards.length} cards</span>
+      </div>
+
+      <div className="card-console-grid">
+        <article className="card-console-panel">
+          <div>
+            <p className="eyebrow">Step 1</p>
+            <h3>Read or prepare a card</h3>
+            <p className="muted">
+              Use Android Web NFC when available. For programming, record the exact NFC Tools
+              command and keep Yoto linking as a visible manual confirmation.
+            </p>
+          </div>
+          <div className="card-console-actions">
+            <button className="primary-button" disabled={scanning} onClick={() => void handleScanCard()} type="button">
+              {scanning ? "Scanning" : "Scan with phone"}
+            </button>
+            <span className="status-pill status-pill-muted">
+              {isWebNfcAvailable() ? "Web NFC available" : "Manual capture"}
+            </span>
+          </div>
+          {scanMessage ? <p className="muted">{scanMessage}</p> : null}
+        </article>
+        <article className="card-console-panel">
+          <p className="eyebrow">Workflow</p>
+          <CardWorkflowChecklist card={draftCard} />
+        </article>
       </div>
 
       <form className="import-form" onSubmit={(event) => void handleSubmit(event)}>

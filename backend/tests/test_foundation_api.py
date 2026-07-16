@@ -521,6 +521,52 @@ async def test_card_code_must_be_alphanumeric(api_client: AsyncClient) -> None:
     assert response.status_code == 422
 
 
+async def test_card_workflow_can_be_updated_after_scan(api_client: AsyncClient) -> None:
+    async with api_client as client:
+        created = await client.post(
+            "/api/v1/cards",
+            json={"card_code": "CARD06", "display_name": "Card 06"},
+        )
+        updated = await client.patch(
+            f"/api/v1/cards/{created.json()['id']}",
+            json={
+                "programmable_id": "04A1B2C3D4",
+                "nfc_technology": "NFC Type 2",
+                "chip_type": "MIFARE Ultralight EV1",
+                "memory_size_bytes": 48,
+                "ndef_prepared": True,
+                "programming_app": "NFC Tools",
+                "ready_to_link_in_app": True,
+                "linked_manually": True,
+                "downloaded_to_player_confirmed": True,
+                "needs_player_download": True,
+                "tested": True,
+                "status": "linked",
+                "yoto_playlist_uri": "https://my.yotoplay.com/playlist/abc123",
+                "notes": "Scanned and tested from Android.",
+            },
+        )
+        history = await client.get(f"/api/v1/cards/{created.json()['id']}/history")
+
+    assert updated.status_code == 200
+    payload = updated.json()
+    assert payload["programmable_id"] == "04A1B2C3D4"
+    assert payload["ndef_prepared"] is True
+    assert payload["ready_to_link_in_app"] is True
+    assert payload["linked_manually"] is True
+    assert payload["downloaded_to_player_confirmed"] is True
+    assert payload["needs_player_download"] is False
+    assert payload["tested"] is True
+    assert payload["status"] == "linked"
+    assert payload["last_programmed_at"] is not None
+    assert payload["last_linked_at"] is not None
+    assert payload["last_tested_at"] is not None
+    assert history.status_code == 200
+    assert history.json()[0]["event_type"] == "card_workflow_updated"
+    assert history.json()[0]["previous_status"] == "available"
+    assert history.json()[0]["new_status"] == "linked"
+
+
 async def test_library_playlist_settings_tracks_icons_and_readiness(
     api_client: AsyncClient,
 ) -> None:

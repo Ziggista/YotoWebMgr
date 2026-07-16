@@ -414,6 +414,34 @@ class CardCreate(BaseModel):
     notes: str | None = Field(default=None, max_length=2000)
 
 
+class CardUpdate(BaseModel):
+    card_code: str | None = Field(default=None, min_length=1, max_length=80, pattern=r"^[A-Za-z0-9]+$")
+    programmable_id: str | None = Field(default=None, max_length=160)
+    display_name: str | None = Field(default=None, min_length=1, max_length=160)
+    card_kind: str | None = Field(default=None, max_length=80)
+    nfc_technology: str | None = Field(default=None, max_length=120)
+    chip_type: str | None = Field(default=None, max_length=120)
+    memory_size_bytes: int | None = Field(default=None, gt=0)
+    ndef_prepared: bool | None = None
+    ndef_format_command: str | None = Field(default=None, max_length=500)
+    programming_app: str | None = Field(default=None, max_length=120)
+    source_card_code: str | None = Field(default=None, max_length=80)
+    is_reusable_transfer_card: bool | None = None
+    ready_to_link_in_app: bool | None = None
+    linked_manually: bool | None = None
+    overwrite_ok: bool | None = None
+    downloaded_to_player_confirmed: bool | None = None
+    needs_player_download: bool | None = None
+    yoto_playlist_uri: str | None = Field(default=None, max_length=500)
+    status: str | None = Field(default=None, max_length=80)
+    label_color: str | None = Field(default=None, max_length=80)
+    tested: bool | None = None
+    last_linked_at: datetime | None = None
+    last_programmed_at: datetime | None = None
+    last_tested_at: datetime | None = None
+    notes: str | None = Field(default=None, max_length=2000)
+
+
 class CardResponse(BaseModel):
     id: int
     card_code: str

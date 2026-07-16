@@ -961,6 +961,44 @@ export async function createCard(payload: {
   return response.json() as Promise<PhysicalCard>;
 }
 
+export async function updateCard(
+  cardId: number,
+  payload: Partial<{
+    card_code: string;
+    programmable_id: string | null;
+    display_name: string;
+    card_kind: string;
+    nfc_technology: string | null;
+    chip_type: string | null;
+    memory_size_bytes: number | null;
+    ndef_prepared: boolean;
+    ndef_format_command: string | null;
+    programming_app: string | null;
+    source_card_code: string | null;
+    is_reusable_transfer_card: boolean;
+    ready_to_link_in_app: boolean;
+    linked_manually: boolean;
+    overwrite_ok: boolean;
+    downloaded_to_player_confirmed: boolean;
+    needs_player_download: boolean;
+    yoto_playlist_uri: string | null;
+    status: string;
+    label_color: string | null;
+    tested: boolean;
+    notes: string | null;
+  }>,
+): Promise<PhysicalCard> {
+  const response = await fetch(`/api/v1/cards/${cardId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to update card."));
+  }
+  return response.json() as Promise<PhysicalCard>;
+}
+
 export async function fetchCardHistory(cardId: number): Promise<CardAssignmentEvent[]> {
   const response = await fetch(`/api/v1/cards/${cardId}/history`);
   if (!response.ok) {

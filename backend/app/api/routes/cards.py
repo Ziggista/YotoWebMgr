@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -7,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db_session
 from app.models import CardAssignmentEvent, PhysicalCard
-from app.schemas.foundation import CardAssignmentEventResponse, CardCreate, CardResponse
+from app.schemas.foundation import CardAssignmentEventResponse, CardCreate, CardResponse, CardUpdate
 
 
 router = APIRouter()
@@ -91,6 +92,62 @@ async def create_card(
 ) -> CardResponse:
     card = PhysicalCard(**payload.model_dump())
     db.add(card)
+    try:
+        db.commit()
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Card ID already exists.",
+        ) from error
+    db.refresh(card)
+    return _build_card_response(card)
+
+
+@router.patch("/{card_id}", response_model=CardResponse)
+async def update_card(
+    card_id: int,
+    payload: CardUpdate,
+    db: Annotated[Session, Depends(get_db_session)],
+) -> CardResponse:
+    card = db.get(PhysicalCard, card_id)
+    if card is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Card not found")
+
+    previous_status = card.status
+    previous_playlist_uri = card.yoto_playlist_uri
+    previous_library_item_id = card.current_library_item_id
+    updates = payload.model_dump(exclude_unset=True)
+    now = datetime.now(UTC)
+
+    if updates.get("ndef_prepared") is True and not card.ndef_prepared:
+        updates.setdefault("last_programmed_at", now)
+    if updates.get("linked_manually") is True and not card.linked_manually:
+        updates.setdefault("last_linked_at", now)
+    if updates.get("downloaded_to_player_confirmed") is True:
+        updates["needs_player_download"] = False
+    if updates.get("tested") is True and not card.tested:
+        updates.setdefault("last_tested_at", now)
+
+    for field, value in updates.items():
+        setattr(card, field, value)
+
+    if updates:
+        changed_fields = ", ".join(sorted(updates.keys()))
+        db.add(
+            CardAssignmentEvent(
+                card_id=card.id,
+                event_type="card_workflow_updated",
+                previous_library_item_id=previous_library_item_id,
+                library_item_id=card.current_library_item_id,
+                previous_status=previous_status,
+                new_status=card.status,
+                previous_yoto_playlist_uri=previous_playlist_uri,
+                yoto_playlist_uri=card.yoto_playlist_uri,
+                summary=f"Updated card workflow fields: {changed_fields}",
+            )
+        )
+
     try:
         db.commit()
     except IntegrityError as error:
