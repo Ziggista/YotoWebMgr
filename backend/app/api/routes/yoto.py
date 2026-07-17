@@ -287,7 +287,7 @@ async def _call_yoto_api(
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.request(
             method=method,
-            urljoin(api_base_url.rstrip("/") + "/", relative_url.lstrip("/")),
+            url=urljoin(api_base_url.rstrip("/") + "/", relative_url.lstrip("/")),
             headers={"Authorization": f"Bearer {access_token}"},
             json=json_body,
         )
