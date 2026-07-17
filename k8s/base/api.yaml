@@ -13,6 +13,7 @@ spec:
       labels:
         app: api
     spec:
+      serviceAccountName: yotowebmgr-api
       containers:
         - name: api
           image: yotowebmgr-api:latest

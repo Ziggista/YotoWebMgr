@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     import_drop_path: str = "/var/lib/yotowebmgr/media/imports/drop"
     browser_upload_path: str = "/var/lib/yotowebmgr/media/imports/uploads"
     artwork_path: str = "/var/lib/yotowebmgr/media/artwork"
+    yoto_token_store_mode: str = "kubernetes_secret"
+    yoto_token_secret_name: str = "yotowebmgr-secrets"
+    yoto_token_secret_namespace: str = "yotowebmgr"
 
 
 @lru_cache

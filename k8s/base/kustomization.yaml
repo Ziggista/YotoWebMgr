@@ -1,9 +1,9 @@
 resources:
   - namespace.yaml
   - configmap.yaml
+  - rbac.yaml
   - persistentvolumeclaims.yaml
   - postgres.yaml
   - api.yaml
   - worker.yaml
   - frontend.yaml
-

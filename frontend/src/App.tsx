@@ -17,6 +17,7 @@ import {
   SessionResponse,
   Tag,
   VersionEvent,
+  YotoCredentialProbeResponse,
   YotoCredentialStatus,
   YotoPlaylistDraft,
   YotoPlaylistVersion,
@@ -54,6 +55,7 @@ import {
   quickSelectUser,
   queueArtworkPixelise,
   queueLibraryItemProcessing,
+  probeYotoCredentials,
   queueYotoPlaylist,
   restoreLibraryItemVersion,
   restoreYotoPlaylistVersion,
@@ -2860,6 +2862,7 @@ function SettingsPage() {
   const [yotoCredential, setYotoCredential] = useState<YotoCredentialStatus | null>(null);
   const [yotoAccountLabel, setYotoAccountLabel] = useState("Household Yoto");
   const [preparedAuthUrl, setPreparedAuthUrl] = useState<string | null>(null);
+  const [yotoProbe, setYotoProbe] = useState<YotoCredentialProbeResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -2895,6 +2898,7 @@ function SettingsPage() {
   async function handlePrepareYotoOAuth() {
     setSaving(true);
     setError(null);
+    setYotoProbe(null);
     try {
       const pkce = await createPkcePair();
       const result = await startYotoOAuth(yotoAccountLabel, pkce.challenge);
@@ -2919,8 +2923,23 @@ function SettingsPage() {
       const result = await disconnectYotoCredentials();
       setYotoCredential(result);
       setPreparedAuthUrl(null);
+      setYotoProbe(null);
     } catch (disconnectError) {
       setError(disconnectError instanceof Error ? disconnectError.message : "Failed to disconnect Yoto.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleProbeYoto() {
+    setSaving(true);
+    setError(null);
+    try {
+      const result = await probeYotoCredentials();
+      setYotoCredential(result.credential);
+      setYotoProbe(result);
+    } catch (probeError) {
+      setError(probeError instanceof Error ? probeError.message : "Failed to probe the Yoto API.");
     } finally {
       setSaving(false);
     }
@@ -3156,6 +3175,14 @@ function SettingsPage() {
             </button>
             <button
               className="secondary-button"
+              disabled={saving || !yotoCredential?.token_storage_ref}
+              onClick={() => void handleProbeYoto()}
+              type="button"
+            >
+              Probe live API
+            </button>
+            <button
+              className="secondary-button"
               disabled={saving || !yotoCredential?.id}
               onClick={() => void handleDisconnectYoto()}
               type="button"
@@ -3174,6 +3201,20 @@ function SettingsPage() {
           )}
           {yotoCredential?.error_summary ? (
             <p className="settings-note">{yotoCredential.error_summary}</p>
+          ) : null}
+          {yotoProbe ? (
+            <div className="settings-note">
+              <p>
+                Probe: {yotoProbe.probe_label}
+                {yotoProbe.http_status ? ` (${yotoProbe.http_status})` : ""}
+                {yotoProbe.token_refreshed ? " · token refreshed" : ""}
+              </p>
+              {yotoProbe.probe_url ? <p>URL: {yotoProbe.probe_url}</p> : null}
+              {yotoProbe.response_excerpt ? <pre>{yotoProbe.response_excerpt}</pre> : null}
+              {yotoProbe.error_detail && yotoProbe.error_detail !== yotoProbe.response_excerpt ? (
+                <pre>{yotoProbe.error_detail}</pre>
+              ) : null}
+            </div>
           ) : null}
         </div>
         <button className="primary-button" disabled={saving} type="submit">

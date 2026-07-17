@@ -399,6 +399,18 @@ export interface CompleteYotoOAuthResponse {
   live_api_call: boolean;
 }
 
+export interface YotoCredentialProbeResponse {
+  credential: YotoCredentialStatus;
+  probe_label: string;
+  probe_url: string | null;
+  http_status: number | null;
+  ok: boolean;
+  token_refreshed: boolean;
+  response_excerpt: string | null;
+  error_detail: string | null;
+  live_api_call: boolean;
+}
+
 async function errorMessage(response: Response, fallback: string): Promise<string> {
   try {
     const payload = (await response.json()) as { detail?: string };
@@ -795,6 +807,14 @@ export async function disconnectYotoCredentials(): Promise<YotoCredentialStatus>
     throw new Error(await errorMessage(response, "Failed to disconnect Yoto credentials."));
   }
   return response.json() as Promise<YotoCredentialStatus>;
+}
+
+export async function probeYotoCredentials(): Promise<YotoCredentialProbeResponse> {
+  const response = await fetch("/api/v1/yoto/credentials/probe", { method: "POST" });
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to run the Yoto API probe."));
+  }
+  return response.json() as Promise<YotoCredentialProbeResponse>;
 }
 
 export async function fetchImports(): Promise<ImportRequest[]> {

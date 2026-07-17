@@ -1,11 +1,13 @@
 from collections.abc import AsyncGenerator, Generator
 import base64
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 import zipfile
 
 import pytest
+from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
@@ -34,6 +36,7 @@ from app.models import (
     YotoPlaylistDraft,
     YotoPlaylistVersion,
 )
+from app.services.yoto_tokens import StoredYotoTokens
 
 
 pytestmark = pytest.mark.asyncio
@@ -45,6 +48,8 @@ def import_storage_paths(tmp_path: Path) -> Generator[dict[str, str], None, None
     original_drop_path = settings.import_drop_path
     original_upload_path = settings.browser_upload_path
     original_artwork_path = settings.artwork_path
+    original_secret_name = settings.yoto_token_secret_name
+    original_secret_namespace = settings.yoto_token_secret_namespace
     paths = {
         "drop": str(tmp_path / "drop"),
         "uploads": str(tmp_path / "uploads"),
@@ -53,12 +58,16 @@ def import_storage_paths(tmp_path: Path) -> Generator[dict[str, str], None, None
     settings.import_drop_path = paths["drop"]
     settings.browser_upload_path = paths["uploads"]
     settings.artwork_path = paths["artwork"]
+    settings.yoto_token_secret_name = "test-secret"
+    settings.yoto_token_secret_namespace = "test-namespace"
     try:
         yield paths
     finally:
         settings.import_drop_path = original_drop_path
         settings.browser_upload_path = original_upload_path
         settings.artwork_path = original_artwork_path
+        settings.yoto_token_secret_name = original_secret_name
+        settings.yoto_token_secret_namespace = original_secret_namespace
 
 
 @pytest.fixture()
@@ -1141,7 +1150,7 @@ async def test_yoto_oauth_scaffold_records_local_credential_state(
     assert credential.status == "revoked"
 
 
-async def test_yoto_oauth_callback_exchanges_code_without_persisting_tokens(
+async def test_yoto_oauth_callback_exchanges_code_and_persists_tokens(
     api_client: AsyncClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -1160,6 +1169,13 @@ async def test_yoto_oauth_callback_exchanges_code_without_persisting_tokens(
         }
 
     monkeypatch.setattr(yoto_routes, "_exchange_oauth_code", fake_exchange_oauth_code)
+    stored_payloads: dict[int, StoredYotoTokens] = {}
+
+    async def fake_save_tokens_to_secret(*, credential_id: int, tokens: StoredYotoTokens) -> str:
+        stored_payloads[credential_id] = tokens
+        return f"k8s-secret:test-namespace:test-secret:yoto-credential-{credential_id}.json"
+
+    monkeypatch.setattr(yoto_routes, "save_tokens_to_secret", fake_save_tokens_to_secret)
 
     async with api_client as client:
         await client.put(
@@ -1191,15 +1207,16 @@ async def test_yoto_oauth_callback_exchanges_code_without_persisting_tokens(
     payload = completed.json()
     assert payload["live_api_call"] is True
     assert payload["credential"]["status"] == "connected_tested"
-    assert payload["credential"]["token_storage_ref"].startswith("not_persisted:browser_pkce:")
+    assert payload["credential"]["token_storage_ref"] == "k8s-secret:test-namespace:test-secret:yoto-credential-1.json"
     assert payload["credential"]["masked_account_id"] == "12345678"
-    assert "not persisted" in payload["credential"]["error_summary"]
+    assert "stored in the Kubernetes Secret" in payload["credential"]["error_summary"]
 
     credential = db_session.scalar(select(YotoCredentialState))
     assert credential is not None
     assert credential.oauth_state is None
     assert credential.authorization_url is None
-    assert credential.token_storage_ref == f"not_persisted:browser_pkce:{credential.id}"
+    assert credential.token_storage_ref == f"k8s-secret:test-namespace:test-secret:yoto-credential-{credential.id}.json"
+    assert stored_payloads[credential.id].refresh_token == "refresh-token-not-stored"
 
 
 async def test_yoto_oauth_callback_surfaces_invalid_grant_diagnostics(
@@ -1253,6 +1270,108 @@ async def test_yoto_oauth_callback_surfaces_invalid_grant_diagnostics(
     assert credential.error_summary is not None
     assert "PKCE verifier mismatch" in credential.error_summary
     assert status_response.json()["status"] == "authorization_failed"
+
+
+async def test_yoto_probe_refreshes_tokens_and_calls_groups_endpoint(
+    api_client: AsyncClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expired_header = base64.urlsafe_b64encode(json.dumps({"alg": "none"}).encode()).decode().rstrip("=")
+    expired_body = base64.urlsafe_b64encode(json.dumps({"sub": "family-account-12345678", "exp": 1}).encode()).decode().rstrip("=")
+    fresh_body = base64.urlsafe_b64encode(json.dumps({"sub": "family-account-12345678", "exp": 4_102_444_800}).encode()).decode().rstrip("=")
+    expired_access_token = f"{expired_header}.{expired_body}."
+    refreshed_access_token = f"{expired_header}.{fresh_body}."
+
+    credential = YotoCredentialState(
+        account_label="Family Yoto",
+        status="connected_tested",
+        token_storage_ref="k8s-secret:test-namespace:test-secret:yoto-credential-1.json",
+        scopes="family:library:view offline_access",
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    stored = StoredYotoTokens(
+        access_token=expired_access_token,
+        refresh_token="refresh-1",
+        token_type="Bearer",
+        scope="family:library:view offline_access",
+        expires_at=datetime.fromtimestamp(1, tz=timezone.utc),
+    )
+
+    async def fake_load_tokens_from_secret(storage_ref: str) -> StoredYotoTokens:
+        assert storage_ref == "k8s-secret:test-namespace:test-secret:yoto-credential-1.json"
+        return stored
+
+    async def fake_refresh_oauth_tokens(**_: object) -> dict[str, object]:
+        return {
+            "access_token": refreshed_access_token,
+            "refresh_token": "refresh-2",
+            "token_type": "Bearer",
+            "scope": "family:library:view offline_access",
+            "expires_in": 3600,
+        }
+
+    async def fake_save_tokens_to_secret(*, credential_id: int, tokens: StoredYotoTokens) -> str:
+        assert credential_id == credential.id
+        assert tokens.refresh_token == "refresh-2"
+        return "k8s-secret:test-namespace:test-secret:yoto-credential-1.json"
+
+    async def fake_call_yoto_api(*, api_base_url: str, relative_url: str, access_token: str) -> tuple[int, object]:
+        assert api_base_url == "https://api.yotoplay.com"
+        assert relative_url == "/card/family/library/groups"
+        assert access_token == refreshed_access_token
+        return 200, [{"id": "group-1", "name": "Favourites"}]
+
+    monkeypatch.setattr(yoto_routes, "load_tokens_from_secret", fake_load_tokens_from_secret)
+    monkeypatch.setattr(yoto_routes, "_refresh_oauth_tokens", fake_refresh_oauth_tokens)
+    monkeypatch.setattr(yoto_routes, "save_tokens_to_secret", fake_save_tokens_to_secret)
+    monkeypatch.setattr(yoto_routes, "_call_yoto_api", fake_call_yoto_api)
+
+    async with api_client as client:
+        await client.put(
+            "/api/v1/settings",
+            json={
+                "yoto_client_id": "client-test",
+                "yoto_redirect_uri": "http://127.0.0.1:5175/settings/yoto/callback",
+            },
+        )
+        probe = await client.post("/api/v1/yoto/credentials/probe")
+
+    assert probe.status_code == 200
+    payload = probe.json()
+    assert payload["ok"] is True
+    assert payload["token_refreshed"] is True
+    assert payload["probe_label"] == "Family library groups"
+    assert payload["http_status"] == 200
+    assert "group-1" in payload["response_excerpt"]
+
+
+async def test_yoto_probe_surfaces_missing_token_payload(
+    api_client: AsyncClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credential = YotoCredentialState(
+        account_label="Family Yoto",
+        status="connected_tested",
+        token_storage_ref="k8s-secret:test-namespace:test-secret:yoto-credential-2.json",
+        scopes="family:library:view offline_access",
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    async def fake_load_tokens_from_secret(_: str) -> StoredYotoTokens:
+        raise yoto_routes.YotoTokenStoreError("Stored Yoto token payload was not found.")
+
+    monkeypatch.setattr(yoto_routes, "load_tokens_from_secret", fake_load_tokens_from_secret)
+
+    async with api_client as client:
+        probe = await client.post("/api/v1/yoto/credentials/probe")
+
+    assert probe.status_code == 502
+    assert "Unable to load stored Yoto tokens" in probe.json()["detail"]
 
 
 async def test_yoto_playlist_queue_persists_draft_and_job(

@@ -572,6 +572,18 @@ class CompleteYotoOAuthResponse(BaseModel):
     live_api_call: bool = True
 
 
+class YotoCredentialProbeResponse(BaseModel):
+    credential: YotoCredentialStatusResponse
+    probe_label: str
+    probe_url: str | None = None
+    http_status: int | None = None
+    ok: bool
+    token_refreshed: bool = False
+    response_excerpt: str | None = None
+    error_detail: str | None = None
+    live_api_call: bool = True
+
+
 class YotoPlaylistPreviewResponse(BaseModel):
     library_item_id: int
     payload: dict[str, object]
