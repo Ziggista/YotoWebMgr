@@ -2615,14 +2615,23 @@ function CardsPage() {
         ndef_payload_text: payloadText || null,
         ndef_payload_hex: payloadHex || null,
         tag_info: decodedPayload.tagInfo ? { ...decodedPayload.tagInfo } : null,
-        records: decodedPayload.messages.flatMap((message) =>
-          message.records.map((record) => ({
-            type: record.type,
-            payload:
-              typeof record.payload === "string"
-                ? record.payload
-                : String(record.payload),
-          })),
+        records: decodedPayload.messages.flatMap((message, messageIndex) =>
+          message.records.map((record, recordIndex) => {
+            const rawRecord = rawPayload.messages[messageIndex]?.records[recordIndex];
+            const rawBytes = rawRecord?.payload instanceof Uint8Array ? rawRecord.payload : null;
+            return {
+              type: record.type,
+              payload:
+                typeof record.payload === "string"
+                  ? record.payload
+                  : String(record.payload),
+              payload_hex: rawBytes
+                ? Array.from(rawBytes)
+                    .map((byte) => byte.toString(16).padStart(2, "0"))
+                    .join("")
+                : null,
+            };
+          }),
         ),
       });
 
@@ -2715,6 +2724,50 @@ function CardsPage() {
         `Applied captured scan dump #${entry.id} from ${entry.scan_source}.`,
     }));
     setHelperMessage(`Applied scan dump #${entry.id} to the card form.`);
+  }
+
+  async function writeScanDumpToTag(entry: CardScanDumpEntry) {
+    if (!isNativeAndroidRuntime()) {
+      setHelperMessage("Exact dump writes are only available in the Android app.");
+      return;
+    }
+    if (!nativeNfcSupported) {
+      setHelperMessage("Native NFC is not available on this Android device.");
+      return;
+    }
+
+    const dumpRecords = entry.records
+      .map((record) => {
+        const type = typeof record.type === "string" ? record.type : "";
+        const payloadHex = typeof record.payload_hex === "string" ? record.payload_hex : "";
+        const payloadBytes = payloadHex ? hexToBytes(payloadHex) : null;
+        if (!type || !payloadBytes) {
+          return null;
+        }
+        return { type, payload: payloadBytes };
+      })
+      .filter((record): record is { type: string; payload: Uint8Array } => Boolean(record));
+
+    if (dumpRecords.length === 0) {
+      setHelperMessage("This scan dump does not include raw record bytes yet. Re-scan with the updated app first.");
+      return;
+    }
+
+    setError(null);
+    setScanning(true);
+    setNativeWritePending(true);
+    setScanMessage(`Hold the new card against the phone to write scan dump #${entry.id}.`);
+
+    try {
+      await NFC.writeNDEF({
+        rawMode: true,
+        records: dumpRecords,
+      });
+    } catch (writeError) {
+      setNativeWritePending(false);
+      setScanning(false);
+      setHelperMessage(writeError instanceof Error ? writeError.message : "Could not write stored scan dump.");
+    }
   }
 
   async function handleNativeScanCard() {
@@ -2832,6 +2885,7 @@ function CardsPage() {
           records: readingEvent.message.records.map((record, index) => ({
             index,
             has_data: Boolean(record.data),
+            payload_hex: record.data ? normaliseRecordData(record.data).reduce((all, byte) => all + byte.toString(16).padStart(2, "0"), "") : null,
           })),
         });
         setScanning(false);
@@ -3048,6 +3102,14 @@ function CardsPage() {
                     type="button"
                   >
                     Copy hex
+                  </button>
+                  <button
+                    className="secondary-button"
+                    disabled={!isNativeAndroidRuntime() || scanning}
+                    onClick={() => void writeScanDumpToTag(entry)}
+                    type="button"
+                  >
+                    Write this dump
                   </button>
                 </div>
               </article>
