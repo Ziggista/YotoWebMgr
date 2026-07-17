@@ -4,11 +4,14 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 NAMESPACE="${NAMESPACE:-yotowebmgr}"
 SECRET_NAME="${SECRET_NAME:-yotowebmgr-secrets}"
+FRONTEND_DIR="${ROOT_DIR}/frontend"
+ANDROID_DIR="${FRONTEND_DIR}/android"
 LOG_DIR="${LOG_DIR:-${ROOT_DIR}/scripts/dev/logs}"
 RUN_TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 GIT_SHA="$(git -C "${ROOT_DIR}" rev-parse --short HEAD 2>/dev/null || echo "nogit")"
 LOG_FILE="${LOG_FILE:-${LOG_DIR}/deploy-dev-${RUN_TIMESTAMP}-${GIT_SHA}.log}"
 FORCE_DESTROY=false
+ANDROID_BUILD=false
 SECRET_BACKUP_FILE=""
 
 usage() {
@@ -17,6 +20,8 @@ Usage: $(basename "$0") [--force]
 
 Options:
   --force   Delete the namespace without preserving ${SECRET_NAME}.
+  --android-build
+            Rebuild the Android debug APK after the deploy completes.
 EOF
 }
 
@@ -24,6 +29,9 @@ while (($# > 0)); do
   case "$1" in
     --force)
       FORCE_DESTROY=true
+      ;;
+    --android-build)
+      ANDROID_BUILD=true
       ;;
     -h|--help)
       usage
@@ -55,6 +63,7 @@ echo "UTC timestamp: ${RUN_TIMESTAMP}"
 echo "Git SHA: ${GIT_SHA}"
 echo "Log file: ${LOG_FILE}"
 echo "Force destroy: ${FORCE_DESTROY}"
+echo "Android build: ${ANDROID_BUILD}"
 echo
 
 if ! microk8s status --wait-ready | grep -q "registry.*enabled"; then
@@ -105,6 +114,33 @@ echo
 echo "Recent frontend logs:"
 microk8s kubectl -n "${NAMESPACE}" logs deployment/frontend --tail=200 || true
 echo
+
+if [[ "${ANDROID_BUILD}" == "true" ]]; then
+  echo "Building Android debug APK"
+  if [[ ! -d "${FRONTEND_DIR}" ]]; then
+    echo "Frontend directory not found at ${FRONTEND_DIR}" >&2
+    exit 1
+  fi
+
+  pushd "${FRONTEND_DIR}" >/dev/null
+  npm run build
+  npx cap sync android
+  popd >/dev/null
+
+  if [[ ! -x "${ANDROID_DIR}/gradlew" ]]; then
+    echo "Android Gradle wrapper not found at ${ANDROID_DIR}/gradlew" >&2
+    exit 1
+  fi
+
+  pushd "${ANDROID_DIR}" >/dev/null
+  ./gradlew assembleDebug
+  popd >/dev/null
+
+  echo "Android APK built:"
+  echo "  ${ANDROID_DIR}/app/build/outputs/apk/debug/app-debug.apk"
+  echo
+fi
+
 echo "Dev deployment is ready."
 echo "Ensuring the Kubernetes frontend is forwarded locally."
 bash "${ROOT_DIR}/k8s/scripts/ensure-dev-port-forward.sh"
