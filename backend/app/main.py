@@ -2,6 +2,7 @@ import logging
 import time
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router
 from app.core.config import get_settings
@@ -18,6 +19,23 @@ app = FastAPI(
     title="YotoWebMgr API",
     version="0.1.0",
     openapi_url=f"{settings.api_v1_prefix}/openapi.json",
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "capacitor://localhost",
+        "http://localhost",
+        "https://localhost",
+        "http://127.0.0.1",
+        "https://127.0.0.1",
+        "http://ziggi-pc.tailaf3d4b.ts.net:5175",
+        "https://ziggi-pc.tailaf3d4b.ts.net",
+        "http://100.65.175.83:5175",
+    ],
+    allow_origin_regex=r"^(capacitor://localhost|https?://localhost(?::\d+)?|https?://127\.0\.0\.1(?::\d+)?|https?://ziggi-pc\.tailaf3d4b\.ts\.net(?::\d+)?|https?://100\.65\.175\.83(?::\d+)?)$",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 app.include_router(api_router, prefix=settings.api_v1_prefix)
 

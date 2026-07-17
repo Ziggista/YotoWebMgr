@@ -254,7 +254,7 @@ def upgrade() -> None:
             },
             {
                 "key": "yoto_redirect_uri",
-                "value": "http://127.0.0.1:5175/settings/yoto/callback",
+                "value": "http://ziggi-pc.tailaf3d4b.ts.net:5175/settings/yoto/callback",
                 "description": "Yoto OAuth redirect URI, if required.",
             },
             {

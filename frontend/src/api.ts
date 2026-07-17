@@ -1,3 +1,5 @@
+import { clearStoredApiBaseUrl, hasStoredApiBaseUrl, resolveApiUrl } from "./api-config";
+
 export type AuthProviderType = "household_select" | "password" | "oauth2";
 
 export interface AuthProvider {
@@ -432,6 +434,19 @@ export interface YotoApiDebugResponse {
   live_api_call: boolean;
 }
 
+async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(resolveApiUrl(path), init);
+  } catch (error) {
+    if (!hasStoredApiBaseUrl()) {
+      throw error;
+    }
+
+    clearStoredApiBaseUrl();
+    return fetch(path, init);
+  }
+}
+
 async function errorMessage(response: Response, fallback: string): Promise<string> {
   try {
     const payload = (await response.json()) as { detail?: string };
@@ -442,7 +457,7 @@ async function errorMessage(response: Response, fallback: string): Promise<strin
 }
 
 export async function fetchAuthProviders(): Promise<AuthProvidersResponse> {
-  const response = await fetch("/api/v1/auth/providers");
+  const response = await apiFetch("/api/v1/auth/providers");
   if (!response.ok) {
     throw new Error("Failed to load authentication options.");
   }
@@ -450,7 +465,7 @@ export async function fetchAuthProviders(): Promise<AuthProvidersResponse> {
 }
 
 export async function quickSelectUser(userSlug: string): Promise<SessionResponse> {
-  const response = await fetch("/api/v1/auth/session/select", {
+  const response = await apiFetch("/api/v1/auth/session/select", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ user_slug: userSlug }),
@@ -466,7 +481,7 @@ export async function loginWithPassword(
   username: string,
   password: string,
 ): Promise<SessionResponse> {
-  const response = await fetch("/api/v1/auth/session/password", {
+  const response = await apiFetch("/api/v1/auth/session/password", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ username, password }),
@@ -479,7 +494,7 @@ export async function loginWithPassword(
 }
 
 export async function fetchSettings(): Promise<AppSettings> {
-  const response = await fetch("/api/v1/settings");
+  const response = await apiFetch("/api/v1/settings");
   if (!response.ok) {
     throw new Error(await errorMessage(response, "Failed to load settings."));
   }
@@ -487,7 +502,7 @@ export async function fetchSettings(): Promise<AppSettings> {
 }
 
 export async function updateSettings(payload: Partial<AppSettings>): Promise<AppSettings> {
-  const response = await fetch("/api/v1/settings", {
+  const response = await apiFetch("/api/v1/settings", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -508,7 +523,7 @@ export async function fetchLibraryItems(filters: {
   if (filters.tag_id) params.set("tag_id", String(filters.tag_id));
   if (filters.search) params.set("search", filters.search);
   const query = params.toString();
-  const response = await fetch(`/api/v1/library${query ? `?${query}` : ""}`);
+  const response = await apiFetch(`/api/v1/library${query ? `?${query}` : ""}`);
   if (!response.ok) {
     throw new Error("Failed to load library.");
   }
@@ -516,7 +531,7 @@ export async function fetchLibraryItems(filters: {
 }
 
 export async function fetchTags(): Promise<Tag[]> {
-  const response = await fetch("/api/v1/tags");
+  const response = await apiFetch("/api/v1/tags");
   if (!response.ok) {
     throw new Error(await errorMessage(response, "Failed to load tags."));
   }
@@ -524,7 +539,7 @@ export async function fetchTags(): Promise<Tag[]> {
 }
 
 export async function createTag(payload: { name: string; color?: string | null }): Promise<Tag> {
-  const response = await fetch("/api/v1/tags", {
+  const response = await apiFetch("/api/v1/tags", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -536,7 +551,7 @@ export async function createTag(payload: { name: string; color?: string | null }
 }
 
 export async function setLibraryItemTags(itemId: number, tagIds: number[]): Promise<Tag[]> {
-  const response = await fetch(`/api/v1/tags/library-items/${itemId}`, {
+  const response = await apiFetch(`/api/v1/tags/library-items/${itemId}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ tag_ids: tagIds }),
@@ -548,7 +563,7 @@ export async function setLibraryItemTags(itemId: number, tagIds: number[]): Prom
 }
 
 export async function fetchLibraryItemDetail(itemId: number): Promise<LibraryItemDetail> {
-  const response = await fetch(`/api/v1/library/${itemId}`);
+  const response = await apiFetch(`/api/v1/library/${itemId}`);
   if (!response.ok) {
     throw new Error(await errorMessage(response, "Failed to load library item."));
   }
@@ -556,7 +571,7 @@ export async function fetchLibraryItemDetail(itemId: number): Promise<LibraryIte
 }
 
 export async function fetchLibraryItemVersions(itemId: number): Promise<VersionEvent[]> {
-  const response = await fetch(`/api/v1/library/${itemId}/versions`);
+  const response = await apiFetch(`/api/v1/library/${itemId}/versions`);
   if (!response.ok) {
     throw new Error(await errorMessage(response, "Failed to load version history."));
   }
@@ -567,7 +582,7 @@ export async function restoreLibraryItemVersion(
   itemId: number,
   versionId: number,
 ): Promise<VersionRestoreResponse> {
-  const response = await fetch(`/api/v1/library/${itemId}/versions/${versionId}/restore`, {
+  const response = await apiFetch(`/api/v1/library/${itemId}/versions/${versionId}/restore`, {
     method: "POST",
   });
   if (!response.ok) {
@@ -580,7 +595,7 @@ export async function updateLibraryItemSettings(
   itemId: number,
   payload: Partial<LibraryItem>,
 ): Promise<LibraryItem> {
-  const response = await fetch(`/api/v1/library/${itemId}/settings`, {
+  const response = await apiFetch(`/api/v1/library/${itemId}/settings`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -594,7 +609,7 @@ export async function updateLibraryItemSettings(
 export async function uploadCoverArt(itemId: number, artworkFile: File): Promise<LibraryItem> {
   const formData = new FormData();
   formData.append("artwork_file", artworkFile);
-  const response = await fetch(`/api/v1/library/${itemId}/cover-art`, {
+  const response = await apiFetch(`/api/v1/library/${itemId}/cover-art`, {
     method: "POST",
     body: formData,
   });
@@ -605,7 +620,7 @@ export async function uploadCoverArt(itemId: number, artworkFile: File): Promise
 }
 
 export async function queueArtworkPixelise(itemId: number): Promise<Job> {
-  const response = await fetch(`/api/v1/library/${itemId}/artwork/pixelise`, { method: "POST" });
+  const response = await apiFetch(`/api/v1/library/${itemId}/artwork/pixelise`, { method: "POST" });
   if (!response.ok) {
     throw new Error(await errorMessage(response, "Failed to queue artwork pixelisation."));
   }
@@ -616,7 +631,7 @@ export async function createRadioStreamTrack(
   itemId: number,
   payload: { title: string; stream_url: string; icon_path?: string | null },
 ): Promise<PlaylistTrack> {
-  const response = await fetch(`/api/v1/library/${itemId}/radio-streams`, {
+  const response = await apiFetch(`/api/v1/library/${itemId}/radio-streams`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -642,7 +657,7 @@ export async function updatePlaylistTrack(
     stream_url?: string | null;
   },
 ): Promise<PlaylistTrack> {
-  const response = await fetch(`/api/v1/library/${itemId}/tracks/${trackId}`, {
+  const response = await apiFetch(`/api/v1/library/${itemId}/tracks/${trackId}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -657,7 +672,7 @@ export async function createPodcastFeed(
   itemId: number,
   payload: { rss_url: string; title?: string | null },
 ): Promise<PodcastFeed> {
-  const response = await fetch(`/api/v1/library/${itemId}/podcast-feeds`, {
+  const response = await apiFetch(`/api/v1/library/${itemId}/podcast-feeds`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -672,7 +687,7 @@ export async function createSplitPoint(
   itemId: number,
   payload: { timestamp_seconds: number; title: string; part_number?: number | null },
 ): Promise<SplitPoint> {
-  const response = await fetch(`/api/v1/library/${itemId}/split-points`, {
+  const response = await apiFetch(`/api/v1/library/${itemId}/split-points`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -684,7 +699,7 @@ export async function createSplitPoint(
 }
 
 export async function applyTrackIcon(itemId: number, iconPath: string): Promise<PlaylistTrack[]> {
-  const response = await fetch(`/api/v1/library/${itemId}/tracks/apply-icon`, {
+  const response = await apiFetch(`/api/v1/library/${itemId}/tracks/apply-icon`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ icon_path: iconPath }),
@@ -696,7 +711,7 @@ export async function applyTrackIcon(itemId: number, iconPath: string): Promise<
 }
 
 export async function fetchReadiness(itemId: number): Promise<ReadinessResponse> {
-  const response = await fetch(`/api/v1/library/${itemId}/readiness`);
+  const response = await apiFetch(`/api/v1/library/${itemId}/readiness`);
   if (!response.ok) {
     throw new Error(await errorMessage(response, "Failed to check readiness."));
   }
@@ -704,7 +719,7 @@ export async function fetchReadiness(itemId: number): Promise<ReadinessResponse>
 }
 
 export async function fetchCardPlan(itemId: number): Promise<CardPlan> {
-  const response = await fetch(`/api/v1/library/${itemId}/card-plan`);
+  const response = await apiFetch(`/api/v1/library/${itemId}/card-plan`);
   if (!response.ok) {
     throw new Error(await errorMessage(response, "Failed to build card plan."));
   }
@@ -712,7 +727,7 @@ export async function fetchCardPlan(itemId: number): Promise<CardPlan> {
 }
 
 export async function fetchSavedCardPlan(itemId: number): Promise<CardPlan> {
-  const response = await fetch(`/api/v1/library/${itemId}/card-plan/saved`);
+  const response = await apiFetch(`/api/v1/library/${itemId}/card-plan/saved`);
   if (!response.ok) {
     throw new Error(await errorMessage(response, "Failed to load saved card plan."));
   }
@@ -723,7 +738,7 @@ export async function saveCardPlan(
   itemId: number,
   payload: { parts: { part_number: number; title: string; track_ids: number[] }[] },
 ): Promise<CardPlan> {
-  const response = await fetch(`/api/v1/library/${itemId}/card-plan`, {
+  const response = await apiFetch(`/api/v1/library/${itemId}/card-plan`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -735,7 +750,7 @@ export async function saveCardPlan(
 }
 
 export async function queueLibraryItemProcessing(itemId: number): Promise<Job> {
-  const response = await fetch(`/api/v1/library/${itemId}/process`, { method: "POST" });
+  const response = await apiFetch(`/api/v1/library/${itemId}/process`, { method: "POST" });
   if (!response.ok) {
     throw new Error(await errorMessage(response, "Failed to queue audio processing."));
   }
@@ -743,7 +758,7 @@ export async function queueLibraryItemProcessing(itemId: number): Promise<Job> {
 }
 
 export async function fetchYotoPlaylists(itemId: number): Promise<YotoPlaylistDraft[]> {
-  const response = await fetch(`/api/v1/yoto/library/${itemId}/playlists`);
+  const response = await apiFetch(`/api/v1/yoto/library/${itemId}/playlists`);
   if (!response.ok) {
     throw new Error(await errorMessage(response, "Failed to load Yoto playlists."));
   }
@@ -751,7 +766,7 @@ export async function fetchYotoPlaylists(itemId: number): Promise<YotoPlaylistDr
 }
 
 export async function queueYotoPlaylist(itemId: number): Promise<QueueYotoPlaylistResponse> {
-  const response = await fetch(`/api/v1/yoto/library/${itemId}/playlists`, { method: "POST" });
+  const response = await apiFetch(`/api/v1/yoto/library/${itemId}/playlists`, { method: "POST" });
   if (!response.ok) {
     throw new Error(await errorMessage(response, "Failed to queue Yoto playlist."));
   }
@@ -759,7 +774,7 @@ export async function queueYotoPlaylist(itemId: number): Promise<QueueYotoPlayli
 }
 
 export async function fetchYotoPlaylistVersions(playlistId: number): Promise<YotoPlaylistVersion[]> {
-  const response = await fetch(`/api/v1/yoto/playlists/${playlistId}/versions`);
+  const response = await apiFetch(`/api/v1/yoto/playlists/${playlistId}/versions`);
   if (!response.ok) {
     throw new Error(await errorMessage(response, "Failed to load Yoto playlist versions."));
   }
@@ -770,7 +785,7 @@ export async function restoreYotoPlaylistVersion(
   playlistId: number,
   versionId: number,
 ): Promise<YotoPlaylistVersion> {
-  const response = await fetch(`/api/v1/yoto/playlists/${playlistId}/versions/${versionId}/restore`, {
+  const response = await apiFetch(`/api/v1/yoto/playlists/${playlistId}/versions/${versionId}/restore`, {
     method: "POST",
   });
   if (!response.ok) {
@@ -787,7 +802,7 @@ export async function updateYotoPlaylistRemoteLink(
     mark_linked_manually?: boolean;
   },
 ): Promise<YotoPlaylistDraft> {
-  const response = await fetch(`/api/v1/yoto/playlists/${playlistId}/remote-link`, {
+  const response = await apiFetch(`/api/v1/yoto/playlists/${playlistId}/remote-link`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -799,7 +814,7 @@ export async function updateYotoPlaylistRemoteLink(
 }
 
 export async function fetchYotoCredentialStatus(): Promise<YotoCredentialStatus> {
-  const response = await fetch("/api/v1/yoto/credentials/status");
+  const response = await apiFetch("/api/v1/yoto/credentials/status");
   if (!response.ok) {
     throw new Error(await errorMessage(response, "Failed to load Yoto credential status."));
   }
@@ -810,7 +825,7 @@ export async function startYotoOAuth(
   accountLabel: string,
   codeChallenge: string,
 ): Promise<StartYotoOAuthResponse> {
-  const response = await fetch("/api/v1/yoto/credentials/start", {
+  const response = await apiFetch("/api/v1/yoto/credentials/start", {
     body: JSON.stringify({
       account_label: accountLabel,
       code_challenge: codeChallenge,
@@ -830,7 +845,7 @@ export async function completeYotoOAuth(payload: {
   state: string;
   code_verifier: string;
 }): Promise<CompleteYotoOAuthResponse> {
-  const response = await fetch("/api/v1/yoto/credentials/callback", {
+  const response = await apiFetch("/api/v1/yoto/credentials/callback", {
     body: JSON.stringify(payload),
     headers: { "Content-Type": "application/json" },
     method: "POST",
@@ -842,7 +857,7 @@ export async function completeYotoOAuth(payload: {
 }
 
 export async function disconnectYotoCredentials(): Promise<YotoCredentialStatus> {
-  const response = await fetch("/api/v1/yoto/credentials/disconnect", { method: "POST" });
+  const response = await apiFetch("/api/v1/yoto/credentials/disconnect", { method: "POST" });
   if (!response.ok) {
     throw new Error(await errorMessage(response, "Failed to disconnect Yoto credentials."));
   }
@@ -850,7 +865,7 @@ export async function disconnectYotoCredentials(): Promise<YotoCredentialStatus>
 }
 
 export async function probeYotoCredentials(): Promise<YotoCredentialProbeResponse> {
-  const response = await fetch("/api/v1/yoto/credentials/probe", { method: "POST" });
+  const response = await apiFetch("/api/v1/yoto/credentials/probe", { method: "POST" });
   if (!response.ok) {
     throw new Error(await errorMessage(response, "Failed to run the Yoto API probe."));
   }
@@ -858,7 +873,7 @@ export async function probeYotoCredentials(): Promise<YotoCredentialProbeRespons
 }
 
 export async function fetchBackendBuildInfo(): Promise<BuildInfo> {
-  const response = await fetch("/api/v1/health/build");
+  const response = await apiFetch("/api/v1/health/build");
   if (!response.ok) {
     throw new Error(await errorMessage(response, "Failed to load backend build info."));
   }
@@ -871,7 +886,7 @@ export async function debugYotoApiRequest(payload: {
   path: string;
   body_json?: string | null;
 }): Promise<YotoApiDebugResponse> {
-  const response = await fetch("/api/v1/yoto/debug/request", {
+  const response = await apiFetch("/api/v1/yoto/debug/request", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -883,7 +898,7 @@ export async function debugYotoApiRequest(payload: {
 }
 
 export async function fetchImports(): Promise<ImportRequest[]> {
-  const response = await fetch("/api/v1/imports");
+  const response = await apiFetch("/api/v1/imports");
   if (!response.ok) {
     throw new Error("Failed to load imports.");
   }
@@ -891,7 +906,7 @@ export async function fetchImports(): Promise<ImportRequest[]> {
 }
 
 export async function fetchImportSources(): Promise<ImportSourceInfo> {
-  const response = await fetch("/api/v1/imports/sources");
+  const response = await apiFetch("/api/v1/imports/sources");
   if (!response.ok) {
     throw new Error("Failed to load import storage paths.");
   }
@@ -905,7 +920,7 @@ export async function createImport(payload: {
   content_type: string;
   requested_by_user_slug?: string;
 }): Promise<ImportRequest> {
-  const response = await fetch("/api/v1/imports", {
+  const response = await apiFetch("/api/v1/imports", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -917,7 +932,7 @@ export async function createImport(payload: {
 }
 
 export async function hideImport(importId: number): Promise<ImportRequest> {
-  const response = await fetch(`/api/v1/imports/${importId}/hide`, { method: "POST" });
+  const response = await apiFetch(`/api/v1/imports/${importId}/hide`, { method: "POST" });
   if (!response.ok) {
     throw new Error("Failed to hide import.");
   }
@@ -933,7 +948,7 @@ export async function updateImportReview(
     reviewed_by_user_slug?: string;
   },
 ): Promise<ImportRequest> {
-  const response = await fetch(`/api/v1/imports/${importId}/review`, {
+  const response = await apiFetch(`/api/v1/imports/${importId}/review`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -948,7 +963,7 @@ export async function approveImportReview(
   importId: number,
   approvedByUserSlug?: string,
 ): Promise<ImportRequest> {
-  const response = await fetch(`/api/v1/imports/${importId}/approve`, {
+  const response = await apiFetch(`/api/v1/imports/${importId}/approve`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ approved_by_user_slug: approvedByUserSlug }),
@@ -973,7 +988,7 @@ export async function uploadImport(payload: {
   }
   formData.append("media_file", payload.media_file);
 
-  const response = await fetch("/api/v1/imports/uploads", {
+  const response = await apiFetch("/api/v1/imports/uploads", {
     method: "POST",
     body: formData,
   });
@@ -984,7 +999,7 @@ export async function uploadImport(payload: {
 }
 
 export async function fetchJobs(): Promise<Job[]> {
-  const response = await fetch("/api/v1/jobs");
+  const response = await apiFetch("/api/v1/jobs");
   if (!response.ok) {
     throw new Error("Failed to load jobs.");
   }
@@ -992,7 +1007,7 @@ export async function fetchJobs(): Promise<Job[]> {
 }
 
 export async function retryJob(jobId: number): Promise<Job> {
-  const response = await fetch(`/api/v1/jobs/${jobId}/retry`, { method: "POST" });
+  const response = await apiFetch(`/api/v1/jobs/${jobId}/retry`, { method: "POST" });
   if (!response.ok) {
     throw new Error("Failed to retry job.");
   }
@@ -1000,7 +1015,7 @@ export async function retryJob(jobId: number): Promise<Job> {
 }
 
 export async function fetchCards(): Promise<PhysicalCard[]> {
-  const response = await fetch("/api/v1/cards");
+  const response = await apiFetch("/api/v1/cards");
   if (!response.ok) {
     throw new Error("Failed to load cards.");
   }
@@ -1008,7 +1023,7 @@ export async function fetchCards(): Promise<PhysicalCard[]> {
 }
 
 export async function fetchCard(cardId: number): Promise<PhysicalCard> {
-  const response = await fetch(`/api/v1/cards/${cardId}`);
+  const response = await apiFetch(`/api/v1/cards/${cardId}`);
   if (!response.ok) {
     throw new Error(await errorMessage(response, "Failed to load card."));
   }
@@ -1045,7 +1060,7 @@ export async function createCard(payload: {
   last_linked_at?: string | null;
   notes?: string | null;
 }): Promise<PhysicalCard> {
-  const response = await fetch("/api/v1/cards", {
+  const response = await apiFetch("/api/v1/cards", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -1088,7 +1103,7 @@ export async function updateCard(
     notes: string | null;
   }>,
 ): Promise<PhysicalCard> {
-  const response = await fetch(`/api/v1/cards/${cardId}`, {
+  const response = await apiFetch(`/api/v1/cards/${cardId}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -1100,7 +1115,7 @@ export async function updateCard(
 }
 
 export async function fetchCardHistory(cardId: number): Promise<CardAssignmentEvent[]> {
-  const response = await fetch(`/api/v1/cards/${cardId}/history`);
+  const response = await apiFetch(`/api/v1/cards/${cardId}/history`);
   if (!response.ok) {
     throw new Error(await errorMessage(response, "Failed to load card history."));
   }
@@ -1111,7 +1126,7 @@ export async function linkLibraryItemToCard(
   libraryItemId: number,
   cardId: number,
 ): Promise<LinkCardResponse> {
-  const response = await fetch(`/api/v1/library/${libraryItemId}/link-card`, {
+  const response = await apiFetch(`/api/v1/library/${libraryItemId}/link-card`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ card_id: cardId }),

@@ -262,6 +262,39 @@ function EmptyState({ message }: { message: string }) {
   return <p className="muted">{message}</p>;
 }
 
+function BackendUnavailablePanel({
+  error,
+  onRetry,
+}: {
+  error: string;
+  onRetry: () => void;
+}) {
+  return (
+    <section className="auth-panel backend-unavailable-panel">
+      <p className="eyebrow">Backend unavailable</p>
+      <h2>Connect to the backend to continue</h2>
+      <p className="auth-copy">
+        The app could not reach the YotoWebMgr backend. Connect this device to the same Tailscale
+        network and confirm the backend is reachable before continuing.
+      </p>
+      <div className="settings-connection-panel">
+        <p className="settings-note">
+          Expected backend host: <strong>http://ziggi-pc.tailaf3d4b.ts.net:5175</strong>
+        </p>
+        <p className="auth-error">{error}</p>
+        <div className="button-row">
+          <button className="primary-button" onClick={onRetry} type="button">
+            Retry connection
+          </button>
+          <a className="secondary-button" href="http://ziggi-pc.tailaf3d4b.ts.net:5175">
+            Open backend host
+          </a>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function YotoJsonTree({ value, depth = 0 }: { value: unknown; depth?: number }) {
   if (value === null) {
     return <span className="json-primitive">null</span>;
@@ -3843,6 +3876,7 @@ function AuthGate({
   const [authOptions, setAuthOptions] = useState<AuthProvidersResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [reloadToken, setReloadToken] = useState(0);
   const [passwordForm, setPasswordForm] = useState({ username: "", password: "" });
   const [submitting, setSubmitting] = useState(false);
 
@@ -3850,6 +3884,10 @@ function AuthGate({
     let cancelled = false;
 
     async function loadAuthOptions() {
+      if (!cancelled) {
+        setLoading(true);
+        setError(null);
+      }
       try {
         const options = await fetchAuthProviders();
         if (!cancelled) {
@@ -3870,7 +3908,7 @@ function AuthGate({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [reloadToken]);
 
   async function handleQuickSelect(userSlug: string) {
     setSubmitting(true);
@@ -3916,6 +3954,10 @@ function AuthGate({
         </p>
       </section>
     );
+  }
+
+  if (!loading && error && !authOptions) {
+    return <BackendUnavailablePanel error={error} onRetry={() => setReloadToken((current) => current + 1)} />;
   }
 
   return (

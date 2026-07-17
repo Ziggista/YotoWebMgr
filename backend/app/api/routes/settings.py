@@ -21,7 +21,7 @@ SETTING_DEFAULTS = {
     "yoto_api_base_url": "https://api.yotoplay.com",
     "yoto_auth_base_url": "https://login.yotoplay.com",
     "yoto_client_id": "dNHlYDxvjov4zHB3pm27FvdbtcljK5VL",
-    "yoto_redirect_uri": "http://127.0.0.1:5175/settings/yoto/callback",
+    "yoto_redirect_uri": "http://ziggi-pc.tailaf3d4b.ts.net:5175/settings/yoto/callback",
     "yoto_oauth_scope": (
         "openid offline_access "
         "family:library:view family:library:manage "
