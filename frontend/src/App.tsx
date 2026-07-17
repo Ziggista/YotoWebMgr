@@ -85,6 +85,7 @@ const contentTypes = [
 ];
 const defaultNdefFormatCommand = "A2:03:E1:10:06:00,A2:04:03:04:D8:00,A2:05:00:00:FE:00";
 const yotoPkceStorageKey = "yotowebmgr.yoto.pkce";
+const yotoPkceExchangeKey = "yotowebmgr.yoto.pkce.exchange";
 
 type CardWorkflowStep = {
   key: string;
@@ -3214,6 +3215,13 @@ function YotoOAuthCallbackPage() {
         setError("The returned Yoto OAuth state does not match this browser session.");
         return;
       }
+      const exchangeKey = `${state}:${code}`;
+      const exchangeStatus = window.sessionStorage.getItem(yotoPkceExchangeKey);
+      if (exchangeStatus === `processing:${exchangeKey}` || exchangeStatus === `complete:${exchangeKey}`) {
+        setStatusMessage("Yoto browser auth is already being completed for this callback.");
+        return;
+      }
+      window.sessionStorage.setItem(yotoPkceExchangeKey, `processing:${exchangeKey}`);
       try {
         const result = await completeYotoOAuth({
           code,
@@ -3221,9 +3229,12 @@ function YotoOAuthCallbackPage() {
           code_verifier: stored.verifier,
         });
         window.sessionStorage.removeItem(yotoPkceStorageKey);
+        window.sessionStorage.setItem(yotoPkceExchangeKey, `complete:${exchangeKey}`);
+        window.history.replaceState({}, document.title, "/settings/yoto/callback");
         setCredential(result.credential);
         setStatusMessage("Yoto browser auth completed.");
       } catch (callbackError) {
+        window.sessionStorage.removeItem(yotoPkceExchangeKey);
         setError(callbackError instanceof Error ? callbackError.message : "Failed to complete Yoto auth.");
       }
     }
