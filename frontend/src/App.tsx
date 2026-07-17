@@ -5,6 +5,7 @@ import "react-h5-audio-player/lib/styles.css";
 import {
   AppSettings,
   AuthProvidersResponse,
+  BuildInfo,
   CardAssignmentEvent,
   CardPlan,
   ImportSourceInfo,
@@ -31,6 +32,7 @@ import {
   createSplitPoint,
   completeYotoOAuth,
   disconnectYotoCredentials,
+  fetchBackendBuildInfo,
   fetchCard,
   fetchCardHistory,
   fetchCards,
@@ -88,6 +90,7 @@ const contentTypes = [
 const defaultNdefFormatCommand = "A2:03:E1:10:06:00,A2:04:03:04:D8:00,A2:05:00:00:FE:00";
 const yotoPkceStorageKey = "yotowebmgr.yoto.pkce";
 const yotoPkceExchangeKey = "yotowebmgr.yoto.pkce.exchange";
+const frontendBuildSha = import.meta.env.VITE_APP_BUILD_SHA ?? "dev";
 
 type CardWorkflowStep = {
   key: string;
@@ -3462,6 +3465,59 @@ function AuthGate({
   );
 }
 
+function BuildStamp() {
+  const [backendBuild, setBackendBuild] = useState<BuildInfo | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadBuildInfo() {
+      try {
+        const result = await fetchBackendBuildInfo();
+        if (!cancelled) {
+          setBackendBuild(result);
+        }
+      } catch (loadError) {
+        if (!cancelled) {
+          setError(loadError instanceof Error ? loadError.message : "Failed to load backend build info.");
+        }
+      }
+    }
+
+    void loadBuildInfo();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const backendSha = backendBuild?.build_sha ?? "loading";
+  const hashesMatch = backendBuild ? backendBuild.build_sha === frontendBuildSha : false;
+  const indicatorClass = backendBuild
+    ? hashesMatch
+      ? "build-indicator build-indicator-match"
+      : "build-indicator build-indicator-mismatch"
+    : "build-indicator build-indicator-loading";
+
+  return (
+    <footer className="build-stamp">
+      <div className="build-stamp-row">
+        <span className={indicatorClass} aria-hidden="true" />
+        <strong>Build</strong>
+        <span className="build-chip">UI {frontendBuildSha}</span>
+        <span className="build-chip">API {backendSha}</span>
+        <span className={`build-status${hashesMatch ? " build-status-match" : ""}`}>
+          {backendBuild ? (hashesMatch ? "matched" : "mismatch") : "checking"}
+        </span>
+      </div>
+      <p className="build-stamp-copy">
+        {backendBuild ? `Environment: ${backendBuild.environment}` : "Loading backend build info..."}
+        {error ? ` ${error}` : ""}
+      </p>
+    </footer>
+  );
+}
+
 export default function App() {
   const [session, setSession] = useState<SessionResponse | null>(() => {
     const stored = window.localStorage.getItem(sessionStorageKey);
@@ -3545,6 +3601,7 @@ export default function App() {
           <Route path="/settings/yoto/callback" element={<YotoOAuthCallbackPage />} />
         </Routes>
       </main>
+      <BuildStamp />
     </div>
   );
 }

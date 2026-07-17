@@ -1,5 +1,7 @@
 FROM python:3.12-slim
 
+ARG APP_BUILD_SHA=dev
+
 WORKDIR /app
 
 COPY pyproject.toml ./
@@ -10,5 +12,7 @@ COPY alembic ./alembic
 RUN pip install --no-cache-dir .
 
 EXPOSE 8000
+
+ENV APP_BUILD_SHA=${APP_BUILD_SHA}
 
 CMD ["sh", "-c", "python -m app.db.reset_database && alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --log-level info --access-log"]

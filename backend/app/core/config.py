@@ -8,6 +8,7 @@ class Settings(BaseSettings):
 
     app_name: str = "YotoWebMgr API"
     environment: str = "development"
+    app_build_sha: str = "dev"
     api_v1_prefix: str = "/api/v1"
     database_url: str = "postgresql+psycopg://yotowebmgr:change-me@localhost:5432/yotowebmgr"
     reset_database_on_start: bool = False

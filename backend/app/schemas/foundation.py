@@ -584,6 +584,12 @@ class YotoCredentialProbeResponse(BaseModel):
     live_api_call: bool = True
 
 
+class BuildInfoResponse(BaseModel):
+    service: str
+    build_sha: str
+    environment: str
+
+
 class YotoPlaylistPreviewResponse(BaseModel):
     library_item_id: int
     payload: dict[str, object]

@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 REGISTRY="${REGISTRY:-localhost:32000}"
 TAG="${TAG:-dev}"
+BUILD_SHA="${BUILD_SHA:-$(git -C "${ROOT_DIR}" rev-parse --short HEAD 2>/dev/null || echo "nogit")}"
 BUILDAH_ISOLATION="${BUILDAH_ISOLATION:-chroot}"
 XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/yotowebmgr-buildah-run-${UID}}"
 export BUILDAH_ISOLATION
@@ -17,8 +18,14 @@ build_image() {
   local dockerfile="$3"
   local image="${REGISTRY}/${name}:${TAG}"
 
-  echo "Building ${image}"
-  buildah bud --pull --tag "${image}" --file "${dockerfile}" "${context}"
+  echo "Building ${image} with BUILD_SHA=${BUILD_SHA}"
+  buildah bud \
+    --pull \
+    --build-arg "APP_BUILD_SHA=${BUILD_SHA}" \
+    --build-arg "VITE_APP_BUILD_SHA=${BUILD_SHA}" \
+    --tag "${image}" \
+    --file "${dockerfile}" \
+    "${context}"
 
   echo "Pushing ${image}"
   buildah push --tls-verify=false "${image}" "docker://${image}"

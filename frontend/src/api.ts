@@ -411,6 +411,12 @@ export interface YotoCredentialProbeResponse {
   live_api_call: boolean;
 }
 
+export interface BuildInfo {
+  service: string;
+  build_sha: string;
+  environment: string;
+}
+
 async function errorMessage(response: Response, fallback: string): Promise<string> {
   try {
     const payload = (await response.json()) as { detail?: string };
@@ -815,6 +821,14 @@ export async function probeYotoCredentials(): Promise<YotoCredentialProbeRespons
     throw new Error(await errorMessage(response, "Failed to run the Yoto API probe."));
   }
   return response.json() as Promise<YotoCredentialProbeResponse>;
+}
+
+export async function fetchBackendBuildInfo(): Promise<BuildInfo> {
+  const response = await fetch("/api/v1/health/build");
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to load backend build info."));
+  }
+  return response.json() as Promise<BuildInfo>;
 }
 
 export async function fetchImports(): Promise<ImportRequest[]> {

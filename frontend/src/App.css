@@ -27,6 +27,73 @@ a {
   padding: 24px 16px 48px;
 }
 
+.build-stamp {
+  margin-top: 18px;
+  padding: 14px 18px;
+  border-radius: 18px;
+  background: rgba(6, 22, 26, 0.52);
+  border: 1px solid rgba(255, 240, 214, 0.12);
+}
+
+.build-stamp-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.build-indicator {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: #c4b8a3;
+  box-shadow: 0 0 0 3px rgba(255, 248, 232, 0.08);
+}
+
+.build-indicator-match {
+  background: #7ce2a8;
+  box-shadow: 0 0 0 3px rgba(124, 226, 168, 0.14);
+}
+
+.build-indicator-mismatch {
+  background: #ff9b7a;
+  box-shadow: 0 0 0 3px rgba(255, 155, 122, 0.14);
+}
+
+.build-indicator-loading {
+  background: #ffcf8e;
+  box-shadow: 0 0 0 3px rgba(255, 207, 142, 0.14);
+}
+
+.build-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(255, 248, 232, 0.08);
+  border: 1px solid rgba(255, 240, 214, 0.12);
+  color: #ddd4c3;
+  font-size: 0.82rem;
+  letter-spacing: 0.04em;
+}
+
+.build-status {
+  color: #ffcf8e;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.build-status-match {
+  color: #7ce2a8;
+}
+
+.build-stamp-copy {
+  margin: 8px 0 0;
+  color: #bfb5a3;
+  font-size: 0.9rem;
+}
+
 .hero {
   padding: 24px;
   border-radius: 24px;
@@ -988,6 +1055,10 @@ a {
   .auth-panel-header,
   .oauth-strip {
     flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .build-stamp-row {
     align-items: flex-start;
   }
 
