@@ -39,6 +39,15 @@ microk8s kubectl -n yotowebmgr rollout status deployment/worker --timeout=180s
 microk8s kubectl -n yotowebmgr rollout status deployment/frontend --timeout=180s
 
 echo
+echo "Pods:"
+microk8s kubectl -n yotowebmgr get pods -o wide
+echo
+echo "Recent backend API logs:"
+microk8s kubectl -n yotowebmgr logs deployment/api --tail=200 || true
+echo
+echo "Recent frontend logs:"
+microk8s kubectl -n yotowebmgr logs deployment/frontend --tail=200 || true
+echo
 echo "Dev deployment is ready."
 echo "Ensuring the Kubernetes frontend is forwarded locally."
 bash "${ROOT_DIR}/k8s/scripts/ensure-dev-port-forward.sh"
@@ -47,3 +56,8 @@ echo "  http://127.0.0.1:5175/"
 echo
 echo "Deploy log saved to:"
 echo "  ${LOG_FILE}"
+echo
+echo "Useful follow-up log commands:"
+echo "  microk8s kubectl -n yotowebmgr logs deployment/api --tail=200 -f"
+echo "  microk8s kubectl -n yotowebmgr logs deployment/frontend --tail=200 -f"
+echo "  microk8s kubectl -n yotowebmgr logs deployment/worker --tail=200 -f"

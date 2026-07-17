@@ -249,17 +249,22 @@ def upgrade() -> None:
             },
             {
                 "key": "yoto_client_id",
-                "value": "",
+                "value": "dNHlYDxvjov4zHB3pm27FvdbtcljK5VL",
                 "description": "Non-secret Yoto OAuth client identifier, if required.",
             },
             {
                 "key": "yoto_redirect_uri",
-                "value": "",
+                "value": "http://127.0.0.1:5175/settings/yoto/callback",
                 "description": "Yoto OAuth redirect URI, if required.",
             },
             {
                 "key": "yoto_oauth_scope",
-                "value": "openid offline_access",
+                "value": (
+                    "openid offline_access "
+                    "family:library:view family:library:manage "
+                    "user:content:view user:content:manage "
+                    "family:devices:view family:devices:manage family:devices:control"
+                ),
                 "description": "Requested Yoto OAuth scopes.",
             },
             {

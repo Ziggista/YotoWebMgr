@@ -186,6 +186,10 @@ def _safe_oauth_exchange_summary(*, client_id: str, redirect_uri: str, provider_
     )
 
 
+def _masked_client_id(client_id: str) -> str:
+    return f"{client_id[:4]}...{client_id[-4:]}" if len(client_id) > 8 else client_id or "missing"
+
+
 def _token_expired(expires_at: datetime | None) -> bool:
     if expires_at is None:
         return False
@@ -242,14 +246,22 @@ def _tokens_from_payload(
     )
 
 
-def _probe_definition(scopes: str) -> tuple[str, str]:
-    scope_values = set(scopes.split())
+def _probe_definition(*, granted_scopes: str, configured_scopes: str) -> tuple[str, str]:
+    scope_values = set((granted_scopes or configured_scopes).split())
+    combined_scope_values = set((f"{granted_scopes} {configured_scopes}").split())
+    scope_values = scope_values or combined_scope_values
     if {"user:content:view", "user:content:manage"} & scope_values:
         return ("User MYO content", "/content/mine?showdeleted=false")
     if {"family:library:view", "family:library:manage"} & scope_values:
         return ("Family library groups", "/card/family/library/groups")
     if {"family:devices:view", "family:devices:manage", "family:devices:control"} & scope_values:
         return ("Family devices", "/device-v2/devices/mine")
+    logger.warning(
+        "Yoto probe scope mismatch: granted_scopes=%s configured_scopes=%s combined_scopes=%s",
+        granted_scopes or "<empty>",
+        configured_scopes or "<empty>",
+        " ".join(sorted(combined_scope_values)) or "<empty>",
+    )
     raise HTTPException(
         status_code=409,
         detail="No supported Yoto debug probe matches the currently granted scopes. Add one of: family:library:view, user:content:view, or family:devices:view.",
@@ -391,6 +403,14 @@ async def start_yoto_oauth(
     credential.oauth_state = token_urlsafe(24)
     credential.authorization_url = _authorization_url(db, credential.oauth_state, payload.code_challenge)
     credential.error_summary = None
+    logger.info(
+        "Yoto OAuth started for credential=%s account_label=%s client_id=%s redirect_uri=%s scopes=%s",
+        credential.id or "new",
+        credential.account_label,
+        _masked_client_id(_setting(db, "yoto_client_id")),
+        _setting(db, "yoto_redirect_uri"),
+        credential.scopes,
+    )
     db.add(credential)
     db.commit()
     db.refresh(credential)
@@ -447,6 +467,16 @@ async def complete_yoto_oauth(
         ) from error
 
     stored_tokens = _tokens_from_payload(token_payload)
+    returned_scope = str(token_payload.get("scope") or "")
+    logger.info(
+        "Yoto OAuth exchange succeeded for credential=%s client_id=%s redirect_uri=%s returned_scope=%s has_refresh_token=%s expires_at=%s",
+        credential.id,
+        _masked_client_id(client_id),
+        redirect_uri,
+        returned_scope or "<empty>",
+        bool(stored_tokens.refresh_token),
+        stored_tokens.expires_at.isoformat() if stored_tokens.expires_at else "<unknown>",
+    )
     try:
         token_storage_ref = await save_tokens_to_secret(
             credential_id=credential.id,
@@ -474,6 +504,12 @@ async def complete_yoto_oauth(
     credential.last_refreshed_at = datetime.now(timezone.utc)
     credential.expires_at = stored_tokens.expires_at
     credential.error_summary = "Browser OAuth exchange succeeded and tokens were stored in the Kubernetes Secret."
+    logger.info(
+        "Yoto OAuth tokens stored for credential=%s storage_ref=%s credential_scopes=%s",
+        credential.id,
+        credential.token_storage_ref,
+        credential.scopes,
+    )
     db.add(credential)
     db.commit()
     db.refresh(credential)
@@ -499,6 +535,7 @@ async def disconnect_yoto_credentials(
             await delete_tokens_from_secret(credential.token_storage_ref)
         except YotoTokenStoreError as error:
             logger.warning("Failed to delete stored Yoto tokens for credential %s: %s", credential.id, error)
+    logger.info("Yoto credential disconnected locally for credential=%s", credential.id)
     credential.status = "revoked"
     credential.token_storage_ref = None
     credential.authorization_url = None
@@ -527,7 +564,19 @@ async def probe_yoto_credentials(
         db.commit()
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=credential.error_summary) from error
 
-    probe_label, probe_url = _probe_definition(credential.scopes)
+    configured_scopes = _setting(db, "yoto_oauth_scope", "openid offline_access")
+    probe_label, probe_url = _probe_definition(
+        granted_scopes=credential.scopes,
+        configured_scopes=configured_scopes,
+    )
+    logger.info(
+        "Yoto probe starting for credential=%s granted_scopes=%s configured_scopes=%s probe_url=%s expires_at=%s",
+        credential.id,
+        credential.scopes or "<empty>",
+        configured_scopes,
+        probe_url,
+        stored_tokens.expires_at.isoformat() if stored_tokens.expires_at else "<unknown>",
+    )
     refreshed = False
     if _token_expired(stored_tokens.expires_at):
         if not stored_tokens.refresh_token:
@@ -543,6 +592,11 @@ async def probe_yoto_credentials(
         credential.expires_at = stored_tokens.expires_at
         credential.scopes = str(refresh_payload.get("scope") or credential.scopes)
         refreshed = True
+        logger.info(
+            "Yoto probe refreshed expired token for credential=%s returned_scope=%s",
+            credential.id,
+            refresh_payload.get("scope") or "<empty>",
+        )
 
     http_status, payload = await _call_yoto_api(
         api_base_url=_setting(db, "yoto_api_base_url", "https://api.yotoplay.com"),
@@ -561,6 +615,11 @@ async def probe_yoto_credentials(
         credential.expires_at = stored_tokens.expires_at
         credential.scopes = str(refresh_payload.get("scope") or credential.scopes)
         refreshed = True
+        logger.info(
+            "Yoto probe retried after 401 for credential=%s returned_scope=%s",
+            credential.id,
+            refresh_payload.get("scope") or "<empty>",
+        )
         http_status, payload = await _call_yoto_api(
             api_base_url=_setting(db, "yoto_api_base_url", "https://api.yotoplay.com"),
             relative_url=probe_url,
@@ -573,6 +632,13 @@ async def probe_yoto_credentials(
     else:
         credential.status = "connected_error"
         credential.error_summary = f"Last Yoto probe failed against {probe_url} with HTTP {http_status}."
+    logger.info(
+        "Yoto probe finished for credential=%s http_status=%s refreshed=%s response_excerpt=%s",
+        credential.id,
+        http_status,
+        refreshed,
+        _response_excerpt(payload),
+    )
     db.add(credential)
     db.commit()
     db.refresh(credential)

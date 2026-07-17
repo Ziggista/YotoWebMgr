@@ -20,9 +20,14 @@ SETTING_DEFAULTS = {
     "yoto_api_enabled": "false",
     "yoto_api_base_url": "https://api.yotoplay.com",
     "yoto_auth_base_url": "https://login.yotoplay.com",
-    "yoto_client_id": "",
-    "yoto_redirect_uri": "",
-    "yoto_oauth_scope": "openid offline_access",
+    "yoto_client_id": "dNHlYDxvjov4zHB3pm27FvdbtcljK5VL",
+    "yoto_redirect_uri": "http://127.0.0.1:5175/settings/yoto/callback",
+    "yoto_oauth_scope": (
+        "openid offline_access "
+        "family:library:view family:library:manage "
+        "user:content:view user:content:manage "
+        "family:devices:view family:devices:manage family:devices:control"
+    ),
     "yoto_upload_timeout_seconds": "900",
     "yoto_transcode_poll_seconds": "10",
     "yoto_transcode_timeout_minutes": "30",
