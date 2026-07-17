@@ -92,8 +92,7 @@ detect_android_sdk_dir() {
     "${ANDROID_SDK_ROOT:-}" \
     "${ANDROID_HOME:-}" \
     "${HOME}/Android/Sdk" \
-    "${HOME}/Android" \
-    /mnt/c/Users/*/AppData/Local/Android/Sdk
+    "${HOME}/Android"
   do
     if [[ -n "${candidate}" && -d "${candidate}" ]]; then
       printf '%s\n' "${candidate}"
@@ -107,8 +106,14 @@ ensure_android_local_properties() {
   local sdk_dir
   sdk_dir="$(detect_android_sdk_dir || true)"
   if [[ -z "${sdk_dir}" ]]; then
-    echo "Android SDK not found. Set ANDROID_SDK_ROOT or install the SDK before Android builds." >&2
-    echo "Expected one of: \$ANDROID_SDK_ROOT, \$ANDROID_HOME, \$HOME/Android/Sdk, or a Windows SDK under /mnt/c/Users/.../AppData/Local/Android/Sdk" >&2
+    echo "Android SDK not found in WSL. Set ANDROID_SDK_ROOT or install the Linux Android SDK before Android builds." >&2
+    echo "Expected one of: \$ANDROID_SDK_ROOT, \$ANDROID_HOME, \$HOME/Android/Sdk, or \$HOME/Android" >&2
+    echo "Do not point WSL Gradle builds at a Windows SDK under /mnt/c/... because Linux tools need Linux binaries such as 'aapt', not 'aapt.exe'." >&2
+    exit 1
+  fi
+  if [[ "${sdk_dir}" == /mnt/* ]]; then
+    echo "Refusing to use Android SDK from ${sdk_dir} for this WSL build." >&2
+    echo "WSL Gradle builds require a Linux Android SDK install inside WSL, not the Windows SDK mounted under /mnt/c/..." >&2
     exit 1
   fi
 
