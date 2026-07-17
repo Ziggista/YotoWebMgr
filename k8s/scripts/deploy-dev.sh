@@ -123,6 +123,10 @@ if [[ "${ANDROID_BUILD}" == "true" ]]; then
   fi
 
   pushd "${FRONTEND_DIR}" >/dev/null
+  if [[ ! -d "node_modules/@rollup/rollup-linux-x64-gnu" ]]; then
+    echo "Linux Rollup optional dependency is missing; refreshing frontend dependencies for this WSL build"
+    npm install
+  fi
   npm run build
   npx cap sync android
   popd >/dev/null

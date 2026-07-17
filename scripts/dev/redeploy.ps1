@@ -24,7 +24,14 @@ if (-not $distro) {
 $drive = $rootDir.Substring(0, 1).ToLowerInvariant()
 $relativePath = $rootDir.Substring(2).Replace("\", "/")
 $wslRootDir = "/mnt/$drive$relativePath"
-$wslCommand = "cd '$wslRootDir' && ./k8s/scripts/deploy-dev.sh"
+$quotedArgs = @($args | ForEach-Object {
+  "'" + ($_ -replace "'", "'\"'\"'") + "'"
+}) -join " "
+$wslCommand = if ($quotedArgs) {
+  "cd '$wslRootDir' && ./k8s/scripts/deploy-dev.sh $quotedArgs"
+} else {
+  "cd '$wslRootDir' && ./k8s/scripts/deploy-dev.sh"
+}
 
 Write-Host "Using WSL distro: $distro"
 Write-Host "Running destructive MicroK8s redeploy from: $wslRootDir"
