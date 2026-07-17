@@ -59,6 +59,12 @@ MicroK8s registry:
 k8s/scripts/deploy-dev.sh
 ```
 
+From Windows PowerShell, use the wrapper that runs the same destructive script through WSL:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/dev/redeploy.ps1
+```
+
 The dev deployment script is intentionally destructive. It deletes the `yotowebmgr` namespace
 before building images or applying manifests, so PostgreSQL starts with a clean volume and Alembic
 applies all migrations from scratch.
@@ -71,6 +77,12 @@ restart it later, run the dedicated helper:
 
 ```bash
 k8s/scripts/open-dev.sh
+```
+
+Or from Windows PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/dev/open-dev.ps1
 ```
 
 Then browse to:
@@ -89,10 +101,21 @@ Common commands are wrapped so routine checks use less typing:
 ```bash
 scripts/dev/verify.sh      # backend tests, frontend build, shell syntax checks
 scripts/dev/redeploy.sh    # destructive MicroK8s rebuild/redeploy from scratch
+k8s/scripts/deploy-dev.sh  # destructive Linux/WSL deploy entrypoint used by the wrappers
 k8s/scripts/open-dev.sh    # ensure the Kubernetes frontend is forwarded on http://127.0.0.1:5175/
 scripts/dev/status.sh      # pods, services, recent API logs
 scripts/dev/seed-radio.sh  # add the ABC Triple J test stream to the current dev API
 ```
+
+PowerShell wrappers are also available:
+
+```text
+scripts/dev/redeploy.ps1
+scripts/dev/open-dev.ps1
+```
+
+If you want to force a specific distro instead of the first installed one, set
+`YOTOWEBMGR_WSL_DISTRO` before running the wrapper.
 
 Filesystem imports use a persistent MicroK8s volume mounted into the API and worker pods at:
 
