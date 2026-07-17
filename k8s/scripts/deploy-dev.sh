@@ -6,6 +6,7 @@ NAMESPACE="${NAMESPACE:-yotowebmgr}"
 SECRET_NAME="${SECRET_NAME:-yotowebmgr-secrets}"
 FRONTEND_DIR="${ROOT_DIR}/frontend"
 ANDROID_DIR="${FRONTEND_DIR}/android"
+ANDROID_ASSETS_DIR="${ANDROID_DIR}/app/src/main/assets/public"
 LOG_DIR="${LOG_DIR:-${ROOT_DIR}/scripts/dev/logs}"
 RUN_TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 GIT_SHA="$(git -C "${ROOT_DIR}" rev-parse --short HEAD 2>/dev/null || echo "nogit")"
@@ -57,6 +58,32 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+
+node_major_version() {
+  local version
+  version="$(node -v 2>/dev/null || true)"
+  version="${version#v}"
+  printf '%s\n' "${version%%.*}"
+}
+
+copy_web_dist_into_android_assets() {
+  if [[ ! -d "${ANDROID_ASSETS_DIR}" ]]; then
+    echo "Android assets directory not found at ${ANDROID_ASSETS_DIR}" >&2
+    exit 1
+  fi
+  if [[ ! -d "${FRONTEND_DIR}/dist" ]]; then
+    echo "Frontend dist directory not found at ${FRONTEND_DIR}/dist" >&2
+    exit 1
+  fi
+
+  echo "Copying built web assets into the existing Capacitor Android project"
+  find "${ANDROID_ASSETS_DIR}" -mindepth 1 -maxdepth 1 \
+    ! -name ".gitkeep" \
+    ! -name "cordova.js" \
+    ! -name "cordova_plugins.js" \
+    -exec rm -rf {} +
+  cp -R "${FRONTEND_DIR}/dist/." "${ANDROID_ASSETS_DIR}/"
+}
 
 echo "YotoWebMgr destructive dev deploy"
 echo "UTC timestamp: ${RUN_TIMESTAMP}"
@@ -128,7 +155,13 @@ if [[ "${ANDROID_BUILD}" == "true" ]]; then
     npm install
   fi
   npm run build
-  npx cap sync android
+  if [[ "$(node_major_version)" =~ ^[0-9]+$ ]] && (( $(node_major_version) >= 22 )); then
+    npx cap sync android
+  else
+    echo "Node $(node -v) is below Capacitor CLI's required Node 22 runtime; skipping 'cap sync' and using asset-copy fallback"
+    echo "Fallback assumption: the existing Android wrapper is already checked in and no native Capacitor plugin set changed."
+    copy_web_dist_into_android_assets
+  fi
   popd >/dev/null
 
   if [[ ! -x "${ANDROID_DIR}/gradlew" ]]; then
