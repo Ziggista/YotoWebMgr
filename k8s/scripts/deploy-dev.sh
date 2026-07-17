@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 NAMESPACE="${NAMESPACE:-yotowebmgr}"
 SECRET_NAME="${SECRET_NAME:-yotowebmgr-secrets}"
+BIND_ADDRESS="${BIND_ADDRESS:-127.0.0.1}"
 FRONTEND_DIR="${ROOT_DIR}/frontend"
 ANDROID_DIR="${FRONTEND_DIR}/android"
 ANDROID_ASSETS_DIR="${ANDROID_DIR}/app/src/main/assets/public"
@@ -18,12 +19,14 @@ SECRET_BACKUP_FILE=""
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") [--force]
+Usage: $(basename "$0") [--force] [--bind-address ADDRESS]
 
 Options:
   --force   Delete the namespace without preserving ${SECRET_NAME}.
   --android-build
             Rebuild the Android debug APK after the deploy completes.
+  --bind-address ADDRESS
+            Bind the frontend port-forward to a specific address, such as 0.0.0.0.
 EOF
 }
 
@@ -34,6 +37,15 @@ while (($# > 0)); do
       ;;
     --android-build)
       ANDROID_BUILD=true
+      ;;
+    --bind-address)
+      shift
+      if (($# == 0)); then
+        echo "Missing value for --bind-address" >&2
+        usage >&2
+        exit 1
+      fi
+      BIND_ADDRESS="$1"
       ;;
     -h|--help)
       usage
@@ -130,6 +142,7 @@ echo "Git SHA: ${GIT_SHA}"
 echo "Log file: ${LOG_FILE}"
 echo "Force destroy: ${FORCE_DESTROY}"
 echo "Android build: ${ANDROID_BUILD}"
+echo "Port-forward bind address: ${BIND_ADDRESS}"
 echo
 
 if ! microk8s status --wait-ready | grep -q "registry.*enabled"; then
@@ -219,10 +232,15 @@ if [[ "${ANDROID_BUILD}" == "true" ]]; then
 fi
 
 echo "Dev deployment is ready."
-echo "Ensuring the Kubernetes frontend is forwarded locally."
-bash "${ROOT_DIR}/k8s/scripts/ensure-dev-port-forward.sh"
+echo "Ensuring the Kubernetes frontend is forwarded."
+BIND_ADDRESS="${BIND_ADDRESS}" bash "${ROOT_DIR}/k8s/scripts/ensure-dev-port-forward.sh"
 echo "Browse to:"
-echo "  http://127.0.0.1:5175/"
+if [[ "${BIND_ADDRESS}" == "0.0.0.0" ]]; then
+  echo "  http://127.0.0.1:5175/"
+  echo "  http://ziggi-pc-1.tailaf3d4b.ts.net:5175/"
+else
+  echo "  http://127.0.0.1:5175/"
+fi
 echo
 echo "Deploy log saved to:"
 echo "  ${LOG_FILE}"

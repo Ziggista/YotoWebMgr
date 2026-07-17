@@ -3,6 +3,7 @@ set -euo pipefail
 
 LOCAL_PORT="${LOCAL_PORT:-5175}"
 REMOTE_PORT="${REMOTE_PORT:-80}"
+BIND_ADDRESS="${BIND_ADDRESS:-127.0.0.1}"
 NAMESPACE="${NAMESPACE:-yotowebmgr}"
 SERVICE="${SERVICE:-frontend}"
 PID_FILE="${PID_FILE:-/tmp/yotowebmgr-${SERVICE}-${LOCAL_PORT}.port-forward.pid}"
@@ -10,7 +11,7 @@ LOG_FILE="${LOG_FILE:-/tmp/yotowebmgr-${SERVICE}-${LOCAL_PORT}.port-forward.log}
 TMUX_SESSION="${TMUX_SESSION:-yotowebmgr-${SERVICE}-${LOCAL_PORT}}"
 URL="http://127.0.0.1:${LOCAL_PORT}/"
 
-if curl -fsS --max-time 2 "${URL}" >/dev/null 2>&1; then
+if [[ "${BIND_ADDRESS}" == "127.0.0.1" ]] && curl -fsS --max-time 2 "${URL}" >/dev/null 2>&1; then
   echo "Kubernetes ${SERVICE} is already forwarded at ${URL}"
   exit 0
 fi
@@ -31,10 +32,10 @@ fi
 
 echo "Starting Kubernetes ${SERVICE} port-forward at ${URL}"
 if command -v tmux >/dev/null 2>&1; then
-  tmux new-session -d -s "${TMUX_SESSION}" "microk8s kubectl -n '${NAMESPACE}' port-forward 'svc/${SERVICE}' '${LOCAL_PORT}:${REMOTE_PORT}' >'${LOG_FILE}' 2>&1"
+  tmux new-session -d -s "${TMUX_SESSION}" "microk8s kubectl -n '${NAMESPACE}' port-forward --address '${BIND_ADDRESS}' 'svc/${SERVICE}' '${LOCAL_PORT}:${REMOTE_PORT}' >'${LOG_FILE}' 2>&1"
   echo "tmux:${TMUX_SESSION}" >"${PID_FILE}"
 else
-  setsid microk8s kubectl -n "${NAMESPACE}" port-forward "svc/${SERVICE}" "${LOCAL_PORT}:${REMOTE_PORT}" >"${LOG_FILE}" 2>&1 &
+  setsid microk8s kubectl -n "${NAMESPACE}" port-forward --address "${BIND_ADDRESS}" "svc/${SERVICE}" "${LOCAL_PORT}:${REMOTE_PORT}" >"${LOG_FILE}" 2>&1 &
   forward_pid="$!"
   echo "${forward_pid}" >"${PID_FILE}"
 fi
@@ -54,6 +55,9 @@ for _ in {1..30}; do
       exit 1
     fi
     echo "Kubernetes ${SERVICE} is forwarded at ${URL}"
+    if [[ "${BIND_ADDRESS}" != "127.0.0.1" ]]; then
+      echo "Bound to ${BIND_ADDRESS}:${LOCAL_PORT} for external access."
+    fi
     echo "Port-forward log: ${LOG_FILE}"
     exit 0
   fi

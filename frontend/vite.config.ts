@@ -8,6 +8,7 @@ export default defineConfig({
   server: {
     port: 5173,
     host: "0.0.0.0",
+    allowedHosts: ["ziggi-pc-1.tailaf3d4b.ts.net", "100.65.175.83"],
     proxy: {
       "/api": {
         target: apiProxyTarget,

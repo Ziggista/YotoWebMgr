@@ -1109,7 +1109,7 @@ async def test_yoto_oauth_scaffold_records_local_credential_state(
             "/api/v1/settings",
             json={
                 "yoto_client_id": "client-test",
-                "yoto_redirect_uri": "http://ziggi-pc.tailaf3d4b.ts.net:5175/settings/yoto/callback",
+                "yoto_redirect_uri": "http://ziggi-pc-1.tailaf3d4b.ts.net:5175/settings/yoto/callback",
                 "yoto_oauth_scope": "openid offline_access playlist.write",
             },
         )
@@ -1135,7 +1135,7 @@ async def test_yoto_oauth_scaffold_records_local_credential_state(
     assert parsed_auth_url.path == "/authorize"
     assert auth_params["audience"] == ["https://api.yotoplay.com"]
     assert auth_params["client_id"] == ["client-test"]
-    assert auth_params["redirect_uri"] == ["http://ziggi-pc.tailaf3d4b.ts.net:5175/settings/yoto/callback"]
+    assert auth_params["redirect_uri"] == ["http://ziggi-pc-1.tailaf3d4b.ts.net:5175/settings/yoto/callback"]
     assert auth_params["code_challenge"] == ["b" * 43]
     assert auth_params["code_challenge_method"] == ["S256"]
     assert auth_params["scope"] == ["openid offline_access playlist.write"]
@@ -1182,7 +1182,7 @@ async def test_yoto_oauth_callback_exchanges_code_and_persists_tokens(
             "/api/v1/settings",
             json={
                 "yoto_client_id": "client-test",
-                "yoto_redirect_uri": "http://ziggi-pc.tailaf3d4b.ts.net:5175/settings/yoto/callback",
+                "yoto_redirect_uri": "http://ziggi-pc-1.tailaf3d4b.ts.net:5175/settings/yoto/callback",
                 "yoto_oauth_scope": "openid offline_access family:library:view",
             },
         )
@@ -1237,7 +1237,7 @@ async def test_yoto_oauth_callback_surfaces_invalid_grant_diagnostics(
             "/api/v1/settings",
             json={
                 "yoto_client_id": "client-test-123456",
-                "yoto_redirect_uri": "http://ziggi-pc.tailaf3d4b.ts.net:5175/settings/yoto/callback",
+                "yoto_redirect_uri": "http://ziggi-pc-1.tailaf3d4b.ts.net:5175/settings/yoto/callback",
                 "yoto_oauth_scope": "family:library:view offline_access",
             },
         )
@@ -1261,7 +1261,7 @@ async def test_yoto_oauth_callback_surfaces_invalid_grant_diagnostics(
 
     assert completed.status_code == 502
     assert "Most likely causes are a reused authorization code" in completed.json()["detail"]
-    assert "http://ziggi-pc.tailaf3d4b.ts.net:5175/settings/yoto/callback" in completed.json()["detail"]
+    assert "http://ziggi-pc-1.tailaf3d4b.ts.net:5175/settings/yoto/callback" in completed.json()["detail"]
     assert "clie...3456" in completed.json()["detail"]
 
     credential = db_session.scalar(select(YotoCredentialState))
@@ -1334,7 +1334,7 @@ async def test_yoto_probe_refreshes_tokens_and_calls_groups_endpoint(
             "/api/v1/settings",
             json={
                 "yoto_client_id": "client-test",
-                "yoto_redirect_uri": "http://ziggi-pc.tailaf3d4b.ts.net:5175/settings/yoto/callback",
+                "yoto_redirect_uri": "http://ziggi-pc-1.tailaf3d4b.ts.net:5175/settings/yoto/callback",
             },
         )
         probe = await client.post("/api/v1/yoto/credentials/probe")

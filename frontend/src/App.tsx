@@ -279,14 +279,14 @@ function BackendUnavailablePanel({
       </p>
       <div className="settings-connection-panel">
         <p className="settings-note">
-          Expected backend host: <strong>http://ziggi-pc.tailaf3d4b.ts.net:5175</strong>
+          Expected backend host: <strong>http://ziggi-pc-1.tailaf3d4b.ts.net:5175</strong>
         </p>
         <p className="auth-error">{error}</p>
         <div className="button-row">
           <button className="primary-button" onClick={onRetry} type="button">
             Retry connection
           </button>
-          <a className="secondary-button" href="http://ziggi-pc.tailaf3d4b.ts.net:5175">
+          <a className="secondary-button" href="http://ziggi-pc-1.tailaf3d4b.ts.net:5175">
             Open backend host
           </a>
         </div>

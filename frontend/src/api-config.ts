@@ -1,5 +1,5 @@
 const API_BASE_URL_KEY = "yotowebmgr.apiBaseUrl";
-const ANDROID_DEFAULT_API_BASE_URL = "http://ziggi-pc.tailaf3d4b.ts.net:5175";
+const ANDROID_DEFAULT_API_BASE_URL = "http://ziggi-pc-1.tailaf3d4b.ts.net:5175";
 
 export function normalizeApiBaseUrl(value: string) {
   return value.trim().replace(/\/+$/, "");
@@ -17,7 +17,7 @@ function getDefaultApiBaseUrl() {
 
   const { hostname, port, protocol, origin } = location;
 
-  if (hostname === "ziggi-pc.tailaf3d4b.ts.net" || hostname === "100.65.175.83") {
+  if (hostname === "ziggi-pc-1.tailaf3d4b.ts.net" || hostname === "100.65.175.83") {
     return normalizeApiBaseUrl(origin);
   }
 

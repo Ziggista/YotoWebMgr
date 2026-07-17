@@ -24,10 +24,18 @@ if (-not $distro) {
 $drive = $rootDir.Substring(0, 1).ToLowerInvariant()
 $relativePath = $rootDir.Substring(2).Replace("\", "/")
 $wslRootDir = "/mnt/$drive$relativePath"
-$wslCommand = "cd '$wslRootDir' && ./k8s/scripts/open-dev.sh"
+$bindAddress = $env:YOTOWEBMGR_BIND_ADDRESS
+$wslCommand = if ($bindAddress) {
+  "cd '$wslRootDir' && BIND_ADDRESS='$bindAddress' ./k8s/scripts/open-dev.sh"
+} else {
+  "cd '$wslRootDir' && ./k8s/scripts/open-dev.sh"
+}
 
 Write-Host "Using WSL distro: $distro"
 Write-Host "Refreshing frontend port-forward from: $wslRootDir"
+if ($bindAddress) {
+  Write-Host "Using bind address: $bindAddress"
+}
 
 & wsl.exe -d $distro -- bash -lc $wslCommand
 if ($LASTEXITCODE -ne 0) {
