@@ -99,6 +99,7 @@ const defaultNdefFormatCommand = "A2:03:E1:10:06:00,A2:04:03:04:D8:00,A2:05:00:0
 const yotoPkceStorageKey = "yotowebmgr.yoto.pkce";
 const yotoPkceExchangeKey = "yotowebmgr.yoto.pkce.exchange";
 const frontendBuildSha = import.meta.env.VITE_APP_BUILD_SHA ?? "dev";
+const stagedCardDumpStorageKey = "yotowebmgr.cards.stagedDump";
 const yotoDebugPresets = [
   { label: "MYO content", method: "GET" as const, path: "/content/mine?showdeleted=false" },
   { label: "Family library groups", method: "GET" as const, path: "/card/family/library/groups" },
@@ -2466,6 +2467,20 @@ function TagsPage() {
 function CardsPage() {
   const [cards, setCards] = useState<PhysicalCard[]>([]);
   const [scanDumps, setScanDumps] = useState<CardScanDumpEntry[]>([]);
+  const [stagedDump, setStagedDump] = useState<CardScanDumpEntry | null>(() => {
+    if (typeof window === "undefined") {
+      return null;
+    }
+    const stored = window.localStorage.getItem(stagedCardDumpStorageKey);
+    if (!stored) {
+      return null;
+    }
+    try {
+      return JSON.parse(stored) as CardScanDumpEntry;
+    } catch {
+      return null;
+    }
+  });
   const [error, setError] = useState<string | null>(null);
   const [scanMessage, setScanMessage] = useState<string | null>(null);
   const [helperMessage, setHelperMessage] = useState<string | null>(null);
@@ -2554,6 +2569,17 @@ function CardsPage() {
       setError(loadError instanceof Error ? loadError.message : "Failed to load cards."),
     );
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    if (stagedDump) {
+      window.localStorage.setItem(stagedCardDumpStorageKey, JSON.stringify(stagedDump));
+      return;
+    }
+    window.localStorage.removeItem(stagedCardDumpStorageKey);
+  }, [stagedDump]);
 
   useEffect(() => {
     if (!isNativeAndroidRuntime()) {
@@ -2726,6 +2752,24 @@ function CardsPage() {
     setHelperMessage(`Applied scan dump #${entry.id} to the card form.`);
   }
 
+  function stageScanDump(entry: CardScanDumpEntry) {
+    setStagedDump(entry);
+    setHelperMessage(`Staged source card from scan dump #${entry.id}.`);
+  }
+
+  function clearStagedDump() {
+    setStagedDump(null);
+    setHelperMessage("Cleared the staged source card.");
+  }
+
+  function applyStagedDumpToForm() {
+    if (!stagedDump) {
+      setHelperMessage("No staged source card is loaded.");
+      return;
+    }
+    applyScanDumpToForm(stagedDump);
+  }
+
   async function writeScanDumpToTag(entry: CardScanDumpEntry) {
     if (!isNativeAndroidRuntime()) {
       setHelperMessage("Exact dump writes are only available in the Android app.");
@@ -2768,6 +2812,14 @@ function CardsPage() {
       setScanning(false);
       setHelperMessage(writeError instanceof Error ? writeError.message : "Could not write stored scan dump.");
     }
+  }
+
+  async function writeStagedDumpToTag() {
+    if (!stagedDump) {
+      setHelperMessage("No staged source card is loaded.");
+      return;
+    }
+    await writeScanDumpToTag(stagedDump);
   }
 
   async function handleNativeScanCard() {
@@ -3078,6 +3130,13 @@ function CardsPage() {
                 <div className="button-row">
                   <button
                     className="secondary-button"
+                    onClick={() => stageScanDump(entry)}
+                    type="button"
+                  >
+                    Stage source card
+                  </button>
+                  <button
+                    className="secondary-button"
                     onClick={() => applyScanDumpToForm(entry)}
                     type="button"
                   >
@@ -3115,6 +3174,58 @@ function CardsPage() {
               </article>
             ))}
           </div>
+        )}
+      </section>
+
+      <section className="card-console-panel">
+        <div className="section-header">
+          <div>
+            <p className="eyebrow">Staged Copy</p>
+            <h3>Source card to blank card flow</h3>
+          </div>
+          <div className="button-row">
+            <button
+              className="secondary-button"
+              disabled={!stagedDump}
+              onClick={() => applyStagedDumpToForm()}
+              type="button"
+            >
+              Apply staged to form
+            </button>
+            <button
+              className="secondary-button"
+              disabled={!stagedDump || !isNativeAndroidRuntime() || scanning}
+              onClick={() => void writeStagedDumpToTag()}
+              type="button"
+            >
+              {nativeWritePending ? "Writing staged card" : "Write staged card to blank tag"}
+            </button>
+            <button
+              className="secondary-button"
+              disabled={!stagedDump}
+              onClick={() => clearStagedDump()}
+              type="button"
+            >
+              Clear staged
+            </button>
+          </div>
+        </div>
+        {stagedDump ? (
+          <div className="compact-list">
+            <p className="muted">
+              Staged source: #{stagedDump.id} {stagedDump.nfc_serial_number ?? "unknown UID"} · {stagedDump.scan_source}
+            </p>
+            <p className="muted">
+              Payload: {stagedDump.ndef_payload_text ?? stagedDump.programmable_id ?? "No text payload captured"}
+            </p>
+            <p className="muted">
+              Reddit workflow fit: prepare blank 48-byte MIFARE Ultralight EV1 once, then write the staged source dump to the new card.
+            </p>
+          </div>
+        ) : (
+          <p className="muted">
+            Stage a captured genuine MYO/source card from the list below, then write that staged data to a prepared blank card.
+          </p>
         )}
       </section>
 
