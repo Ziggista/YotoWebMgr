@@ -7,6 +7,7 @@ SECRET_NAME="${SECRET_NAME:-yotowebmgr-secrets}"
 FRONTEND_DIR="${ROOT_DIR}/frontend"
 ANDROID_DIR="${FRONTEND_DIR}/android"
 ANDROID_ASSETS_DIR="${ANDROID_DIR}/app/src/main/assets/public"
+ANDROID_LOCAL_PROPERTIES_FILE="${ANDROID_DIR}/local.properties"
 LOG_DIR="${LOG_DIR:-${ROOT_DIR}/scripts/dev/logs}"
 RUN_TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 GIT_SHA="$(git -C "${ROOT_DIR}" rev-parse --short HEAD 2>/dev/null || echo "nogit")"
@@ -85,6 +86,39 @@ copy_web_dist_into_android_assets() {
   cp -R "${FRONTEND_DIR}/dist/." "${ANDROID_ASSETS_DIR}/"
 }
 
+detect_android_sdk_dir() {
+  local candidate
+  for candidate in \
+    "${ANDROID_SDK_ROOT:-}" \
+    "${ANDROID_HOME:-}" \
+    "${HOME}/Android/Sdk" \
+    "${HOME}/Android" \
+    /mnt/c/Users/*/AppData/Local/Android/Sdk
+  do
+    if [[ -n "${candidate}" && -d "${candidate}" ]]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+ensure_android_local_properties() {
+  local sdk_dir
+  sdk_dir="$(detect_android_sdk_dir || true)"
+  if [[ -z "${sdk_dir}" ]]; then
+    echo "Android SDK not found. Set ANDROID_SDK_ROOT or install the SDK before Android builds." >&2
+    echo "Expected one of: \$ANDROID_SDK_ROOT, \$ANDROID_HOME, \$HOME/Android/Sdk, or a Windows SDK under /mnt/c/Users/.../AppData/Local/Android/Sdk" >&2
+    exit 1
+  fi
+
+  export ANDROID_SDK_ROOT="${sdk_dir}"
+  export ANDROID_HOME="${sdk_dir}"
+  printf 'sdk.dir=%s\n' "${sdk_dir//\\/\\\\}" > "${ANDROID_LOCAL_PROPERTIES_FILE}"
+  echo "Using Android SDK: ${sdk_dir}"
+  echo "Wrote ${ANDROID_LOCAL_PROPERTIES_FILE}"
+}
+
 echo "YotoWebMgr destructive dev deploy"
 echo "UTC timestamp: ${RUN_TIMESTAMP}"
 echo "Git SHA: ${GIT_SHA}"
@@ -150,6 +184,7 @@ if [[ "${ANDROID_BUILD}" == "true" ]]; then
   fi
 
   pushd "${FRONTEND_DIR}" >/dev/null
+  ensure_android_local_properties
   if [[ ! -d "node_modules/@rollup/rollup-linux-x64-gnu" ]]; then
     echo "Linux Rollup optional dependency is missing; refreshing frontend dependencies for this WSL build"
     npm install
