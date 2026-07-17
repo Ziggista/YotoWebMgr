@@ -1202,6 +1202,59 @@ async def test_yoto_oauth_callback_exchanges_code_without_persisting_tokens(
     assert credential.token_storage_ref == f"not_persisted:browser_pkce:{credential.id}"
 
 
+async def test_yoto_oauth_callback_surfaces_invalid_grant_diagnostics(
+    api_client: AsyncClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_exchange_oauth_code(**_: object) -> dict[str, object]:
+        raise HTTPException(
+            status_code=502,
+            detail='{"error":"invalid_grant","error_description":"Invalid authorization code"}',
+        )
+
+    monkeypatch.setattr(yoto_routes, "_exchange_oauth_code", fake_exchange_oauth_code)
+
+    async with api_client as client:
+        await client.put(
+            "/api/v1/settings",
+            json={
+                "yoto_client_id": "client-test-123456",
+                "yoto_redirect_uri": "http://127.0.0.1:5175/settings/yoto/callback",
+                "yoto_oauth_scope": "family:library:view offline_access",
+            },
+        )
+        started = await client.post(
+            "/api/v1/yoto/credentials/start",
+            json={
+                "account_label": "Family Yoto",
+                "code_challenge": "d" * 43,
+                "code_challenge_method": "S256",
+            },
+        )
+        completed = await client.post(
+            "/api/v1/yoto/credentials/callback",
+            json={
+                "code": "auth-code",
+                "state": started.json()["oauth_state"],
+                "code_verifier": "w" * 43,
+            },
+        )
+        status_response = await client.get("/api/v1/yoto/credentials/status")
+
+    assert completed.status_code == 502
+    assert "Most likely causes are a reused authorization code" in completed.json()["detail"]
+    assert "http://127.0.0.1:5175/settings/yoto/callback" in completed.json()["detail"]
+    assert "clie...3456" in completed.json()["detail"]
+
+    credential = db_session.scalar(select(YotoCredentialState))
+    assert credential is not None
+    assert credential.status == "authorization_failed"
+    assert credential.error_summary is not None
+    assert "PKCE verifier mismatch" in credential.error_summary
+    assert status_response.json()["status"] == "authorization_failed"
+
+
 async def test_yoto_playlist_queue_persists_draft_and_job(
     api_client: AsyncClient,
     db_session: Session,

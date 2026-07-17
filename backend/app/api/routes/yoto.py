@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any
 import base64
 import json
+import logging
 from secrets import token_urlsafe
 from urllib.parse import urlencode, urljoin
 
@@ -38,6 +39,7 @@ from app.schemas.foundation import (
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def _setting(db: Session, key: str, fallback: str = "") -> str:
@@ -157,6 +159,23 @@ async def _exchange_oauth_code(
     if not isinstance(payload, dict) or not payload.get("access_token"):
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Yoto token response did not include an access token.")
     return payload
+
+
+def _safe_oauth_exchange_summary(*, client_id: str, redirect_uri: str, provider_detail: str) -> str:
+    masked_client_id = (
+        f"{client_id[:4]}...{client_id[-4:]}" if len(client_id) > 8 else client_id or "missing"
+    )
+    provider_message = provider_detail.strip() if provider_detail else "unknown provider error"
+    if len(provider_message) > 240:
+        provider_message = f"{provider_message[:237]}..."
+
+    return (
+        "Yoto OAuth token exchange failed. "
+        f"Provider said: {provider_message}. "
+        f"Client ID: {masked_client_id}. "
+        f"Redirect URI: {redirect_uri}. "
+        "Most likely causes are a reused authorization code, an exact redirect URI mismatch, or a PKCE verifier mismatch."
+    )
 
 
 def _tracks_for_item(db: Session, item: LibraryItem) -> list[PlaylistTrack]:
@@ -298,13 +317,34 @@ async def complete_yoto_oauth(
     if not client_id or not redirect_uri:
         raise HTTPException(status_code=422, detail="Yoto client ID and redirect URI must be configured before callback exchange.")
 
-    token_payload = await _exchange_oauth_code(
-        auth_base_url=_setting(db, "yoto_auth_base_url", "https://login.yotoplay.com"),
-        client_id=client_id,
-        redirect_uri=redirect_uri,
-        code=payload.code,
-        code_verifier=payload.code_verifier,
-    )
+    try:
+        token_payload = await _exchange_oauth_code(
+            auth_base_url=_setting(db, "yoto_auth_base_url", "https://login.yotoplay.com"),
+            client_id=client_id,
+            redirect_uri=redirect_uri,
+            code=payload.code,
+            code_verifier=payload.code_verifier,
+        )
+    except HTTPException as error:
+        safe_summary = _safe_oauth_exchange_summary(
+            client_id=client_id,
+            redirect_uri=redirect_uri,
+            provider_detail=str(error.detail),
+        )
+        credential.status = "authorization_failed"
+        credential.error_summary = safe_summary
+        db.add(credential)
+        db.commit()
+        logger.warning(
+            "Yoto OAuth exchange failed for credential %s: %s",
+            credential.id,
+            safe_summary,
+        )
+        raise HTTPException(
+            status_code=error.status_code,
+            detail=safe_summary,
+        ) from error
+
     access_token = str(token_payload["access_token"])
     decoded = _decode_jwt_payload(access_token)
     expires_in = token_payload.get("expires_in")
