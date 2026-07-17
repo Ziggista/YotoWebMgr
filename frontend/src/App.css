@@ -299,6 +299,7 @@ a {
 .password-form input,
 .data-form input,
 .data-form select,
+.data-form textarea,
 .import-form input,
 .import-form select,
 .inline-link-panel select,
@@ -645,6 +646,60 @@ a {
   border: 1px solid rgba(255, 240, 214, 0.14);
   border-radius: 8px;
   background: rgba(6, 22, 26, 0.36);
+}
+
+.yoto-explorer-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.yoto-explorer-card {
+  display: grid;
+  gap: 4px;
+  justify-items: start;
+  text-align: left;
+}
+
+.yoto-explorer-card span:last-child {
+  overflow-wrap: anywhere;
+  color: #ddd4c3;
+  font-size: 0.84rem;
+}
+
+.yoto-debug-form {
+  display: grid;
+  gap: 12px;
+}
+
+.yoto-debug-form label {
+  display: grid;
+  gap: 6px;
+  color: #ddd4c3;
+}
+
+.yoto-debug-body {
+  grid-column: 1 / -1;
+}
+
+.yoto-debug-result {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border-radius: 8px;
+  background: rgba(255, 248, 232, 0.06);
+  border: 1px solid rgba(255, 240, 214, 0.12);
+}
+
+.yoto-debug-result p,
+.yoto-debug-result pre {
+  margin: 0;
+}
+
+.yoto-debug-result pre {
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .auth-url-break {

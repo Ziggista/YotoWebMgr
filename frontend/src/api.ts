@@ -417,6 +417,20 @@ export interface BuildInfo {
   environment: string;
 }
 
+export interface YotoApiDebugResponse {
+  credential: YotoCredentialStatus;
+  label: string;
+  method: string;
+  path: string;
+  request_url: string;
+  http_status: number | null;
+  ok: boolean;
+  token_refreshed: boolean;
+  response_excerpt: string | null;
+  error_detail: string | null;
+  live_api_call: boolean;
+}
+
 async function errorMessage(response: Response, fallback: string): Promise<string> {
   try {
     const payload = (await response.json()) as { detail?: string };
@@ -829,6 +843,23 @@ export async function fetchBackendBuildInfo(): Promise<BuildInfo> {
     throw new Error(await errorMessage(response, "Failed to load backend build info."));
   }
   return response.json() as Promise<BuildInfo>;
+}
+
+export async function debugYotoApiRequest(payload: {
+  label?: string | null;
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  path: string;
+  body_json?: string | null;
+}): Promise<YotoApiDebugResponse> {
+  const response = await fetch("/api/v1/yoto/debug/request", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to send the custom Yoto API request."));
+  }
+  return response.json() as Promise<YotoApiDebugResponse>;
 }
 
 export async function fetchImports(): Promise<ImportRequest[]> {

@@ -1374,6 +1374,95 @@ async def test_yoto_probe_surfaces_missing_token_payload(
     assert "Unable to load stored Yoto tokens" in probe.json()["detail"]
 
 
+async def test_yoto_debug_request_calls_custom_endpoint(
+    api_client: AsyncClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credential = YotoCredentialState(
+        account_label="Family Yoto",
+        status="connected_tested",
+        token_storage_ref="k8s-secret:test-namespace:test-secret:yoto-credential-3.json",
+        scopes="family:library:view offline_access",
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    stored = StoredYotoTokens(
+        access_token="access-token",
+        refresh_token="refresh-token",
+        token_type="Bearer",
+        scope="family:library:view offline_access",
+        expires_at=None,
+    )
+
+    async def fake_load_tokens_from_secret(_: str) -> StoredYotoTokens:
+        return stored
+
+    async def fake_call_yoto_api(
+        *,
+        method: str,
+        api_base_url: str,
+        relative_url: str,
+        access_token: str,
+        json_body: object | None = None,
+    ) -> tuple[int, object]:
+        assert method == "GET"
+        assert api_base_url == "https://api.yotoplay.com"
+        assert relative_url == "/card/family/library/groups"
+        assert access_token == "access-token"
+        assert json_body is None
+        return 200, [{"id": "group-1", "name": "Favourites"}]
+
+    monkeypatch.setattr(yoto_routes, "load_tokens_from_secret", fake_load_tokens_from_secret)
+    monkeypatch.setattr(yoto_routes, "_call_yoto_api", fake_call_yoto_api)
+
+    async with api_client as client:
+        response = await client.post(
+            "/api/v1/yoto/debug/request",
+            json={
+                "label": "Family library groups",
+                "method": "GET",
+                "path": "/card/family/library/groups",
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["label"] == "Family library groups"
+    assert payload["method"] == "GET"
+    assert payload["path"] == "/card/family/library/groups"
+    assert payload["request_url"] == "https://api.yotoplay.com/card/family/library/groups"
+    assert payload["ok"] is True
+    assert "group-1" in payload["response_excerpt"]
+
+
+async def test_yoto_debug_request_rejects_non_yoto_host(
+    api_client: AsyncClient,
+    db_session: Session,
+) -> None:
+    credential = YotoCredentialState(
+        account_label="Family Yoto",
+        status="connected_tested",
+        token_storage_ref="k8s-secret:test-namespace:test-secret:yoto-credential-4.json",
+        scopes="family:library:view offline_access",
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    async with api_client as client:
+        response = await client.post(
+            "/api/v1/yoto/debug/request",
+            json={
+                "method": "GET",
+                "path": "https://example.com/not-yoto",
+            },
+        )
+
+    assert response.status_code == 422
+    assert "configured Yoto API base URL" in response.json()["detail"]
+
+
 async def test_yoto_playlist_queue_persists_draft_and_job(
     api_client: AsyncClient,
     db_session: Session,

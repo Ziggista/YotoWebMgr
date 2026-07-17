@@ -18,6 +18,7 @@ import {
   SessionResponse,
   Tag,
   VersionEvent,
+  YotoApiDebugResponse,
   YotoCredentialProbeResponse,
   YotoCredentialStatus,
   YotoPlaylistDraft,
@@ -31,6 +32,7 @@ import {
   createRadioStreamTrack,
   createSplitPoint,
   completeYotoOAuth,
+  debugYotoApiRequest,
   disconnectYotoCredentials,
   fetchBackendBuildInfo,
   fetchCard,
@@ -91,6 +93,13 @@ const defaultNdefFormatCommand = "A2:03:E1:10:06:00,A2:04:03:04:D8:00,A2:05:00:0
 const yotoPkceStorageKey = "yotowebmgr.yoto.pkce";
 const yotoPkceExchangeKey = "yotowebmgr.yoto.pkce.exchange";
 const frontendBuildSha = import.meta.env.VITE_APP_BUILD_SHA ?? "dev";
+const yotoDebugPresets = [
+  { label: "MYO content", method: "GET" as const, path: "/content/mine?showdeleted=false" },
+  { label: "Family library groups", method: "GET" as const, path: "/card/family/library/groups" },
+  { label: "Devices", method: "GET" as const, path: "/device-v2/devices/mine" },
+  { label: "Family view", method: "GET" as const, path: "/family/mine" },
+  { label: "Family images", method: "GET" as const, path: "/media/family/images" },
+];
 
 type CardWorkflowStep = {
   key: string;
@@ -2866,6 +2875,10 @@ function SettingsPage() {
   const [yotoAccountLabel, setYotoAccountLabel] = useState("Household Yoto");
   const [preparedAuthUrl, setPreparedAuthUrl] = useState<string | null>(null);
   const [yotoProbe, setYotoProbe] = useState<YotoCredentialProbeResponse | null>(null);
+  const [yotoDebugResult, setYotoDebugResult] = useState<YotoApiDebugResponse | null>(null);
+  const [customDebugMethod, setCustomDebugMethod] = useState<"GET" | "POST" | "PUT" | "PATCH" | "DELETE">("GET");
+  const [customDebugPath, setCustomDebugPath] = useState("/content/mine?showdeleted=false");
+  const [customDebugBody, setCustomDebugBody] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -2902,6 +2915,7 @@ function SettingsPage() {
     setSaving(true);
     setError(null);
     setYotoProbe(null);
+    setYotoDebugResult(null);
     try {
       const pkce = await createPkcePair();
       const result = await startYotoOAuth(yotoAccountLabel, pkce.challenge);
@@ -2927,6 +2941,7 @@ function SettingsPage() {
       setYotoCredential(result);
       setPreparedAuthUrl(null);
       setYotoProbe(null);
+      setYotoDebugResult(null);
     } catch (disconnectError) {
       setError(disconnectError instanceof Error ? disconnectError.message : "Failed to disconnect Yoto.");
     } finally {
@@ -2941,11 +2956,40 @@ function SettingsPage() {
       const result = await probeYotoCredentials();
       setYotoCredential(result.credential);
       setYotoProbe(result);
+      setYotoDebugResult(null);
     } catch (probeError) {
       setError(probeError instanceof Error ? probeError.message : "Failed to probe the Yoto API.");
     } finally {
       setSaving(false);
     }
+  }
+
+  async function handleDebugRequest(config: {
+    label?: string | null;
+    method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+    path: string;
+    body_json?: string | null;
+  }) {
+    setSaving(true);
+    setError(null);
+    try {
+      const result = await debugYotoApiRequest(config);
+      setYotoCredential(result.credential);
+      setYotoDebugResult(result);
+    } catch (debugError) {
+      setError(debugError instanceof Error ? debugError.message : "Failed to send the Yoto API request.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleCustomDebugRequest(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await handleDebugRequest({
+      method: customDebugMethod,
+      path: customDebugPath,
+      body_json: customDebugBody.trim() || null,
+    });
   }
 
   if (!settings) {
@@ -3197,6 +3241,10 @@ function SettingsPage() {
             <p className="settings-note auth-url-break">
               Last auth URL: <a href={preparedAuthUrl}>{preparedAuthUrl}</a>
             </p>
+          ) : yotoCredential?.token_storage_ref ? (
+            <p className="settings-note">
+              Credential is connected. Re-run browser auth after changing scopes or redirect settings.
+            </p>
           ) : (
             <p className="settings-note">
               Set the client ID and redirect URI, save settings, then test browser auth.
@@ -3216,6 +3264,89 @@ function SettingsPage() {
               {yotoProbe.response_excerpt ? <pre>{yotoProbe.response_excerpt}</pre> : null}
               {yotoProbe.error_detail && yotoProbe.error_detail !== yotoProbe.response_excerpt ? (
                 <pre>{yotoProbe.error_detail}</pre>
+              ) : null}
+            </div>
+          ) : null}
+          <div className="yoto-explorer-grid">
+            {yotoDebugPresets.map((preset) => (
+              <button
+                key={`${preset.method}:${preset.path}`}
+                className="secondary-button yoto-explorer-card"
+                disabled={saving || !yotoCredential?.token_storage_ref}
+                onClick={() =>
+                  void handleDebugRequest({
+                    label: preset.label,
+                    method: preset.method,
+                    path: preset.path,
+                  })
+                }
+                type="button"
+              >
+                <strong>{preset.label}</strong>
+                <span>{preset.method}</span>
+                <span>{preset.path}</span>
+              </button>
+            ))}
+          </div>
+          <form className="yoto-debug-form" onSubmit={(event) => void handleCustomDebugRequest(event)}>
+            <h4 className="settings-section-title">Custom Yoto API request</h4>
+            <label>
+              Method
+              <select
+                value={customDebugMethod}
+                onChange={(event) =>
+                  setCustomDebugMethod(event.target.value as "GET" | "POST" | "PUT" | "PATCH" | "DELETE")
+                }
+              >
+                <option value="GET">GET</option>
+                <option value="POST">POST</option>
+                <option value="PUT">PUT</option>
+                <option value="PATCH">PATCH</option>
+                <option value="DELETE">DELETE</option>
+              </select>
+            </label>
+            <label>
+              Path
+              <input
+                onChange={(event) => setCustomDebugPath(event.target.value)}
+                placeholder="/card/family/library/groups"
+                value={customDebugPath}
+              />
+            </label>
+            <label className="yoto-debug-body">
+              JSON body
+              <textarea
+                onChange={(event) => setCustomDebugBody(event.target.value)}
+                placeholder='{"name":"My test group"}'
+                rows={8}
+                value={customDebugBody}
+              />
+            </label>
+            <div className="button-row">
+              <button className="secondary-button" disabled={saving || !yotoCredential?.token_storage_ref} type="submit">
+                Send custom request
+              </button>
+              <button
+                className="secondary-button"
+                disabled={saving}
+                onClick={() => setCustomDebugBody("")}
+                type="button"
+              >
+                Clear body
+              </button>
+            </div>
+          </form>
+          {yotoDebugResult ? (
+            <div className="yoto-debug-result">
+              <p>
+                Request: {yotoDebugResult.label} · {yotoDebugResult.method} {yotoDebugResult.path}
+                {yotoDebugResult.http_status ? ` (${yotoDebugResult.http_status})` : ""}
+                {yotoDebugResult.token_refreshed ? " · token refreshed" : ""}
+              </p>
+              <p className="auth-url-break">URL: {yotoDebugResult.request_url}</p>
+              {yotoDebugResult.response_excerpt ? <pre>{yotoDebugResult.response_excerpt}</pre> : null}
+              {yotoDebugResult.error_detail && yotoDebugResult.error_detail !== yotoDebugResult.response_excerpt ? (
+                <pre>{yotoDebugResult.error_detail}</pre>
               ) : null}
             </div>
           ) : null}

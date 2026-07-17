@@ -584,6 +584,27 @@ class YotoCredentialProbeResponse(BaseModel):
     live_api_call: bool = True
 
 
+class YotoApiDebugRequest(BaseModel):
+    label: str | None = Field(default=None, max_length=160)
+    method: Literal["GET", "POST", "PUT", "PATCH", "DELETE"] = "GET"
+    path: str = Field(min_length=1, max_length=2000)
+    body_json: str | None = Field(default=None, max_length=50000)
+
+
+class YotoApiDebugResponse(BaseModel):
+    credential: YotoCredentialStatusResponse
+    label: str
+    method: str
+    path: str
+    request_url: str
+    http_status: int | None = None
+    ok: bool
+    token_refreshed: bool = False
+    response_excerpt: str | None = None
+    error_detail: str | None = None
+    live_api_call: bool = True
+
+
 class BuildInfoResponse(BaseModel):
     service: str
     build_sha: str

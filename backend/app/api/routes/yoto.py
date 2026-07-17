@@ -5,6 +5,7 @@ import json
 import logging
 from secrets import token_urlsafe
 from urllib.parse import urlencode, urljoin
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -37,6 +38,8 @@ from app.schemas.foundation import (
     QueueYotoPlaylistResponse,
     StartYotoOAuthRequest,
     StartYotoOAuthResponse,
+    YotoApiDebugRequest,
+    YotoApiDebugResponse,
     YotoConfigResponse,
     YotoCredentialStatusResponse,
     YotoCredentialProbeResponse,
@@ -275,20 +278,154 @@ def _response_excerpt(payload: Any) -> str:
 
 async def _call_yoto_api(
     *,
+    method: str,
     api_base_url: str,
     relative_url: str,
     access_token: str,
+    json_body: Any | None = None,
 ) -> tuple[int, Any]:
     async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.get(
+        response = await client.request(
+            method=method,
             urljoin(api_base_url.rstrip("/") + "/", relative_url.lstrip("/")),
             headers={"Authorization": f"Bearer {access_token}"},
+            json=json_body,
         )
     try:
         payload = response.json()
     except ValueError:
         payload = response.text[:1000] if response.text else ""
     return response.status_code, payload
+
+
+async def _refresh_stored_tokens(
+    *,
+    db: Session,
+    credential: YotoCredentialState,
+    stored_tokens: StoredYotoTokens,
+) -> StoredYotoTokens:
+    if not stored_tokens.refresh_token:
+        raise HTTPException(status_code=409, detail="Stored Yoto access token is expired and no refresh token is available.")
+    refresh_payload = await _refresh_oauth_tokens(
+        auth_base_url=_setting(db, "yoto_auth_base_url", "https://login.yotoplay.com"),
+        client_id=_setting(db, "yoto_client_id"),
+        refresh_token=stored_tokens.refresh_token,
+    )
+    refreshed_tokens = _tokens_from_payload(refresh_payload, existing_refresh_token=stored_tokens.refresh_token)
+    credential.token_storage_ref = await save_tokens_to_secret(credential_id=credential.id, tokens=refreshed_tokens)
+    credential.last_refreshed_at = datetime.now(timezone.utc)
+    credential.expires_at = refreshed_tokens.expires_at
+    credential.scopes = str(refresh_payload.get("scope") or credential.scopes)
+    return refreshed_tokens
+
+
+def _normalize_debug_path(*, api_base_url: str, raw_path: str) -> tuple[str, str]:
+    candidate = raw_path.strip()
+    if not candidate:
+        raise HTTPException(status_code=422, detail="A Yoto API path is required.")
+
+    parsed_base = urlparse(api_base_url)
+    parsed_candidate = urlparse(candidate)
+    if parsed_candidate.scheme or parsed_candidate.netloc:
+        if (parsed_candidate.scheme, parsed_candidate.netloc) != (parsed_base.scheme, parsed_base.netloc):
+            raise HTTPException(status_code=422, detail="Custom Yoto debug requests must target the configured Yoto API base URL.")
+        relative_path = parsed_candidate.path or "/"
+        if parsed_candidate.query:
+            relative_path = f"{relative_path}?{parsed_candidate.query}"
+        return relative_path, candidate
+
+    relative_path = candidate if candidate.startswith("/") else f"/{candidate}"
+    absolute_url = urljoin(api_base_url.rstrip("/") + "/", relative_path.lstrip("/"))
+    return relative_path, absolute_url
+
+
+async def _execute_yoto_api_request(
+    *,
+    db: Session,
+    credential: YotoCredentialState,
+    label: str,
+    method: str,
+    relative_url: str,
+    request_url: str,
+    json_body: Any | None = None,
+) -> YotoApiDebugResponse:
+    try:
+        stored_tokens = await load_tokens_from_secret(credential.token_storage_ref or "")
+    except YotoTokenStoreError as error:
+        credential.status = "authorization_failed"
+        credential.error_summary = f"Unable to load stored Yoto tokens: {error}"
+        db.add(credential)
+        db.commit()
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=credential.error_summary) from error
+
+    refreshed = False
+    if _token_expired(stored_tokens.expires_at):
+        stored_tokens = await _refresh_stored_tokens(db=db, credential=credential, stored_tokens=stored_tokens)
+        refreshed = True
+        logger.info(
+            "Yoto debug request refreshed expired token for credential=%s method=%s path=%s",
+            credential.id,
+            method,
+            relative_url,
+        )
+
+    http_status, payload = await _call_yoto_api(
+        method=method,
+        api_base_url=_setting(db, "yoto_api_base_url", "https://api.yotoplay.com"),
+        relative_url=relative_url,
+        access_token=stored_tokens.access_token,
+        json_body=json_body,
+    )
+    if http_status == 401 and stored_tokens.refresh_token:
+        stored_tokens = await _refresh_stored_tokens(db=db, credential=credential, stored_tokens=stored_tokens)
+        refreshed = True
+        logger.info(
+            "Yoto debug request retried after 401 for credential=%s method=%s path=%s",
+            credential.id,
+            method,
+            relative_url,
+        )
+        http_status, payload = await _call_yoto_api(
+            method=method,
+            api_base_url=_setting(db, "yoto_api_base_url", "https://api.yotoplay.com"),
+            relative_url=relative_url,
+            access_token=stored_tokens.access_token,
+            json_body=json_body,
+        )
+
+    if 200 <= http_status < 300:
+        credential.status = "connected_tested"
+        credential.error_summary = f"Last Yoto debug request succeeded against {relative_url} with HTTP {http_status}."
+    else:
+        credential.status = "connected_error"
+        credential.error_summary = f"Last Yoto debug request failed against {relative_url} with HTTP {http_status}."
+    logger.info(
+        "Yoto debug request finished for credential=%s label=%s method=%s path=%s http_status=%s refreshed=%s response_excerpt=%s",
+        credential.id,
+        label,
+        method,
+        relative_url,
+        http_status,
+        refreshed,
+        _response_excerpt(payload),
+    )
+    db.add(credential)
+    db.commit()
+    db.refresh(credential)
+
+    return YotoApiDebugResponse(
+        credential=_credential_response(db, credential),
+        label=label,
+        method=method,
+        path=relative_url,
+        request_url=request_url,
+        http_status=http_status,
+        ok=200 <= http_status < 300,
+        token_refreshed=refreshed,
+        response_excerpt=_response_excerpt(payload),
+        error_detail=None if 200 <= http_status < 300 else _response_excerpt(payload),
+        live_api_call=True,
+    )
 
 
 def _tracks_for_item(db: Session, item: LibraryItem) -> list[PlaylistTrack]:
@@ -579,48 +716,30 @@ async def probe_yoto_credentials(
     )
     refreshed = False
     if _token_expired(stored_tokens.expires_at):
-        if not stored_tokens.refresh_token:
-            raise HTTPException(status_code=409, detail="Stored Yoto access token is expired and no refresh token is available.")
-        refresh_payload = await _refresh_oauth_tokens(
-            auth_base_url=_setting(db, "yoto_auth_base_url", "https://login.yotoplay.com"),
-            client_id=_setting(db, "yoto_client_id"),
-            refresh_token=stored_tokens.refresh_token,
-        )
-        stored_tokens = _tokens_from_payload(refresh_payload, existing_refresh_token=stored_tokens.refresh_token)
-        credential.token_storage_ref = await save_tokens_to_secret(credential_id=credential.id, tokens=stored_tokens)
-        credential.last_refreshed_at = datetime.now(timezone.utc)
-        credential.expires_at = stored_tokens.expires_at
-        credential.scopes = str(refresh_payload.get("scope") or credential.scopes)
+        stored_tokens = await _refresh_stored_tokens(db=db, credential=credential, stored_tokens=stored_tokens)
         refreshed = True
         logger.info(
             "Yoto probe refreshed expired token for credential=%s returned_scope=%s",
             credential.id,
-            refresh_payload.get("scope") or "<empty>",
+            credential.scopes or "<empty>",
         )
 
     http_status, payload = await _call_yoto_api(
+        method="GET",
         api_base_url=_setting(db, "yoto_api_base_url", "https://api.yotoplay.com"),
         relative_url=probe_url,
         access_token=stored_tokens.access_token,
     )
     if http_status == 401 and stored_tokens.refresh_token:
-        refresh_payload = await _refresh_oauth_tokens(
-            auth_base_url=_setting(db, "yoto_auth_base_url", "https://login.yotoplay.com"),
-            client_id=_setting(db, "yoto_client_id"),
-            refresh_token=stored_tokens.refresh_token,
-        )
-        stored_tokens = _tokens_from_payload(refresh_payload, existing_refresh_token=stored_tokens.refresh_token)
-        credential.token_storage_ref = await save_tokens_to_secret(credential_id=credential.id, tokens=stored_tokens)
-        credential.last_refreshed_at = datetime.now(timezone.utc)
-        credential.expires_at = stored_tokens.expires_at
-        credential.scopes = str(refresh_payload.get("scope") or credential.scopes)
+        stored_tokens = await _refresh_stored_tokens(db=db, credential=credential, stored_tokens=stored_tokens)
         refreshed = True
         logger.info(
             "Yoto probe retried after 401 for credential=%s returned_scope=%s",
             credential.id,
-            refresh_payload.get("scope") or "<empty>",
+            credential.scopes or "<empty>",
         )
         http_status, payload = await _call_yoto_api(
+            method="GET",
             api_base_url=_setting(db, "yoto_api_base_url", "https://api.yotoplay.com"),
             relative_url=probe_url,
             access_token=stored_tokens.access_token,
@@ -653,6 +772,46 @@ async def probe_yoto_credentials(
         response_excerpt=_response_excerpt(payload),
         error_detail=None if 200 <= http_status < 300 else _response_excerpt(payload),
         live_api_call=True,
+    )
+
+
+@router.post("/debug/request", response_model=YotoApiDebugResponse)
+async def debug_yoto_api_request(
+    payload: YotoApiDebugRequest,
+    db: Annotated[Session, Depends(get_db_session)],
+) -> YotoApiDebugResponse:
+    credential = _latest_credential(db)
+    if credential is None or not credential.token_storage_ref:
+        raise HTTPException(status_code=409, detail="Connect a Yoto account before sending a custom Yoto API request.")
+
+    relative_url, request_url = _normalize_debug_path(
+        api_base_url=_setting(db, "yoto_api_base_url", "https://api.yotoplay.com"),
+        raw_path=payload.path,
+    )
+    parsed_body: Any | None = None
+    if payload.body_json and payload.body_json.strip():
+        try:
+            parsed_body = json.loads(payload.body_json)
+        except json.JSONDecodeError as error:
+            raise HTTPException(status_code=422, detail=f"Custom Yoto request body is not valid JSON: {error.msg}") from error
+
+    label = payload.label.strip() if payload.label else f"{payload.method} {relative_url}"
+    logger.info(
+        "Yoto debug request starting for credential=%s label=%s method=%s path=%s has_body=%s",
+        credential.id,
+        label,
+        payload.method,
+        relative_url,
+        parsed_body is not None,
+    )
+    return await _execute_yoto_api_request(
+        db=db,
+        credential=credential,
+        label=label,
+        method=payload.method,
+        relative_url=relative_url,
+        request_url=request_url,
+        json_body=parsed_body,
     )
 
 
