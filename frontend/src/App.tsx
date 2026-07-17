@@ -162,6 +162,53 @@ function decodeNdefRecords(records: NdefRecordWithData[]): { text: string | null
   };
 }
 
+function textToHex(value: string): string {
+  return Array.from(new TextEncoder().encode(value))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function playlistIdFromUri(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const match = trimmed.match(/\/playlist\/([^/?#]+)/i);
+  if (match?.[1]) {
+    return match[1];
+  }
+  return null;
+}
+
+function generatedCardPayload(playlistUri: string): {
+  programmableId: string | null;
+  payloadText: string | null;
+  payloadHex: string | null;
+} {
+  const trimmedUri = playlistUri.trim();
+  if (!trimmedUri) {
+    return { programmableId: null, payloadText: null, payloadHex: null };
+  }
+  const playlistId = playlistIdFromUri(trimmedUri);
+  return {
+    programmableId: playlistId ? `yoto:playlist:${playlistId}` : trimmedUri,
+    payloadText: trimmedUri,
+    payloadHex: textToHex(trimmedUri),
+  };
+}
+
+async function copyToClipboard(value: string): Promise<boolean> {
+  if (!value || typeof navigator === "undefined" || !navigator.clipboard) {
+    return false;
+  }
+  try {
+    await navigator.clipboard.writeText(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function cardWorkflowSteps(card: PhysicalCard | null): CardWorkflowStep[] {
   const readSummary = card?.nfc_serial_number ?? card?.programmable_id ?? card?.ndef_payload_text;
   return [
@@ -2325,6 +2372,7 @@ function CardsPage() {
   const [cards, setCards] = useState<PhysicalCard[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [scanMessage, setScanMessage] = useState<string | null>(null);
+  const [helperMessage, setHelperMessage] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [form, setForm] = useState({
@@ -2404,6 +2452,31 @@ function CardsPage() {
       setError(loadError instanceof Error ? loadError.message : "Failed to load cards."),
     );
   }, []);
+
+  function handleGenerateFromPlaylist() {
+    setError(null);
+    const generated = generatedCardPayload(form.yoto_playlist_uri);
+    if (!generated.payloadText || !generated.payloadHex) {
+      setHelperMessage("Enter a Yoto playlist URI first.");
+      return;
+    }
+    setForm((current) => ({
+      ...current,
+      programmable_id: generated.programmableId ?? current.programmable_id,
+      ndef_payload_text: generated.payloadText ?? "",
+      ndef_payload_hex: generated.payloadHex ?? "",
+      scan_source: current.scan_source === "manual" ? "nfc_tools" : current.scan_source,
+      notes:
+        current.notes ||
+        `Generated manual programming payload from ${generated.programmableId ?? "playlist URI"}.`,
+    }));
+    setHelperMessage(`Prepared payload for ${generated.programmableId ?? generated.payloadText}.`);
+  }
+
+  async function handleCopyProgrammingValue(value: string, label: string) {
+    const copied = await copyToClipboard(value);
+    setHelperMessage(copied ? `Copied ${label}.` : `Clipboard copy for ${label} is not available here.`);
+  }
 
   async function handleScanCard() {
     setError(null);
@@ -2540,6 +2613,7 @@ function CardsPage() {
             </span>
           </div>
           {scanMessage ? <p className="muted">{scanMessage}</p> : null}
+          {helperMessage ? <p className="muted">{helperMessage}</p> : null}
           <p className="muted">
             Capture the serial, decoded payload, and raw payload bytes separately so copied cards
             and manual programming remain auditable.
@@ -2690,6 +2764,11 @@ function CardsPage() {
               value={form.yoto_playlist_uri}
             />
           </label>
+          <div className="helper-action-group">
+            <button className="secondary-button" onClick={() => handleGenerateFromPlaylist()} type="button">
+              Generate programming payload
+            </button>
+          </div>
           <label>
             Status
             <select
@@ -2716,6 +2795,24 @@ function CardsPage() {
               value={form.ndef_format_command}
             />
           </label>
+          <div className="helper-action-group">
+            <button
+              className="secondary-button"
+              disabled={!form.ndef_payload_text}
+              onClick={() => void handleCopyProgrammingValue(form.ndef_payload_text, "NDEF payload text")}
+              type="button"
+            >
+              Copy text
+            </button>
+            <button
+              className="secondary-button"
+              disabled={!form.ndef_payload_hex}
+              onClick={() => void handleCopyProgrammingValue(form.ndef_payload_hex, "NDEF payload hex")}
+              type="button"
+            >
+              Copy hex
+            </button>
+          </div>
           <label>
             NDEF payload text
             <input
@@ -2897,7 +2994,17 @@ function CardDetailPage() {
   const [card, setCard] = useState<PhysicalCard | null>(null);
   const [history, setHistory] = useState<CardAssignmentEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+
+  async function refreshCardPage() {
+    if (!Number.isFinite(numericCardId)) {
+      throw new Error("Invalid card.");
+    }
+    const [nextCard, nextHistory] = await Promise.all([fetchCard(numericCardId), fetchCardHistory(numericCardId)]);
+    setCard(nextCard);
+    setHistory(nextHistory);
+  }
 
   useEffect(() => {
     if (!Number.isFinite(numericCardId)) {
@@ -2906,16 +3013,54 @@ function CardDetailPage() {
       return;
     }
     setLoading(true);
-    void Promise.all([fetchCard(numericCardId), fetchCardHistory(numericCardId)])
-      .then(([nextCard, nextHistory]) => {
-        setCard(nextCard);
-        setHistory(nextHistory);
-      })
+    void refreshCardPage()
       .catch((loadError) =>
         setError(loadError instanceof Error ? loadError.message : "Failed to load card."),
       )
       .finally(() => setLoading(false));
   }, [numericCardId]);
+
+  async function handleCardWorkflowAction(
+    payload: Parameters<typeof updateCard>[1],
+    successMessage: string,
+  ) {
+    if (!card) {
+      return;
+    }
+    setError(null);
+    setActionMessage(null);
+    try {
+      await updateCard(card.id, payload);
+      await refreshCardPage();
+      setActionMessage(successMessage);
+    } catch (updateError) {
+      setError(updateError instanceof Error ? updateError.message : "Failed to update card.");
+    }
+  }
+
+  async function handleApplyPlaylistProgramming() {
+    if (!card?.yoto_playlist_uri) {
+      setActionMessage("This card does not have a Yoto playlist URI yet.");
+      return;
+    }
+    const generated = generatedCardPayload(card.yoto_playlist_uri);
+    await handleCardWorkflowAction(
+      {
+        programmable_id: generated.programmableId,
+        ndef_payload_text: generated.payloadText,
+        ndef_payload_hex: generated.payloadHex,
+        scan_source: card.scan_source ?? "nfc_tools",
+        ndef_prepared: true,
+        notes: card.notes ?? "Generated programming payload from the saved Yoto playlist URI.",
+      },
+      "Applied generated programming payload from the saved playlist URI.",
+    );
+  }
+
+  async function handleCopyCardValue(value: string | null, label: string) {
+    const copied = await copyToClipboard(value ?? "");
+    setActionMessage(copied ? `Copied ${label}.` : `Clipboard copy for ${label} is not available here.`);
+  }
 
   if (loading) {
     return (
@@ -2969,6 +3114,28 @@ function CardDetailPage() {
             {card.memory_size_bytes ? `${card.memory_size_bytes} bytes` : "Memory unknown"}
           </p>
           <p className="muted">Programming app: {card.programming_app ?? "Not recorded"}</p>
+          <div className="inline-link-panel">
+            <p className="muted">Payload text: {card.ndef_payload_text ?? "Not recorded"}</p>
+            <p className="muted">Payload hex: {card.ndef_payload_hex ?? "Not recorded"}</p>
+            <div className="button-row">
+              <button
+                className="secondary-button"
+                disabled={!card.ndef_payload_text}
+                onClick={() => void handleCopyCardValue(card.ndef_payload_text, "payload text")}
+                type="button"
+              >
+                Copy payload text
+              </button>
+              <button
+                className="secondary-button"
+                disabled={!card.ndef_payload_hex}
+                onClick={() => void handleCopyCardValue(card.ndef_payload_hex, "payload hex")}
+                type="button"
+              >
+                Copy payload hex
+              </button>
+            </div>
+          </div>
         </article>
         <article className="detail-block">
           <h3>Workflow</h3>
@@ -2981,6 +3148,54 @@ function CardDetailPage() {
             {card.downloaded_to_player_confirmed ? <span className="status-pill">Downloaded</span> : null}
             {card.tested ? <span className="status-pill status-pill-muted">Tested</span> : null}
           </div>
+          <div className="button-row">
+            <button className="secondary-button" onClick={() => void handleApplyPlaylistProgramming()} type="button">
+              Apply playlist payload
+            </button>
+            <button
+              className="secondary-button"
+              onClick={() =>
+                void handleCardWorkflowAction(
+                  { ndef_prepared: true, status: card.status === "available" ? "ready_to_link" : card.status },
+                  "Marked the card as NDEF prepared.",
+                )
+              }
+              type="button"
+            >
+              Mark NDEF ready
+            </button>
+            <button
+              className="secondary-button"
+              onClick={() =>
+                void handleCardWorkflowAction(
+                  { linked_manually: true, ready_to_link_in_app: true, status: "linked" },
+                  "Marked the card as linked in Yoto.",
+                )
+              }
+              type="button"
+            >
+              Mark linked
+            </button>
+            <button
+              className="secondary-button"
+              onClick={() =>
+                void handleCardWorkflowAction(
+                  { downloaded_to_player_confirmed: true, needs_player_download: false },
+                  "Marked the player download as confirmed.",
+                )
+              }
+              type="button"
+            >
+              Confirm download
+            </button>
+            <button
+              className="secondary-button"
+              onClick={() => void handleCardWorkflowAction({ tested: true }, "Marked playback as tested.")}
+              type="button"
+            >
+              Mark tested
+            </button>
+          </div>
         </article>
         <article className="detail-block">
           <h3>Notes</h3>
@@ -2989,6 +3204,7 @@ function CardDetailPage() {
           <p className="muted">Reusable transfer card: {card.is_reusable_transfer_card ? "Yes" : "No"}</p>
         </article>
       </div>
+      {actionMessage ? <p className="muted">{actionMessage}</p> : null}
 
       <div className="detail-section">
         <div className="section-header">

@@ -567,6 +567,12 @@ a {
   color: #ddd4c3;
 }
 
+.helper-action-group {
+  display: flex;
+  align-items: end;
+  gap: 8px;
+}
+
 .drop-panel {
   display: grid;
   gap: 10px;
