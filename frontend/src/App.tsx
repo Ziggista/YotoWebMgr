@@ -67,6 +67,7 @@ import {
   saveCardPlan,
   setLibraryItemTags,
   startYotoOAuth,
+  updateYotoPlaylistRemoteLink,
   updatePlaylistTrack,
   updateLibraryItemSettings,
   updateCard,
@@ -212,6 +213,58 @@ function PlaceholderPage({ title }: { title: string }) {
 
 function EmptyState({ message }: { message: string }) {
   return <p className="muted">{message}</p>;
+}
+
+function YotoJsonTree({ value, depth = 0 }: { value: unknown; depth?: number }) {
+  if (value === null) {
+    return <span className="json-primitive">null</span>;
+  }
+  if (typeof value === "string") {
+    return <span className="json-string">"{value}"</span>;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return <span className="json-primitive">{String(value)}</span>;
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      return <span className="json-empty">[]</span>;
+    }
+    return (
+      <div className="json-tree">
+        {value.map((entry, index) => (
+          <details className="json-node" key={`${depth}-array-${index}`} open={depth < 1}>
+            <summary>
+              <span className="json-key">[{index}]</span>
+            </summary>
+            <div className="json-child">
+              <YotoJsonTree depth={depth + 1} value={entry} />
+            </div>
+          </details>
+        ))}
+      </div>
+    );
+  }
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (entries.length === 0) {
+      return <span className="json-empty">{`{}`}</span>;
+    }
+    return (
+      <div className="json-tree">
+        {entries.map(([key, entry]) => (
+          <details className="json-node" key={`${depth}-${key}`} open={depth < 1}>
+            <summary>
+              <span className="json-key">{key}</span>
+            </summary>
+            <div className="json-child">
+              <YotoJsonTree depth={depth + 1} value={entry} />
+            </div>
+          </details>
+        ))}
+      </div>
+    );
+  }
+  return <span className="json-primitive">{String(value)}</span>;
 }
 
 function CardWorkflowChecklist({ card }: { card: PhysicalCard | null }) {
@@ -1122,6 +1175,9 @@ function LibraryDetailPage() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [yotoPlaylists, setYotoPlaylists] = useState<YotoPlaylistDraft[]>([]);
   const [yotoPlaylistVersions, setYotoPlaylistVersions] = useState<Record<number, YotoPlaylistVersion[]>>({});
+  const [yotoRemoteLinks, setYotoRemoteLinks] = useState<
+    Record<number, { remotePlaylistId: string; remotePlaylistUri: string; markLinkedManually: boolean }>
+  >({});
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -1158,6 +1214,18 @@ function LibraryDetailPage() {
       nextYotoPlaylists.map(async (playlist) => [playlist.id, await fetchYotoPlaylistVersions(playlist.id)] as const),
     );
     setYotoPlaylistVersions(Object.fromEntries(versionEntries));
+    setYotoRemoteLinks((current) =>
+      Object.fromEntries(
+        nextYotoPlaylists.map((playlist) => [
+          playlist.id,
+          current[playlist.id] ?? {
+            remotePlaylistId: playlist.remote_playlist_id ?? "",
+            remotePlaylistUri: playlist.remote_playlist_uri ?? "",
+            markLinkedManually: false,
+          },
+        ]),
+      ),
+    );
   }
 
   useEffect(() => {
@@ -1206,6 +1274,24 @@ function LibraryDetailPage() {
       await refreshPage();
     } catch (restoreError) {
       setError(restoreError instanceof Error ? restoreError.message : "Yoto playlist restore failed.");
+    }
+  }
+
+  async function handleSaveYotoRemoteLink(playlistId: number) {
+    const mapping = yotoRemoteLinks[playlistId];
+    if (!mapping) {
+      return;
+    }
+    setError(null);
+    try {
+      await updateYotoPlaylistRemoteLink(playlistId, {
+        remote_playlist_id: mapping.remotePlaylistId.trim() || null,
+        remote_playlist_uri: mapping.remotePlaylistUri.trim() || null,
+        mark_linked_manually: mapping.markLinkedManually,
+      });
+      await refreshPage();
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Yoto remote playlist mapping failed.");
     }
   }
 
@@ -1633,6 +1719,77 @@ function LibraryDetailPage() {
                     Job {playlist.related_job_id ?? "pending"} ·{" "}
                     {playlist.remote_playlist_uri ?? "Manual link pending"}
                   </p>
+                  <div className="inline-link-panel yoto-remote-link-panel">
+                    <label>
+                      Remote playlist ID
+                      <input
+                        onChange={(event) =>
+                          setYotoRemoteLinks((current) => ({
+                            ...current,
+                            [playlist.id]: {
+                              ...(current[playlist.id] ?? {
+                                remotePlaylistId: "",
+                                remotePlaylistUri: "",
+                                markLinkedManually: false,
+                              }),
+                              remotePlaylistId: event.target.value,
+                            },
+                          }))
+                        }
+                        placeholder="playlist-123"
+                        value={yotoRemoteLinks[playlist.id]?.remotePlaylistId ?? ""}
+                      />
+                    </label>
+                    <label>
+                      Remote playlist URI
+                      <input
+                        onChange={(event) =>
+                          setYotoRemoteLinks((current) => ({
+                            ...current,
+                            [playlist.id]: {
+                              ...(current[playlist.id] ?? {
+                                remotePlaylistId: "",
+                                remotePlaylistUri: "",
+                                markLinkedManually: false,
+                              }),
+                              remotePlaylistUri: event.target.value,
+                            },
+                          }))
+                        }
+                        placeholder="https://my.yotoplay.com/playlist/playlist-123"
+                        value={yotoRemoteLinks[playlist.id]?.remotePlaylistUri ?? ""}
+                      />
+                    </label>
+                    <label className="checkbox-field">
+                      <input
+                        checked={yotoRemoteLinks[playlist.id]?.markLinkedManually ?? false}
+                        onChange={(event) =>
+                          setYotoRemoteLinks((current) => ({
+                            ...current,
+                            [playlist.id]: {
+                              ...(current[playlist.id] ?? {
+                                remotePlaylistId: "",
+                                remotePlaylistUri: "",
+                                markLinkedManually: false,
+                              }),
+                              markLinkedManually: event.target.checked,
+                            },
+                          }))
+                        }
+                        type="checkbox"
+                      />
+                      Mark linked cards as manually linked
+                    </label>
+                    <div className="button-row">
+                      <button
+                        className="secondary-button"
+                        onClick={() => void handleSaveYotoRemoteLink(playlist.id)}
+                        type="button"
+                      >
+                        Save remote mapping
+                      </button>
+                    </div>
+                  </div>
                   {(yotoPlaylistVersions[playlist.id] ?? []).slice(0, 3).map((version) => (
                     <p className="muted" key={version.id}>
                       Version {version.version_number}: {version.summary}
@@ -2876,6 +3033,7 @@ function SettingsPage() {
   const [preparedAuthUrl, setPreparedAuthUrl] = useState<string | null>(null);
   const [yotoProbe, setYotoProbe] = useState<YotoCredentialProbeResponse | null>(null);
   const [yotoDebugResult, setYotoDebugResult] = useState<YotoApiDebugResponse | null>(null);
+  const [yotoDebugHistory, setYotoDebugHistory] = useState<YotoApiDebugResponse[]>([]);
   const [customDebugMethod, setCustomDebugMethod] = useState<"GET" | "POST" | "PUT" | "PATCH" | "DELETE">("GET");
   const [customDebugPath, setCustomDebugPath] = useState("/content/mine?showdeleted=false");
   const [customDebugBody, setCustomDebugBody] = useState("");
@@ -2976,6 +3134,7 @@ function SettingsPage() {
       const result = await debugYotoApiRequest(config);
       setYotoCredential(result.credential);
       setYotoDebugResult(result);
+      setYotoDebugHistory((current) => [result, ...current].slice(0, 8));
     } catch (debugError) {
       setError(debugError instanceof Error ? debugError.message : "Failed to send the Yoto API request.");
     } finally {
@@ -3345,9 +3504,32 @@ function SettingsPage() {
               </p>
               <p className="auth-url-break">URL: {yotoDebugResult.request_url}</p>
               {yotoDebugResult.response_excerpt ? <pre>{yotoDebugResult.response_excerpt}</pre> : null}
+              {yotoDebugResult.response_json ? (
+                <div className="json-tree-panel">
+                  <p className="muted">Structured response</p>
+                  <YotoJsonTree value={yotoDebugResult.response_json} />
+                </div>
+              ) : null}
               {yotoDebugResult.error_detail && yotoDebugResult.error_detail !== yotoDebugResult.response_excerpt ? (
                 <pre>{yotoDebugResult.error_detail}</pre>
               ) : null}
+            </div>
+          ) : null}
+          {yotoDebugHistory.length > 0 ? (
+            <div className="json-tree-panel">
+              <h4 className="settings-section-title">Recent explorer requests</h4>
+              <div className="compact-list">
+                {yotoDebugHistory.map((entry, index) => (
+                  <button
+                    className="secondary-button yoto-history-button"
+                    key={`${entry.method}:${entry.path}:${index}`}
+                    onClick={() => setYotoDebugResult(entry)}
+                    type="button"
+                  >
+                    {entry.method} {entry.path} {entry.http_status ? `(${entry.http_status})` : ""}
+                  </button>
+                ))}
+              </div>
             </div>
           ) : null}
         </div>

@@ -17,6 +17,7 @@ from app.integrations.yoto.playlist import build_playlist_preview
 from app.models import (
     Job,
     LibraryItem,
+    PhysicalCard,
     PlaylistTrack,
     Setting,
     VersionEvent,
@@ -38,6 +39,7 @@ from app.schemas.foundation import (
     QueueYotoPlaylistResponse,
     StartYotoOAuthRequest,
     StartYotoOAuthResponse,
+    UpdateYotoPlaylistRemoteLinkRequest,
     YotoApiDebugRequest,
     YotoApiDebugResponse,
     YotoConfigResponse,
@@ -276,6 +278,14 @@ def _response_excerpt(payload: Any) -> str:
     return text[:1000]
 
 
+def _response_json(payload: Any) -> dict[str, object] | list[object] | None:
+    if isinstance(payload, dict):
+        return payload
+    if isinstance(payload, list):
+        return payload
+    return None
+
+
 async def _call_yoto_api(
     *,
     method: str,
@@ -423,6 +433,7 @@ async def _execute_yoto_api_request(
         ok=200 <= http_status < 300,
         token_refreshed=refreshed,
         response_excerpt=_response_excerpt(payload),
+        response_json=_response_json(payload),
         error_detail=None if 200 <= http_status < 300 else _response_excerpt(payload),
         live_api_call=True,
     )
@@ -876,6 +887,79 @@ async def restore_yoto_playlist_version(
     return _playlist_version_response(restored)
 
 
+@router.patch("/playlists/{playlist_id}/remote-link", response_model=YotoPlaylistDraftResponse)
+async def update_yoto_playlist_remote_link(
+    playlist_id: int,
+    payload: UpdateYotoPlaylistRemoteLinkRequest,
+    db: Annotated[Session, Depends(get_db_session)],
+) -> YotoPlaylistDraftResponse:
+    draft = db.get(YotoPlaylistDraft, playlist_id)
+    if draft is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Yoto playlist draft not found")
+
+    remote_playlist_id = payload.remote_playlist_id.strip() if payload.remote_playlist_id else None
+    remote_playlist_uri = payload.remote_playlist_uri.strip() if payload.remote_playlist_uri else None
+    if not remote_playlist_id and not remote_playlist_uri:
+        raise HTTPException(status_code=422, detail="Provide a remote Yoto playlist ID or playlist URI.")
+
+    item = db.get(LibraryItem, draft.library_item_id)
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Library item not found")
+
+    draft.remote_playlist_id = remote_playlist_id
+    draft.remote_playlist_uri = remote_playlist_uri
+    draft.status = "remote_linked"
+    draft.last_error = None
+    item.status = "yoto_remote_linked"
+    item.readiness_status = "yoto_remote_linked"
+    item.readiness_detail = (
+        f"Mapped to Yoto playlist {remote_playlist_uri or remote_playlist_id}. "
+        "Card linking and NFC verification can now use this remote playlist reference."
+    )
+
+    if remote_playlist_uri:
+        linked_cards = db.scalars(select(PhysicalCard).where(PhysicalCard.current_library_item_id == item.id))
+        now = datetime.now(timezone.utc)
+        for card in linked_cards:
+            card.yoto_playlist_uri = remote_playlist_uri
+            card.ready_to_link_in_app = True
+            if payload.mark_linked_manually and not card.linked_manually:
+                card.linked_manually = True
+                card.last_linked_at = now
+            db.add(card)
+
+    _record_playlist_version(
+        db,
+        draft,
+        status="remote_linked",
+        summary="Recorded Yoto remote playlist mapping.",
+        source_event="yoto_remote_link_saved",
+    )
+    db.add(
+        VersionEvent(
+            entity_type="library_item",
+            entity_id=item.id,
+            version_number=_next_library_version(db, item.id),
+            event_type="yoto_remote_link_saved",
+            summary="Recorded Yoto remote playlist mapping.",
+            snapshot_json=json.dumps(
+                {
+                    "playlist_draft_id": draft.id,
+                    "remote_playlist_id": remote_playlist_id,
+                    "remote_playlist_uri": remote_playlist_uri,
+                    "mark_linked_manually": payload.mark_linked_manually,
+                },
+                sort_keys=True,
+            ),
+        )
+    )
+    db.add(draft)
+    db.add(item)
+    db.commit()
+    db.refresh(draft)
+    return _draft_response(draft)
+
+
 @router.get("/library/{item_id}/playlist-preview", response_model=YotoPlaylistPreviewResponse)
 async def preview_yoto_playlist(
     item_id: int,
@@ -935,7 +1019,7 @@ async def queue_yoto_playlist(
         type="create_yoto_playlist",
         status="queued",
         progress_percent=0,
-        progress_message="Queued local Yoto playlist draft upload",
+        progress_message="Queued local Yoto playlist draft for remote mapping",
         related_library_item_id=item.id,
     )
     db.add(job)
@@ -951,7 +1035,7 @@ async def queue_yoto_playlist(
     )
     item.status = "yoto_playlist_queued"
     item.readiness_status = "yoto_playlist_queued"
-    item.readiness_detail = "Yoto playlist draft queued. Live upload will be added behind this job."
+    item.readiness_detail = "Yoto playlist draft queued. This job will prepare the local payload for remote Yoto playlist mapping."
     db.add(
         VersionEvent(
             entity_type="library_item",

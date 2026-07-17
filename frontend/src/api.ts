@@ -427,6 +427,7 @@ export interface YotoApiDebugResponse {
   ok: boolean;
   token_refreshed: boolean;
   response_excerpt: string | null;
+  response_json: Record<string, unknown> | unknown[] | null;
   error_detail: string | null;
   live_api_call: boolean;
 }
@@ -776,6 +777,25 @@ export async function restoreYotoPlaylistVersion(
     throw new Error(await errorMessage(response, "Failed to restore Yoto playlist version."));
   }
   return response.json() as Promise<YotoPlaylistVersion>;
+}
+
+export async function updateYotoPlaylistRemoteLink(
+  playlistId: number,
+  payload: {
+    remote_playlist_id?: string | null;
+    remote_playlist_uri?: string | null;
+    mark_linked_manually?: boolean;
+  },
+): Promise<YotoPlaylistDraft> {
+  const response = await fetch(`/api/v1/yoto/playlists/${playlistId}/remote-link`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to save Yoto remote playlist mapping."));
+  }
+  return response.json() as Promise<YotoPlaylistDraft>;
 }
 
 export async function fetchYotoCredentialStatus(): Promise<YotoCredentialStatus> {

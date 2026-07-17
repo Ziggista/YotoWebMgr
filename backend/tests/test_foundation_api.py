@@ -1550,3 +1550,72 @@ async def test_yoto_playlist_versions_are_recorded_and_restorable(
     refreshed_draft = db_session.get(YotoPlaylistDraft, playlist_id)
     assert refreshed_draft is not None
     assert refreshed_draft.title == "Versioned Mix"
+
+
+async def test_yoto_remote_playlist_mapping_updates_draft_and_linked_cards(
+    api_client: AsyncClient,
+    db_session: Session,
+) -> None:
+    async with api_client as client:
+        created = await client.post(
+            "/api/v1/library",
+            json={"title": "Remote Link Mix", "content_type": "Custom Playlist"},
+        )
+        item_id = created.json()["id"]
+        await client.post(
+            f"/api/v1/library/{item_id}/tracks",
+            json={"title": "Only Track", "track_number": 1, "duration_seconds": 60},
+        )
+        card_created = await client.post(
+            "/api/v1/cards",
+            json={
+                "card_code": "YT001",
+                "display_name": "Hallway MYO",
+                "card_kind": "official_myo",
+            },
+        )
+        card_id = card_created.json()["id"]
+        linked = await client.post(f"/api/v1/library/{item_id}/link-card", json={"card_id": card_id})
+        assert linked.status_code == 202
+        queued = await client.post(f"/api/v1/yoto/library/{item_id}/playlists")
+        playlist_id = queued.json()["playlist"]["id"]
+        saved = await client.patch(
+            f"/api/v1/yoto/playlists/{playlist_id}/remote-link",
+            json={
+                "remote_playlist_id": "playlist-123",
+                "remote_playlist_uri": "https://my.yotoplay.com/playlist/playlist-123",
+                "mark_linked_manually": True,
+            },
+        )
+
+    assert saved.status_code == 200
+    payload = saved.json()
+    assert payload["status"] == "remote_linked"
+    assert payload["remote_playlist_id"] == "playlist-123"
+    assert payload["remote_playlist_uri"] == "https://my.yotoplay.com/playlist/playlist-123"
+
+    draft = db_session.get(YotoPlaylistDraft, playlist_id)
+    item = db_session.get(LibraryItem, item_id)
+    card = db_session.get(PhysicalCard, card_id)
+    version = db_session.scalar(
+        select(YotoPlaylistVersion)
+        .where(YotoPlaylistVersion.playlist_draft_id == playlist_id)
+        .where(YotoPlaylistVersion.source_event == "yoto_remote_link_saved")
+    )
+    event = db_session.scalar(
+        select(VersionEvent)
+        .where(VersionEvent.entity_type == "library_item")
+        .where(VersionEvent.entity_id == item_id)
+        .where(VersionEvent.event_type == "yoto_remote_link_saved")
+    )
+    assert draft is not None
+    assert draft.status == "remote_linked"
+    assert item is not None
+    assert item.status == "yoto_remote_linked"
+    assert item.readiness_status == "yoto_remote_linked"
+    assert card is not None
+    assert card.yoto_playlist_uri == "https://my.yotoplay.com/playlist/playlist-123"
+    assert card.ready_to_link_in_app is True
+    assert card.linked_manually is True
+    assert version is not None
+    assert event is not None

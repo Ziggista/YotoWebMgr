@@ -15,6 +15,7 @@ from app.jobs.runner import (
     playlist_tracks,
     processed_assets,
     settings,
+    yoto_playlist_drafts,
 )
 from app.jobs.runner import JobRunner
 
@@ -289,6 +290,60 @@ def test_runner_pixelises_artwork_and_records_asset(tmp_path: Path) -> None:
     assert asset.width == 16
     assert asset.height == 16
     assert Path(asset.output_path).exists()
+
+
+def test_runner_marks_yoto_playlist_draft_awaiting_remote_mapping() -> None:
+    engine = _make_engine()
+    with engine.begin() as connection:
+        connection.execute(
+            library_items.insert().values(
+                id=50,
+                title="Mapped Later",
+                content_type="Audiobook",
+                status="processed",
+                readiness_status="needs_yoto_upload",
+            )
+        )
+        connection.execute(
+            jobs.insert().values(
+                id=9,
+                type="create_yoto_playlist",
+                status="queued",
+                pending_delete=False,
+                retry_count=0,
+                max_retries=3,
+                progress_percent=0,
+                progress_message="Queued",
+                related_library_item_id=50,
+                created_at=datetime.now(UTC),
+            )
+        )
+        connection.execute(
+            yoto_playlist_drafts.insert().values(
+                id=3,
+                library_item_id=50,
+                related_job_id=9,
+                title="Mapped Later",
+                status="queued",
+                payload_json=json.dumps({"title": "Mapped Later", "chapters": []}),
+                created_at=datetime.now(UTC),
+            )
+        )
+
+    runner = JobRunner(engine)
+
+    assert runner.process_once() is True
+    with engine.begin() as connection:
+        job = connection.execute(select(jobs).where(jobs.c.id == 9)).one()
+        library_item = connection.execute(select(library_items).where(library_items.c.id == 50)).one()
+        draft = connection.execute(select(yoto_playlist_drafts).where(yoto_playlist_drafts.c.id == 3)).one()
+
+    assert job.status == "succeeded"
+    assert "remote mapping" in job.progress_message
+    assert library_item.status == "awaiting_remote_mapping"
+    assert library_item.readiness_status == "awaiting_remote_mapping"
+    assert "playlist URI or ID" in library_item.readiness_detail
+    assert draft.status == "awaiting_remote_mapping"
 
 
 def _ffprobe_runner(args: list[str]) -> subprocess.CompletedProcess[str]:

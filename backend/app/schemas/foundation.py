@@ -601,6 +601,7 @@ class YotoApiDebugResponse(BaseModel):
     ok: bool
     token_refreshed: bool = False
     response_excerpt: str | None = None
+    response_json: dict[str, object] | list[object] | None = None
     error_detail: str | None = None
     live_api_call: bool = True
 
@@ -641,6 +642,12 @@ class YotoPlaylistVersionResponse(BaseModel):
     source_event: str
     payload: dict[str, object]
     created_at: datetime
+
+
+class UpdateYotoPlaylistRemoteLinkRequest(BaseModel):
+    remote_playlist_id: str | None = Field(default=None, max_length=240)
+    remote_playlist_uri: str | None = Field(default=None, max_length=500)
+    mark_linked_manually: bool = False
 
 
 class QueueYotoPlaylistResponse(BaseModel):

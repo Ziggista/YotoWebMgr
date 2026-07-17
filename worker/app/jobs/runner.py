@@ -541,7 +541,7 @@ class JobRunner:
                 update(yoto_playlist_drafts)
                 .where(yoto_playlist_drafts.c.id == draft.id)
                 .values(
-                    status="ready_to_link",
+                    status="awaiting_remote_mapping",
                     last_error=None,
                     updated_at=now,
                 )
@@ -550,17 +550,17 @@ class JobRunner:
                 update(library_items)
                 .where(library_items.c.id == library_item_id)
                 .values(
-                    status="ready_to_link",
-                    readiness_status="ready_to_link",
+                    status="awaiting_remote_mapping",
+                    readiness_status="awaiting_remote_mapping",
                     readiness_detail=(
-                        "Local Yoto playlist payload is ready. Link it manually in the Yoto app until "
-                        "live API upload is enabled."
+                        "Local Yoto playlist payload is ready. Find or create the remote Yoto playlist, "
+                        "then record its playlist URI or ID before NFC linking."
                     ),
                     updated_at=now,
                 )
             )
 
-        self._mark_succeeded(job_id, "Yoto playlist draft ready for manual linking")
+        self._mark_succeeded(job_id, "Yoto playlist draft ready for remote mapping")
 
     def _pixelise_artwork(self, job_id: int, library_item_id: int | None) -> None:
         if library_item_id is None:
