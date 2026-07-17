@@ -11,9 +11,11 @@ web UI for now, with the option to wrap it in Capacitor later using the same pat
   source transfer card, Yoto playlist URI, and verification notes.
 - Surface a clear checklist: scan, prepare NDEF, link in the Yoto app, download on the player,
   and test playback.
-- Use browser NFC reads only when the Android browser exposes Web NFC.
-- Treat NFC programming as an explicit manual step through a known app such as NFC Tools until the
-  supported Yoto card-linking behaviour is confirmed.
+- Prefer native Capacitor NFC inside the Android app for read/write flows.
+- Keep browser Web NFC and NFC Tools as fallback capture paths when native/plugin behaviour differs
+  by device.
+- Persist recent scan dumps so captured source-card payloads can be inspected and applied directly
+  to a blank target card.
 
 ## Step 2: Playlist-to-Card Handoff
 
@@ -28,7 +30,9 @@ web UI for now, with the option to wrap it in Capacitor later using the same pat
 - Add Capacitor only after the mobile web workflow is usable and stable.
 - Reuse the Daymark shape: Vite `dist` as the web directory, an Android app ID, clear local
   development server settings, and build scripts.
-- Evaluate native NFC capabilities separately from browser Web NFC before enabling any write path.
+- Use a native MIT-licensed Capacitor NFC plugin for scan/write before relying on WebView Web NFC.
+- Expose persisted scan dumps and a simple "apply to form, then write" path so source-card cloning
+  remains auditable.
 
 ## Git Checkpoints
 

@@ -311,6 +311,30 @@ export interface PhysicalCard {
   created_at: string;
 }
 
+export interface CardScanDumpRequest {
+  scan_source: string;
+  programmable_id?: string | null;
+  nfc_serial_number?: string | null;
+  ndef_payload_text?: string | null;
+  ndef_payload_hex?: string | null;
+  tag_info?: Record<string, unknown> | null;
+  records?: Array<Record<string, unknown>>;
+  runtime?: string | null;
+}
+
+export interface CardScanDumpEntry {
+  id: number;
+  scan_source: string;
+  runtime: string | null;
+  programmable_id: string | null;
+  nfc_serial_number: string | null;
+  ndef_payload_text: string | null;
+  ndef_payload_hex: string | null;
+  tag_info: Record<string, unknown> | null;
+  records: Array<Record<string, unknown>>;
+  created_at: string;
+}
+
 export interface CardAssignmentEvent {
   id: number;
   card_id: number;
@@ -1120,6 +1144,25 @@ export async function fetchCardHistory(cardId: number): Promise<CardAssignmentEv
     throw new Error(await errorMessage(response, "Failed to load card history."));
   }
   return response.json() as Promise<CardAssignmentEvent[]>;
+}
+
+export async function dumpCardScan(payload: CardScanDumpRequest): Promise<void> {
+  const response = await apiFetch("/api/v1/cards/scan-dumps", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to dump card scan."));
+  }
+}
+
+export async function fetchCardScanDumps(): Promise<CardScanDumpEntry[]> {
+  const response = await apiFetch("/api/v1/cards/scan-dumps");
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to load card scan dumps."));
+  }
+  return response.json() as Promise<CardScanDumpEntry[]>;
 }
 
 export async function linkLibraryItemToCard(

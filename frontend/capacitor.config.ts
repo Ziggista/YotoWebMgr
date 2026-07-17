@@ -5,7 +5,7 @@ const config: CapacitorConfig = {
   appName: "YotoWebMgr",
   webDir: "dist",
   server: {
-    androidScheme: "https",
+    androidScheme: "http",
     cleartext: true,
   },
 };

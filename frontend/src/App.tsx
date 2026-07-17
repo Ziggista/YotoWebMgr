@@ -2,11 +2,14 @@ import { FormEvent, useEffect, useState } from "react";
 import { Link, NavLink, Route, Routes, useParams } from "react-router-dom";
 import AudioPlayer from "react-h5-audio-player";
 import "react-h5-audio-player/lib/styles.css";
+import { Capacitor } from "@capacitor/core";
+import { NFC, type NDEFMessagesTransformable } from "@exxili/capacitor-nfc";
 import {
   AppSettings,
   AuthProvidersResponse,
   BuildInfo,
   CardAssignmentEvent,
+  CardScanDumpEntry,
   CardPlan,
   ImportSourceInfo,
   ImportRequest,
@@ -34,9 +37,11 @@ import {
   completeYotoOAuth,
   debugYotoApiRequest,
   disconnectYotoCredentials,
+  dumpCardScan,
   fetchBackendBuildInfo,
   fetchCard,
   fetchCardHistory,
+  fetchCardScanDumps,
   fetchCards,
   fetchCardPlan,
   fetchImportSources,
@@ -124,6 +129,37 @@ function isWebNfcAvailable(): boolean {
   return typeof window !== "undefined" && "NDEFReader" in window;
 }
 
+function isAndroidAppRuntime(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  const { hostname, protocol } = window.location;
+  return hostname === "localhost" && (protocol === "http:" || protocol === "https:" || protocol === "capacitor:");
+}
+
+function isNativeAndroidRuntime(): boolean {
+  return Capacitor.getPlatform() === "android" && isAndroidAppRuntime();
+}
+
+function formatNfcScanError(error: unknown): string {
+  if (!(error instanceof Error)) {
+    return "Could not start NFC scan.";
+  }
+
+  if (error.name === "NotAllowedError") {
+    return isAndroidAppRuntime()
+      ? "NFC permission was denied by the Android app WebView. Tap Request NFC permission once, then try Scan with phone again. If Android still denies it, use Chrome or NFC Tools for capture."
+      : "NFC permission was denied. Allow NFC access for this page, then try again.";
+  }
+
+  if (error.name === "NotSupportedError") {
+    return "This runtime does not support Web NFC. Use Chrome on Android or capture the card with NFC Tools.";
+  }
+
+  return error.message || "Could not start NFC scan.";
+}
+
 function normaliseRecordData(data: ArrayBuffer | DataView | Uint8Array): Uint8Array {
   if (data instanceof Uint8Array) {
     return data;
@@ -168,6 +204,19 @@ function textToHex(value: string): string {
     .join("");
 }
 
+function hexToBytes(value: string): Uint8Array | null {
+  const normalized = value.replace(/[^0-9a-f]/gi, "");
+  if (!normalized || normalized.length % 2 !== 0) {
+    return null;
+  }
+
+  const bytes = new Uint8Array(normalized.length / 2);
+  for (let index = 0; index < normalized.length; index += 2) {
+    bytes[index / 2] = Number.parseInt(normalized.slice(index, index + 2), 16);
+  }
+  return bytes;
+}
+
 function playlistIdFromUri(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -195,6 +244,19 @@ function generatedCardPayload(playlistUri: string): {
     payloadText: trimmedUri,
     payloadHex: textToHex(trimmedUri),
   };
+}
+
+function currentRuntimeLabel(): string {
+  if (isNativeAndroidRuntime()) {
+    return "capacitor_android";
+  }
+  if (isAndroidAppRuntime()) {
+    return "android_webview";
+  }
+  if (typeof window !== "undefined") {
+    return `${window.location.protocol}//${window.location.hostname || "browser"}`;
+  }
+  return "unknown";
 }
 
 async function copyToClipboard(value: string): Promise<boolean> {
@@ -2403,10 +2465,13 @@ function TagsPage() {
 
 function CardsPage() {
   const [cards, setCards] = useState<PhysicalCard[]>([]);
+  const [scanDumps, setScanDumps] = useState<CardScanDumpEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [scanMessage, setScanMessage] = useState<string | null>(null);
   const [helperMessage, setHelperMessage] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
+  const [nativeNfcSupported, setNativeNfcSupported] = useState(false);
+  const [nativeWritePending, setNativeWritePending] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [form, setForm] = useState({
     card_code: "",
@@ -2480,10 +2545,115 @@ function CardsPage() {
     setCards(await fetchCards());
   }
 
+  async function refreshScanDumps() {
+    setScanDumps(await fetchCardScanDumps());
+  }
+
   useEffect(() => {
-    void refreshCards().catch((loadError) =>
+    void Promise.all([refreshCards(), refreshScanDumps()]).catch((loadError) =>
       setError(loadError instanceof Error ? loadError.message : "Failed to load cards."),
     );
+  }, []);
+
+  useEffect(() => {
+    if (!isNativeAndroidRuntime()) {
+      return;
+    }
+
+    let cancelled = false;
+    void NFC.isSupported()
+      .then(({ supported }) => {
+        if (!cancelled) {
+          setNativeNfcSupported(supported);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setNativeNfcSupported(false);
+        }
+      });
+
+    const removeReadListener = NFC.onRead((data: NDEFMessagesTransformable) => {
+      const decodedPayload = data.string();
+      const rawPayload = data.uint8Array();
+      const firstMessage = decodedPayload.messages[0];
+      const firstRawMessage = rawPayload.messages[0];
+      const firstRecord = firstMessage?.records[0];
+      const firstRawRecord = firstRawMessage?.records[0];
+      const payloadText =
+        typeof firstRecord?.payload === "string" ? firstRecord.payload.trim() : "";
+      const payloadBytes =
+        firstRawRecord?.payload instanceof Uint8Array ? firstRawRecord.payload : null;
+      const payloadHex = payloadBytes
+        ? Array.from(payloadBytes)
+            .map((byte) => byte.toString(16).padStart(2, "0"))
+            .join("")
+        : "";
+      const serialNumber = decodedPayload.tagInfo?.uid ?? "";
+      const nextProgrammableId = serialNumber || payloadText;
+
+      if (nextProgrammableId) {
+        setForm((current) => ({
+          ...current,
+          programmable_id: nextProgrammableId,
+          nfc_serial_number: serialNumber,
+          ndef_payload_text: payloadText || current.ndef_payload_text,
+          ndef_payload_hex: payloadHex || current.ndef_payload_hex,
+          scan_source: "native_nfc",
+          notes:
+            current.notes ||
+            (payloadText ? `Read NDEF payload: ${payloadText}` : "Read by native Android NFC."),
+        }));
+        setScanMessage(`Read card ${nextProgrammableId}${serialNumber ? ` via ${serialNumber}` : ""}.`);
+      } else {
+        setScanMessage("Card read succeeded, but no serial or payload was exposed.");
+      }
+      queueCardScanDump({
+        scan_source: "native_nfc",
+        programmable_id: nextProgrammableId || null,
+        nfc_serial_number: serialNumber || null,
+        ndef_payload_text: payloadText || null,
+        ndef_payload_hex: payloadHex || null,
+        tag_info: decodedPayload.tagInfo ? { ...decodedPayload.tagInfo } : null,
+        records: decodedPayload.messages.flatMap((message) =>
+          message.records.map((record) => ({
+            type: record.type,
+            payload:
+              typeof record.payload === "string"
+                ? record.payload
+                : String(record.payload),
+          })),
+        ),
+      });
+
+      setScanning(false);
+      setNativeWritePending(false);
+    });
+
+    const removeErrorListener = NFC.onError((nfcError) => {
+      setScanMessage(nfcError.error || "Native NFC operation failed.");
+      setScanning(false);
+      setNativeWritePending(false);
+    });
+
+    const removeWriteListener = NFC.onWrite(() => {
+      setForm((current) => ({
+        ...current,
+        ndef_prepared: true,
+        scan_source: current.scan_source === "manual" ? "native_nfc" : current.scan_source,
+        notes: current.notes || "Wrote the current NDEF payload with native Android NFC.",
+      }));
+      setHelperMessage("Native NFC write completed. Re-scan the card or test it in the Yoto app.");
+      setNativeWritePending(false);
+      setScanning(false);
+    });
+
+    return () => {
+      cancelled = true;
+      removeReadListener();
+      removeErrorListener();
+      removeWriteListener();
+    };
   }, []);
 
   function handleGenerateFromPlaylist() {
@@ -2511,11 +2681,112 @@ function CardsPage() {
     setHelperMessage(copied ? `Copied ${label}.` : `Clipboard copy for ${label} is not available here.`);
   }
 
-  async function handleScanCard() {
+  function queueCardScanDump(payload: {
+    scan_source: string;
+    programmable_id?: string | null;
+    nfc_serial_number?: string | null;
+    ndef_payload_text?: string | null;
+    ndef_payload_hex?: string | null;
+    tag_info?: Record<string, unknown> | null;
+    records?: Array<Record<string, unknown>>;
+  }) {
+    void dumpCardScan({
+      ...payload,
+      runtime: currentRuntimeLabel(),
+    })
+      .then(() => refreshScanDumps())
+      .catch((dumpError) => {
+        setHelperMessage(
+          dumpError instanceof Error ? `Scan dump failed: ${dumpError.message}` : "Scan dump failed.",
+        );
+      });
+  }
+
+  function applyScanDumpToForm(entry: CardScanDumpEntry) {
+    setForm((current) => ({
+      ...current,
+      programmable_id: entry.programmable_id || current.programmable_id,
+      nfc_serial_number: entry.nfc_serial_number || current.nfc_serial_number,
+      ndef_payload_text: entry.ndef_payload_text || current.ndef_payload_text,
+      ndef_payload_hex: entry.ndef_payload_hex || current.ndef_payload_hex,
+      scan_source: entry.scan_source || current.scan_source,
+      notes:
+        current.notes ||
+        `Applied captured scan dump #${entry.id} from ${entry.scan_source}.`,
+    }));
+    setHelperMessage(`Applied scan dump #${entry.id} to the card form.`);
+  }
+
+  async function handleNativeScanCard() {
+    setError(null);
+    setHelperMessage(null);
+    setScanMessage(null);
+
+    if (!nativeNfcSupported) {
+      setScanMessage("Native NFC is not available on this Android device.");
+      return;
+    }
+
+    setScanning(true);
+    setNativeWritePending(false);
+    setScanMessage("Hold the card against the phone.");
+
+    try {
+      await NFC.startScan();
+    } catch (scanError) {
+      setScanning(false);
+      setScanMessage(scanError instanceof Error ? scanError.message : "Could not start native NFC scan.");
+    }
+  }
+
+  async function handleNativeWriteCard() {
+    setError(null);
+    setHelperMessage(null);
+    setScanMessage(null);
+
+    if (!nativeNfcSupported) {
+      setHelperMessage("Native NFC is not available on this Android device.");
+      return;
+    }
+
+    const payloadBytes = form.ndef_payload_hex ? hexToBytes(form.ndef_payload_hex) : null;
+    if (form.ndef_payload_hex && !payloadBytes) {
+      setHelperMessage("NDEF payload hex is invalid. Use an even number of hex characters.");
+      return;
+    }
+    if (!payloadBytes && !form.ndef_payload_text) {
+      setHelperMessage("Prepare an NDEF payload first.");
+      return;
+    }
+
+    setScanning(true);
+    setNativeWritePending(true);
+    setScanMessage("Hold the card against the phone to write the prepared payload.");
+
+    try {
+      await NFC.writeNDEF({
+        rawMode: true,
+        records: [
+          {
+            type: "custom",
+            payload: payloadBytes ?? new TextEncoder().encode(form.ndef_payload_text),
+          },
+        ],
+      });
+    } catch (writeError) {
+      setNativeWritePending(false);
+      setScanning(false);
+      setHelperMessage(writeError instanceof Error ? writeError.message : "Could not start native NFC write.");
+    }
+  }
+
+  async function startWebNfcScan(promptOnly: boolean) {
     setError(null);
     setScanMessage(null);
     if (!isWebNfcAvailable()) {
-      setScanMessage("Web NFC is not available in this browser. Enter the card ID manually or use NFC Tools.");
+      setScanMessage(
+        "Web NFC is not available in this browser. Enter the card ID manually or use NFC Tools.",
+      );
       return;
     }
 
@@ -2523,6 +2794,11 @@ function CardsPage() {
     try {
       const reader = new window.NDEFReader();
       await reader.scan();
+      if (promptOnly) {
+        setScanMessage("NFC permission request completed. If Android allowed it, try Scan with phone now.");
+        setScanning(false);
+        return;
+      }
       setScanMessage("Hold the card against the phone.");
       reader.onreading = (event) => {
         const readingEvent = event as NdefReadingEvent;
@@ -2544,16 +2820,46 @@ function CardsPage() {
         } else {
           setScanMessage("Card read succeeded, but no serial or payload was exposed.");
         }
+        queueCardScanDump({
+          scan_source: "web_nfc",
+          programmable_id: nextProgrammableId || null,
+          nfc_serial_number: serialNumber || null,
+          ndef_payload_text: payloadText || null,
+          ndef_payload_hex: decodedPayload.hex || null,
+          tag_info: {
+            record_count: readingEvent.message.records.length,
+          },
+          records: readingEvent.message.records.map((record, index) => ({
+            index,
+            has_data: Boolean(record.data),
+          })),
+        });
         setScanning(false);
       };
       reader.onerror = () => {
         setScanMessage("The NFC read failed. Try again or capture the value from NFC Tools.");
         setScanning(false);
-      };
+        };
     } catch (scanError) {
       setScanning(false);
-      setScanMessage(scanError instanceof Error ? scanError.message : "Could not start NFC scan.");
+      setScanMessage(formatNfcScanError(scanError));
     }
+  }
+
+  async function handleRequestNfcPermission() {
+    if (isNativeAndroidRuntime()) {
+      await handleNativeScanCard();
+      return;
+    }
+    await startWebNfcScan(true);
+  }
+
+  async function handleScanCard() {
+    if (isNativeAndroidRuntime()) {
+      await handleNativeScanCard();
+      return;
+    }
+    await startWebNfcScan(false);
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -2633,16 +2939,39 @@ function CardsPage() {
             <p className="eyebrow">Step 1</p>
             <h3>Read or prepare a card</h3>
             <p className="muted">
-              Use Android Web NFC when available. For programming, record the exact NFC Tools
-              command and keep Yoto linking as a visible manual confirmation.
+              Use native NFC inside the Android app when available. Keep the manual NFC Tools path
+              visible so tags can still be captured or reprogrammed when device NFC behaves
+              differently.
             </p>
           </div>
           <div className="card-console-actions">
+            <button
+              className="secondary-button"
+              disabled={scanning}
+              onClick={() => void handleRequestNfcPermission()}
+              type="button"
+            >
+              {isNativeAndroidRuntime() ? "Prime native NFC" : "Request NFC permission"}
+            </button>
             <button className="primary-button" disabled={scanning} onClick={() => void handleScanCard()} type="button">
               {scanning ? "Scanning" : "Scan with phone"}
             </button>
+            <button
+              className="secondary-button"
+              disabled={scanning || !isNativeAndroidRuntime()}
+              onClick={() => void handleNativeWriteCard()}
+              type="button"
+            >
+              {nativeWritePending ? "Writing tag" : "Write payload to tag"}
+            </button>
             <span className="status-pill status-pill-muted">
-              {isWebNfcAvailable() ? "Web NFC available" : "Manual capture"}
+              {isNativeAndroidRuntime()
+                ? nativeNfcSupported
+                  ? "Native NFC ready"
+                  : "Native NFC unavailable"
+                : isWebNfcAvailable()
+                  ? "Web NFC available"
+                  : "Manual capture"}
             </span>
           </div>
           {scanMessage ? <p className="muted">{scanMessage}</p> : null}
@@ -2651,12 +2980,81 @@ function CardsPage() {
             Capture the serial, decoded payload, and raw payload bytes separately so copied cards
             and manual programming remain auditable.
           </p>
+          {isAndroidAppRuntime() ? (
+            <p className="muted">
+              Android app note: the app now prefers a native Capacitor NFC plugin. Chrome may still
+              behave differently because it uses Web NFC instead of the native plugin path.
+            </p>
+          ) : null}
         </article>
         <article className="card-console-panel">
           <p className="eyebrow">Workflow</p>
           <CardWorkflowChecklist card={draftCard} />
         </article>
       </div>
+
+      <section className="card-console-panel">
+        <div className="section-header">
+          <div>
+            <p className="eyebrow">Scan Dumps</p>
+            <h3>Recent captured tags</h3>
+          </div>
+          <div className="button-row">
+            <button className="secondary-button" onClick={() => void refreshScanDumps()} type="button">
+              Refresh dumps
+            </button>
+            <span className="status-pill status-pill-muted">{scanDumps.length} stored</span>
+          </div>
+        </div>
+        {scanDumps.length === 0 ? (
+          <p className="muted">No persisted scan dumps yet. Scan a card in the app to capture one.</p>
+        ) : (
+          <div className="compact-list">
+            {scanDumps.map((entry) => (
+              <article className="tag-row" key={entry.id}>
+                <div>
+                  <strong>#{entry.id}</strong>{" "}
+                  <span className="muted">
+                    {entry.scan_source} {entry.nfc_serial_number ? `· ${entry.nfc_serial_number}` : ""}
+                  </span>
+                  <p className="muted">
+                    {entry.ndef_payload_text || entry.programmable_id || "No text payload captured"}
+                  </p>
+                </div>
+                <div className="button-row">
+                  <button
+                    className="secondary-button"
+                    onClick={() => applyScanDumpToForm(entry)}
+                    type="button"
+                  >
+                    Apply to form
+                  </button>
+                  <button
+                    className="secondary-button"
+                    disabled={!entry.ndef_payload_text}
+                    onClick={() =>
+                      void handleCopyProgrammingValue(entry.ndef_payload_text ?? "", "captured payload text")
+                    }
+                    type="button"
+                  >
+                    Copy text
+                  </button>
+                  <button
+                    className="secondary-button"
+                    disabled={!entry.ndef_payload_hex}
+                    onClick={() =>
+                      void handleCopyProgrammingValue(entry.ndef_payload_hex ?? "", "captured payload hex")
+                    }
+                    type="button"
+                  >
+                    Copy hex
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
 
       <form className="import-form" onSubmit={(event) => void handleSubmit(event)}>
         <div className="import-grid import-grid-wide">
@@ -2769,6 +3167,7 @@ function CardsPage() {
               value={form.scan_source}
             >
               <option value="manual">Manual entry</option>
+              <option value="native_nfc">Native Android NFC</option>
               <option value="web_nfc">Android Web NFC</option>
               <option value="nfc_tools">NFC Tools</option>
               <option value="transfer_card">Transfer card copy</option>
@@ -2800,6 +3199,14 @@ function CardsPage() {
           <div className="helper-action-group">
             <button className="secondary-button" onClick={() => handleGenerateFromPlaylist()} type="button">
               Generate programming payload
+            </button>
+            <button
+              className="secondary-button"
+              disabled={!isNativeAndroidRuntime() || scanning || (!form.ndef_payload_text && !form.ndef_payload_hex)}
+              onClick={() => void handleNativeWriteCard()}
+              type="button"
+            >
+              Write payload natively
             </button>
           </div>
           <label>

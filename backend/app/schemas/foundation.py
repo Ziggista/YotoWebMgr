@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -502,6 +502,36 @@ class CardAssignmentEventResponse(BaseModel):
     yoto_playlist_uri: str | None
     summary: str
     created_by_user_id: int | None
+    created_at: datetime
+
+
+class CardScanDumpRequest(BaseModel):
+    scan_source: str = Field(min_length=1, max_length=80)
+    programmable_id: str | None = Field(default=None, max_length=160)
+    nfc_serial_number: str | None = Field(default=None, max_length=160)
+    ndef_payload_text: str | None = Field(default=None, max_length=2000)
+    ndef_payload_hex: str | None = Field(default=None, max_length=4000)
+    tag_info: dict[str, Any] | None = None
+    records: list[dict[str, Any]] = Field(default_factory=list)
+    runtime: str | None = Field(default=None, max_length=120)
+
+
+class CardScanDumpResponse(BaseModel):
+    status: str
+    detail: str
+    dumped_at: datetime
+
+
+class CardScanDumpEntry(BaseModel):
+    id: int
+    scan_source: str
+    runtime: str | None
+    programmable_id: str | None
+    nfc_serial_number: str | None
+    ndef_payload_text: str | None
+    ndef_payload_hex: str | None
+    tag_info: dict[str, Any] | None
+    records: list[dict[str, Any]]
     created_at: datetime
 
 

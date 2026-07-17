@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -69,3 +69,18 @@ class CardAssignmentEvent(Base):
     summary: Mapped[str] = mapped_column(String(240))
     created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CardScanDump(Base):
+    __tablename__ = "card_scan_dumps"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    scan_source: Mapped[str] = mapped_column(String(80), index=True)
+    runtime: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    programmable_id: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    nfc_serial_number: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    ndef_payload_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ndef_payload_hex: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tag_info: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    records: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)

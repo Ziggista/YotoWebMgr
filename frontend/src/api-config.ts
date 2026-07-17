@@ -25,7 +25,7 @@ function getDefaultApiBaseUrl() {
     return "";
   }
 
-  if ((protocol === "https:" || protocol === "capacitor:") && hostname === "localhost") {
+  if ((protocol === "http:" || protocol === "https:" || protocol === "capacitor:") && hostname === "localhost") {
     return ANDROID_DEFAULT_API_BASE_URL;
   }
 

@@ -591,6 +591,38 @@ async def test_card_workflow_can_be_updated_after_scan(api_client: AsyncClient) 
     assert history.json()[0]["new_status"] == "linked"
 
 
+async def test_card_scan_dump_endpoint_accepts_debug_payload(api_client: AsyncClient) -> None:
+    async with api_client as client:
+        response = await client.post(
+            "/api/v1/cards/scan-dumps",
+            json={
+                "scan_source": "native_nfc",
+                "programmable_id": "04A1B2C3D4",
+                "nfc_serial_number": "04A1B2C3D4",
+                "ndef_payload_text": "https://my.yotoplay.com/playlist/abc123",
+                "ndef_payload_hex": "68747470733a2f2f6d792e796f746f706c61792e636f6d2f706c61796c6973742f616263313233",
+                "tag_info": {"uid": "04A1B2C3D4", "type": "MifareUltralight"},
+                "records": [{"type": "U", "payload": "https://my.yotoplay.com/playlist/abc123"}],
+                "runtime": "capacitor_android",
+            },
+        )
+
+    assert response.status_code == 202
+    payload = response.json()
+    assert payload["status"] == "accepted"
+    assert payload["detail"] == "Captured card scan dump in backend logs."
+    assert payload["dumped_at"] is not None
+
+    async with api_client as client:
+        listed = await client.get("/api/v1/cards/scan-dumps")
+
+    assert listed.status_code == 200
+    dumps = listed.json()
+    assert dumps[0]["scan_source"] == "native_nfc"
+    assert dumps[0]["nfc_serial_number"] == "04A1B2C3D4"
+    assert dumps[0]["records"][0]["type"] == "U"
+
+
 async def test_library_playlist_settings_tracks_icons_and_readiness(
     api_client: AsyncClient,
 ) -> None:

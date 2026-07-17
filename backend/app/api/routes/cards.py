@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -7,11 +8,20 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db_session
-from app.models import CardAssignmentEvent, PhysicalCard
-from app.schemas.foundation import CardAssignmentEventResponse, CardCreate, CardResponse, CardUpdate
+from app.models import CardAssignmentEvent, CardScanDump, PhysicalCard
+from app.schemas.foundation import (
+    CardAssignmentEventResponse,
+    CardCreate,
+    CardResponse,
+    CardScanDumpEntry,
+    CardScanDumpRequest,
+    CardScanDumpResponse,
+    CardUpdate,
+)
 
 
 router = APIRouter()
+logger = logging.getLogger("app.cards")
 
 
 def _build_card_response(card: PhysicalCard) -> CardResponse:
@@ -57,10 +67,64 @@ def _build_card_assignment_event_response(event: CardAssignmentEvent) -> CardAss
     return CardAssignmentEventResponse.model_validate(event, from_attributes=True)
 
 
+def _build_card_scan_dump_response(entry: CardScanDump) -> CardScanDumpEntry:
+    return CardScanDumpEntry(
+        id=entry.id,
+        scan_source=entry.scan_source,
+        runtime=entry.runtime,
+        programmable_id=entry.programmable_id,
+        nfc_serial_number=entry.nfc_serial_number,
+        ndef_payload_text=entry.ndef_payload_text,
+        ndef_payload_hex=entry.ndef_payload_hex,
+        tag_info=entry.tag_info,
+        records=entry.records or [],
+        created_at=entry.created_at,
+    )
+
+
 @router.get("", response_model=list[CardResponse])
 async def list_cards(db: Annotated[Session, Depends(get_db_session)]) -> list[CardResponse]:
     query = select(PhysicalCard).order_by(PhysicalCard.card_code.asc(), PhysicalCard.id.asc())
     return [_build_card_response(card) for card in db.scalars(query)]
+
+
+@router.get("/scan-dumps", response_model=list[CardScanDumpEntry])
+async def list_card_scan_dumps(
+    db: Annotated[Session, Depends(get_db_session)],
+) -> list[CardScanDumpEntry]:
+    dumps = db.scalars(
+        select(CardScanDump).order_by(CardScanDump.created_at.desc(), CardScanDump.id.desc()).limit(20)
+    )
+    return [_build_card_scan_dump_response(entry) for entry in dumps]
+
+
+@router.post("/scan-dumps", response_model=CardScanDumpResponse, status_code=202)
+async def create_card_scan_dump(
+    payload: CardScanDumpRequest,
+    db: Annotated[Session, Depends(get_db_session)],
+) -> CardScanDumpResponse:
+    dumped_at = datetime.now(UTC)
+    entry = CardScanDump(
+        scan_source=payload.scan_source,
+        runtime=payload.runtime,
+        programmable_id=payload.programmable_id,
+        nfc_serial_number=payload.nfc_serial_number,
+        ndef_payload_text=payload.ndef_payload_text,
+        ndef_payload_hex=payload.ndef_payload_hex,
+        tag_info=payload.tag_info,
+        records=payload.records,
+    )
+    db.add(entry)
+    db.commit()
+    logger.info(
+        "CARD_SCAN_DUMP %s",
+        payload.model_dump_json(),
+    )
+    return CardScanDumpResponse(
+        status="accepted",
+        detail="Captured card scan dump in backend logs.",
+        dumped_at=dumped_at,
+    )
 
 
 @router.get("/{card_id}", response_model=CardResponse)
@@ -176,3 +240,4 @@ async def update_card(
         ) from error
     db.refresh(card)
     return _build_card_response(card)
+

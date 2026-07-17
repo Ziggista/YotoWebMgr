@@ -63,6 +63,8 @@ their assigned tags in list/detail responses and can be filtered with `tag_id`, 
 
 - `GET /api/v1/cards`
 - `POST /api/v1/cards`
+- `GET /api/v1/cards/scan-dumps`
+- `POST /api/v1/cards/scan-dumps`
 - `GET /api/v1/cards/{card_id}`
 - `GET /api/v1/cards/{card_id}/history`
 
@@ -71,6 +73,9 @@ new library item/status values, related worker job IDs, playlist URIs when known
 summary so card restore workflows can be built without overwriting past state.
 The frontend card detail page uses these endpoints to show identifiers, NFC metadata, workflow
 flags, notes, and assignment events for a single physical card.
+The scan-dump endpoints persist recent raw captures from Android native NFC or Web NFC so source
+cards can be inspected and reapplied to a fresh target card before the household commits a final
+inventory record.
 
 ## Yoto Playlist Drafts
 
