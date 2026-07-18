@@ -663,6 +663,24 @@ def _extract_yoto_upload_descriptor(upload_payload: dict[str, Any]) -> tuple[str
     return normalized_upload_id, normalized_upload_url
 
 
+def _extract_yoto_transcode_descriptor(
+    transcode_payload: dict[str, Any],
+) -> tuple[str | None, dict[str, Any] | None]:
+    nested_transcode = transcode_payload.get("transcode")
+    if isinstance(nested_transcode, dict):
+        transcoded_sha = nested_transcode.get("transcodedSha256")
+        return (
+            transcoded_sha.strip() if isinstance(transcoded_sha, str) and transcoded_sha.strip() else None,
+            nested_transcode,
+        )
+
+    transcoded_sha = transcode_payload.get("transcodedSha256")
+    return (
+        transcoded_sha.strip() if isinstance(transcoded_sha, str) and transcoded_sha.strip() else None,
+        None,
+    )
+
+
 def _match_draft_track(
     *,
     raw_chapter: dict[str, Any],
@@ -686,6 +704,28 @@ def _match_draft_track(
         if chapter_type != "stream" and not track.is_stream:
             return track
     return None
+
+
+def _draft_has_processed_assets(db: Session, draft: YotoPlaylistDraft) -> bool:
+    ordered_tracks = _ordered_tracks_for_item(db, draft.library_item_id)
+    processed_assets = _latest_processed_asset_by_track(db, draft.library_item_id)
+    try:
+        payload = json.loads(draft.payload_json)
+    except json.JSONDecodeError:
+        return False
+    chapters = payload.get("chapters") if isinstance(payload, dict) else None
+    if not isinstance(chapters, list):
+        return False
+
+    for raw_chapter in chapters:
+        if not isinstance(raw_chapter, dict):
+            continue
+        if str(raw_chapter.get("type") or "audio") == "stream":
+            continue
+        matched_track = _match_draft_track(raw_chapter=raw_chapter, ordered_tracks=ordered_tracks)
+        if matched_track is not None and matched_track.id in processed_assets:
+            return True
+    return False
 
 
 async def _upload_file_to_yoto_signed_url(upload_url: str, source_path: Path) -> None:
@@ -728,7 +768,10 @@ async def _poll_yoto_transcoded_audio(
                 status_code=http_status,
                 detail=_response_excerpt(payload) or "Yoto transcode status request failed.",
             )
-        if isinstance(payload, dict) and isinstance(payload.get("transcodedSha256"), str):
+        transcoded_sha, _nested_transcode = (
+            _extract_yoto_transcode_descriptor(payload) if isinstance(payload, dict) else (None, None)
+        )
+        if transcoded_sha is not None:
             return payload, stored_tokens, refreshed_any
         await asyncio.sleep(poll_seconds)
 
@@ -862,10 +905,11 @@ async def _build_live_payload_from_draft(
         )
         refreshed_any = refreshed_any or refreshed
 
-        transcoded_sha = transcode_payload.get("transcodedSha256")
-        if not isinstance(transcoded_sha, str) or not transcoded_sha.strip():
+        transcoded_sha, nested_transcode = _extract_yoto_transcode_descriptor(transcode_payload)
+        if transcoded_sha is None:
             raise HTTPException(status_code=502, detail="Yoto transcode response did not include a transcodedSha256.")
 
+        transcoded_info = nested_transcode.get("transcodedInfo") if isinstance(nested_transcode, dict) else None
         duration_seconds = (
             asset.duration_seconds
             if asset is not None and asset.duration_seconds is not None
@@ -881,12 +925,26 @@ async def _build_live_payload_from_draft(
             "key": "01",
             "uid": f"{matched_track.id}",
             "title": title,
-            "trackUrl": f"yoto:#{transcoded_sha.strip()}",
+            "trackUrl": f"yoto:#{transcoded_sha}",
             "type": "audio",
             "format": audio_format,
             "fileSize": size_bytes,
             "overlayLabel": overlay_label,
         }
+        if isinstance(transcoded_info, dict):
+            transcoded_format = transcoded_info.get("format")
+            transcoded_file_size = transcoded_info.get("fileSize")
+            transcoded_channels = transcoded_info.get("channels")
+            if isinstance(transcoded_format, str) and transcoded_format.strip():
+                remote_track["format"] = transcoded_format.strip()
+            if isinstance(transcoded_file_size, int) and transcoded_file_size > 0:
+                remote_track["fileSize"] = transcoded_file_size
+            if isinstance(transcoded_channels, str):
+                normalized_channels = transcoded_channels.strip().lower()
+                if normalized_channels == "mono":
+                    remote_track["channels"] = 1
+                elif normalized_channels == "stereo":
+                    remote_track["channels"] = 2
         if duration_seconds is not None:
             remote_track["duration"] = duration_seconds
             total_duration += duration_seconds
@@ -1419,9 +1477,13 @@ async def get_yoto_playlist_remote_payload(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Yoto playlist draft not found")
 
     payload, warnings, can_create_live = _remote_payload_preview_from_draft(draft)
+    if not can_create_live and _draft_has_processed_assets(db, draft):
+        warnings = [
+            "Processed Yoto-ready assets exist for this draft, but the preview endpoint still shows the older local-only source payload."
+        ]
     return YotoPlaylistRemotePayloadResponse(
         playlist_draft_id=draft.id,
-        can_create_live=can_create_live,
+        can_create_live=can_create_live or _draft_has_processed_assets(db, draft),
         payload=payload,
         warnings=warnings,
         live_api_call=False,
