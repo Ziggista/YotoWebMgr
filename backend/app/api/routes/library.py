@@ -791,8 +791,12 @@ def _calculate_readiness(db: Session, item: LibraryItem) -> ReadinessResponse:
         ReadinessCheck(
             key="cover",
             label="Cover artwork",
-            ok=bool(item.cover_art_path),
-            detail="Cover artwork is set." if item.cover_art_path else "Cover artwork still needs choosing.",
+            ok=True,
+            detail=(
+                "Cover artwork is set. Yoto cloud can only use it when the cover path is already a public http(s) URL."
+                if item.cover_art_path
+                else "Cover artwork is optional for Yoto upload. You can create Yoto cloud content without it."
+            ),
         ),
         ReadinessCheck(
             key="tracks",

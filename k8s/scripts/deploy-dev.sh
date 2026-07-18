@@ -190,6 +190,29 @@ node_major_version() {
   printf '%s\n' "${version%%.*}"
 }
 
+ensure_frontend_node_modules() {
+  if [[ ! -d "${FRONTEND_DIR}/node_modules/@rollup/rollup-linux-x64-gnu" ]]; then
+    echo "Linux Rollup optional dependency is missing; refreshing frontend dependencies for this WSL build"
+    pushd "${FRONTEND_DIR}" >/dev/null
+    npm install
+    popd >/dev/null
+  fi
+}
+
+prepare_frontend_ota_bundle() {
+  if [[ ! -d "${FRONTEND_DIR}" ]]; then
+    echo "Frontend directory not found at ${FRONTEND_DIR}" >&2
+    exit 1
+  fi
+
+  echo "Preparing frontend OTA bundle for Android web updates"
+  ensure_frontend_node_modules
+  pushd "${FRONTEND_DIR}" >/dev/null
+  VITE_APP_BUILD_SHA="${GIT_SHA}" npm run build
+  VITE_APP_BUILD_SHA="${GIT_SHA}" npm run build:ota-bundle
+  popd >/dev/null
+}
+
 copy_web_dist_into_android_assets() {
   if [[ ! -d "${ANDROID_ASSETS_DIR}" ]]; then
     echo "Android assets directory not found at ${ANDROID_ASSETS_DIR}" >&2
@@ -284,6 +307,7 @@ while "${MICROK8S_BIN}" kubectl get namespace "${NAMESPACE}" >/dev/null 2>&1; do
   sleep 2
 done
 
+prepare_frontend_ota_bundle
 "${ROOT_DIR}/k8s/scripts/build-images.sh"
 
 "${MICROK8S_BIN}" kubectl apply -k "${ROOT_DIR}/k8s/overlays/dev"
@@ -326,11 +350,9 @@ if [[ "${ANDROID_BUILD}" == "true" ]]; then
 
   pushd "${FRONTEND_DIR}" >/dev/null
   ensure_android_local_properties
-  if [[ ! -d "node_modules/@rollup/rollup-linux-x64-gnu" ]]; then
-    echo "Linux Rollup optional dependency is missing; refreshing frontend dependencies for this WSL build"
-    npm install
-  fi
-  npm run build
+  ensure_frontend_node_modules
+  VITE_APP_BUILD_SHA="${GIT_SHA}" npm run build
+  VITE_APP_BUILD_SHA="${GIT_SHA}" npm run build:ota-bundle
   if [[ "$(node_major_version)" =~ ^[0-9]+$ ]] && (( $(node_major_version) >= 22 )); then
     npx cap sync android
   else

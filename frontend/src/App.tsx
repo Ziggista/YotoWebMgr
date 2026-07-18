@@ -3,6 +3,7 @@ import { Link, NavLink, Route, Routes, useParams } from "react-router-dom";
 import AudioPlayer from "react-h5-audio-player";
 import "react-h5-audio-player/lib/styles.css";
 import { Capacitor } from "@capacitor/core";
+import { CapacitorUpdater } from "@capgo/capacitor-updater";
 import { NFC, type NDEFMessagesTransformable } from "@exxili/capacitor-nfc";
 import {
   AppSettings,
@@ -85,6 +86,7 @@ import {
   uploadImport,
   updateImportReview,
 } from "./api";
+import { resolveAndroidUpdateManifestUrl } from "./api-config";
 import "./App.css";
 
 const sections = ["Library", "Import", "Cards", "Jobs", "Tags", "Settings"];
@@ -118,6 +120,69 @@ type WorkflowStep = {
   done: boolean;
   detail: string;
 };
+
+type AndroidUpdateManifest = {
+  version: string;
+  build_sha: string;
+  app_version: string;
+  bundle_url: string;
+  generated_at: string;
+  notes?: string;
+};
+
+type AndroidUpdateState =
+  | {
+      kind: "unavailable";
+      detail: string;
+    }
+  | {
+      kind: "idle";
+      detail: string;
+      currentVersion: string | null;
+      nativeVersion: string | null;
+    }
+  | {
+      kind: "checking";
+      detail: string;
+      currentVersion: string | null;
+      nativeVersion: string | null;
+    }
+  | {
+      kind: "up_to_date";
+      detail: string;
+      currentVersion: string | null;
+      nativeVersion: string | null;
+      remoteVersion: string;
+    }
+  | {
+      kind: "blocked";
+      detail: string;
+      currentVersion: string | null;
+      nativeVersion: string | null;
+      remoteVersion: string;
+    }
+  | {
+      kind: "downloading";
+      detail: string;
+      currentVersion: string | null;
+      nativeVersion: string | null;
+      remoteVersion: string;
+      percent: number;
+    }
+  | {
+      kind: "ready";
+      detail: string;
+      currentVersion: string | null;
+      nativeVersion: string | null;
+      remoteVersion: string;
+      bundleId: string;
+    }
+  | {
+      kind: "error";
+      detail: string;
+      currentVersion: string | null;
+      nativeVersion: string | null;
+    };
 
 type NdefRecordWithData = {
   data?: ArrayBuffer | DataView | Uint8Array | null;
@@ -289,6 +354,18 @@ async function copyToClipboard(value: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function fetchAndroidUpdateManifest(): Promise<AndroidUpdateManifest> {
+  const manifestUrl = resolveAndroidUpdateManifestUrl();
+  if (!manifestUrl) {
+    throw new Error("No Android update host is configured yet.");
+  }
+  const response = await fetch(`${manifestUrl}?t=${Date.now()}`);
+  if (!response.ok) {
+    throw new Error(`Update manifest request failed with HTTP ${response.status}.`);
+  }
+  return response.json() as Promise<AndroidUpdateManifest>;
 }
 
 function cardWorkflowSteps(card: PhysicalCard | null): WorkflowStep[] {
@@ -2120,6 +2197,10 @@ function LibraryDetailPage() {
             Queue Yoto playlist
           </button>
         </div>
+        <p className="muted">
+          Required for Yoto cloud create: a title, playlist draft, and playable uploaded tracks. Cover artwork is optional.
+          If you do set cover art, Yoto only receives it when it is already a public <code>http(s)</code> image URL.
+        </p>
         <WorkflowChecklist steps={yotoSteps} />
         {yotoPlaylists.length === 0 ? (
           <EmptyState message="No Yoto playlist drafts queued yet." />
@@ -4947,6 +5028,102 @@ function AuthGate({
 function BuildStamp() {
   const [backendBuild, setBackendBuild] = useState<BuildInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [androidUpdate, setAndroidUpdate] = useState<AndroidUpdateState>({
+    kind: "unavailable",
+    detail: "OTA web updates are only available in the Android app runtime.",
+  });
+
+  async function checkAndroidUpdate() {
+    if (!isNativeAndroidRuntime()) {
+      setAndroidUpdate({
+        kind: "unavailable",
+        detail: "OTA web updates are only available in the Android app runtime.",
+      });
+      return;
+    }
+
+    let currentVersion: string | null = null;
+    let nativeVersion: string | null = null;
+    try {
+      const current = await CapacitorUpdater.current();
+      currentVersion = current.bundle?.version ?? null;
+      nativeVersion = current.native ?? null;
+      setAndroidUpdate({
+        kind: "checking",
+        detail: "Checking the webserver for a newer Android web bundle.",
+        currentVersion,
+        nativeVersion,
+      });
+
+      const manifest = await fetchAndroidUpdateManifest();
+      if (nativeVersion && manifest.app_version !== nativeVersion) {
+        setAndroidUpdate({
+          kind: "blocked",
+          detail: `Server bundle ${manifest.version} targets app ${manifest.app_version}, but this APK reports ${nativeVersion}. Rebuild the APK for native/plugin changes.`,
+          currentVersion,
+          nativeVersion,
+          remoteVersion: manifest.version,
+        });
+        return;
+      }
+      if (currentVersion === manifest.version) {
+        setAndroidUpdate({
+          kind: "up_to_date",
+          detail: `Already running web bundle ${manifest.version}.`,
+          currentVersion,
+          nativeVersion,
+          remoteVersion: manifest.version,
+        });
+        return;
+      }
+
+      const manifestBaseUrl = resolveAndroidUpdateManifestUrl();
+      const bundleUrl = new URL(manifest.bundle_url, manifestBaseUrl).toString();
+      setAndroidUpdate({
+        kind: "downloading",
+        detail: `Downloading web bundle ${manifest.version} from the YotoWebMgr webserver.`,
+        currentVersion,
+        nativeVersion,
+        remoteVersion: manifest.version,
+        percent: 0,
+      });
+      const bundle = await CapacitorUpdater.download({
+        url: bundleUrl,
+        version: manifest.version,
+      });
+      setAndroidUpdate({
+        kind: "ready",
+        detail: `Downloaded web bundle ${manifest.version}. Apply it to reload the app onto the new UI/API client.`,
+        currentVersion,
+        nativeVersion,
+        remoteVersion: manifest.version,
+        bundleId: bundle.id,
+      });
+    } catch (updateError) {
+      setAndroidUpdate({
+        kind: "error",
+        detail: updateError instanceof Error ? updateError.message : "Android OTA update check failed.",
+        currentVersion,
+        nativeVersion,
+      });
+    }
+  }
+
+  async function applyAndroidUpdate() {
+    if (androidUpdate.kind !== "ready") {
+      return;
+    }
+    try {
+      await CapacitorUpdater.set({ id: androidUpdate.bundleId });
+    } catch (applyError) {
+      setAndroidUpdate({
+        kind: "error",
+        detail: applyError instanceof Error ? applyError.message : "Could not apply the downloaded Android update.",
+        currentVersion: androidUpdate.currentVersion,
+        nativeVersion: androidUpdate.nativeVersion,
+      });
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -4967,6 +5144,45 @@ function BuildStamp() {
     void loadBuildInfo();
     return () => {
       cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isNativeAndroidRuntime()) {
+      return;
+    }
+
+    let active = true;
+
+    async function bootstrapAndroidUpdater() {
+      try {
+        await CapacitorUpdater.notifyAppReady();
+      } catch {
+        // Ignore; the app should continue even if OTA bookkeeping is unavailable.
+      }
+      if (active) {
+        await checkAndroidUpdate();
+      }
+    }
+
+    void bootstrapAndroidUpdater();
+    const downloadListener = CapacitorUpdater.addListener("download", (event: { percent?: number }) => {
+      setAndroidUpdate((current) =>
+        current.kind === "downloading"
+          ? {
+              ...current,
+              percent: typeof event.percent === "number" ? event.percent : current.percent,
+              detail: `Downloading web bundle ${current.remoteVersion} (${Math.round(
+                typeof event.percent === "number" ? event.percent : current.percent,
+              )}%).`,
+            }
+          : current,
+      );
+    });
+
+    return () => {
+      active = false;
+      void downloadListener.then((listener) => listener.remove());
     };
   }, []);
 
@@ -4993,6 +5209,28 @@ function BuildStamp() {
         {backendBuild ? `Environment: ${backendBuild.environment}` : "Loading backend build info..."}
         {error ? ` ${error}` : ""}
       </p>
+      <div className="build-stamp-update-row">
+        <span className="build-chip">
+          Android OTA {androidUpdate.kind === "ready" ? "downloaded" : androidUpdate.kind.replace(/_/g, " ")}
+        </span>
+        {"remoteVersion" in androidUpdate && androidUpdate.remoteVersion ? (
+          <span className="build-chip">Remote {androidUpdate.remoteVersion}</span>
+        ) : null}
+        {"currentVersion" in androidUpdate && androidUpdate.currentVersion ? (
+          <span className="build-chip">Current {androidUpdate.currentVersion}</span>
+        ) : null}
+        {isNativeAndroidRuntime() ? (
+          <button className="ghost-button build-stamp-button" onClick={() => void checkAndroidUpdate()} type="button">
+            Check app update
+          </button>
+        ) : null}
+        {androidUpdate.kind === "ready" ? (
+          <button className="primary-button build-stamp-button" onClick={() => void applyAndroidUpdate()} type="button">
+            Apply web update
+          </button>
+        ) : null}
+      </div>
+      <p className="build-stamp-copy">{androidUpdate.detail}</p>
     </footer>
   );
 }

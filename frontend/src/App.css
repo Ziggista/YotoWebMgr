@@ -94,6 +94,20 @@ a {
   font-size: 0.9rem;
 }
 
+.build-stamp-update-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.build-stamp-button {
+  min-height: 0;
+  padding: 8px 12px;
+  border-radius: 999px;
+}
+
 .hero {
   padding: 24px;
   border-radius: 24px;

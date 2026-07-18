@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:ota-bundle": "python3 scripts/build_live_update_bundle.py",
     "preview": "vite preview",
     "android:sync": "npm run build && npx cap sync android",
     "android:open": "npx cap open android",
@@ -16,6 +17,7 @@
     "@capacitor/android": "^8.4.1",
     "@capacitor/cli": "^8.4.1",
     "@capacitor/core": "^8.4.1",
+    "@capgo/capacitor-updater": "^8.51.2",
     "@exxili/capacitor-nfc": "^0.0.13",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
