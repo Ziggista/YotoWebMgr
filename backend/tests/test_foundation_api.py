@@ -371,6 +371,54 @@ async def test_library_item_can_be_linked_to_card(api_client: AsyncClient) -> No
     assert history.json()[0]["job_id"] == payload["job"]["id"]
 
 
+async def test_library_item_link_is_immediate_when_remote_yoto_content_exists(
+    api_client: AsyncClient,
+    db_session: Session,
+) -> None:
+    async with api_client as client:
+        created = await client.post(
+            "/api/v1/library",
+            json={"title": "Already In Yoto", "content_type": "Audiobook"},
+        )
+        item_id = created.json()["id"]
+        card = await client.post(
+            "/api/v1/cards",
+            json={"card_code": "CARD03", "display_name": "Card 03"},
+        )
+
+    draft = YotoPlaylistDraft(
+        library_item_id=item_id,
+        title="Already In Yoto",
+        status="remote_created",
+        payload_json=json.dumps({"title": "Already In Yoto", "content": {"chapters": []}}),
+        remote_playlist_id="31yYU",
+        remote_playlist_uri="https://my.yotoplay.com/playlist/31yYU",
+    )
+    db_session.add(draft)
+    db_session.commit()
+
+    async with api_client as client:
+        linked = await client.post(
+            f"/api/v1/library/{item_id}/link-card",
+            json={"card_id": card.json()["id"]},
+        )
+        history = await client.get(f"/api/v1/cards/{card.json()['id']}/history")
+
+    assert linked.status_code == 202
+    payload = linked.json()
+    assert payload["requires_split_plan"] is False
+    assert payload["job"]["type"] == "link_yoto_card_ready"
+    assert payload["job"]["status"] == "succeeded"
+    assert payload["card"]["current_library_item_id"] == item_id
+    assert payload["card"]["pending_job_id"] is None
+    assert payload["card"]["status"] == "ready_to_link"
+    assert payload["card"]["ready_to_link_in_app"] is True
+    assert payload["card"]["yoto_playlist_uri"] == "https://my.yotoplay.com/playlist/31yYU"
+    assert history.status_code == 200
+    assert history.json()[0]["event_type"] == "link_prepared"
+    assert history.json()[0]["job_id"] == payload["job"]["id"]
+
+
 async def test_library_item_link_queues_split_plan_when_source_exceeds_target(
     api_client: AsyncClient,
     db_session: Session,

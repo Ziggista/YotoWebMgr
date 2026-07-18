@@ -32,6 +32,7 @@ from app.models import (
     TagAssignment,
     User,
     VersionEvent,
+    YotoPlaylistDraft,
 )
 from app.schemas.foundation import (
     ArtworkAssetResponse,
@@ -1426,23 +1427,62 @@ async def link_library_item_to_card(
     previous_yoto_playlist_uri = card.yoto_playlist_uri
     source_size_mb = _source_size_mb(db, item)
     requires_split_plan = source_size_mb is not None and source_size_mb > _target_size_mb(db)
-    job_type = "build_card_plan" if requires_split_plan else "upload_yoto_asset"
+    existing_remote_draft = db.scalar(
+        select(YotoPlaylistDraft)
+        .where(YotoPlaylistDraft.library_item_id == item.id)
+        .where(
+            (YotoPlaylistDraft.remote_playlist_id.is_not(None)) | (YotoPlaylistDraft.remote_playlist_uri.is_not(None))
+        )
+        .order_by(YotoPlaylistDraft.created_at.desc(), YotoPlaylistDraft.id.desc())
+    )
+    can_link_immediately = not requires_split_plan and existing_remote_draft is not None
+    job_type = (
+        "build_card_plan"
+        if requires_split_plan
+        else "link_yoto_card_ready"
+        if can_link_immediately
+        else "upload_yoto_asset"
+    )
     progress_message = (
         "Queued to split media into card-sized parts"
         if requires_split_plan
+        else "Remote Yoto content already exists; card is ready to program or link now"
+        if can_link_immediately
         else "Queued to prepare Yoto upload and playlist link"
     )
 
-    item.status = "card_plan_queued" if requires_split_plan else "yoto_upload_queued"
-    card.status = "planning" if requires_split_plan else "upload_queued"
+    item.status = (
+        "card_plan_queued"
+        if requires_split_plan
+        else "ready_to_link"
+        if can_link_immediately
+        else "yoto_upload_queued"
+    )
+    item.readiness_status = (
+        item.readiness_status
+        if requires_split_plan
+        else "ready_to_link"
+        if can_link_immediately
+        else item.readiness_status
+    )
+    if can_link_immediately:
+        remote_reference = existing_remote_draft.remote_playlist_uri or existing_remote_draft.remote_playlist_id
+        item.readiness_detail = (
+            f"Remote Yoto content already exists ({remote_reference}). Program or link the card now."
+            if remote_reference
+            else "Remote Yoto content already exists. Program or link the card now."
+        )
+    card.status = "planning" if requires_split_plan else "ready_to_link" if can_link_immediately else "upload_queued"
     card.current_library_item_id = item.id
     card.ready_to_link_in_app = not requires_split_plan
     card.needs_player_download = False
+    if can_link_immediately and existing_remote_draft.remote_playlist_uri:
+        card.yoto_playlist_uri = existing_remote_draft.remote_playlist_uri
 
     job = Job(
         type=job_type,
-        status="queued",
-        progress_percent=0,
+        status="queued" if not can_link_immediately else "succeeded",
+        progress_percent=0 if not can_link_immediately else 100,
         progress_message=progress_message,
         related_library_item_id=item.id,
         related_import_id=item.source_import_id,
@@ -1450,7 +1490,7 @@ async def link_library_item_to_card(
     )
     db.add(job)
     db.flush()
-    card.pending_job_id = job.id
+    card.pending_job_id = None if can_link_immediately else job.id
 
     db.add(item)
     db.add(card)
@@ -1458,7 +1498,7 @@ async def link_library_item_to_card(
     db.add(
         CardAssignmentEvent(
             card_id=card.id,
-            event_type="link_queued",
+            event_type="link_prepared" if can_link_immediately else "link_queued",
             previous_library_item_id=previous_library_item_id,
             library_item_id=item.id,
             job_id=job.id,
@@ -1466,10 +1506,23 @@ async def link_library_item_to_card(
             new_status=card.status,
             previous_yoto_playlist_uri=previous_yoto_playlist_uri,
             yoto_playlist_uri=card.yoto_playlist_uri,
-            summary=f"Queued {card.display_name} for {item.title}.",
+            summary=(
+                f"Prepared {card.display_name} for immediate Yoto linking."
+                if can_link_immediately
+                else f"Queued {card.display_name} for {item.title}."
+            ),
         )
     )
-    _record_library_version(db, item, "card_link_queued", f"Queued link to {card.display_name}.")
+    _record_library_version(
+        db,
+        item,
+        "card_link_prepared" if can_link_immediately else "card_link_queued",
+        (
+            f"Prepared immediate link to {card.display_name} using existing remote Yoto content."
+            if can_link_immediately
+            else f"Queued link to {card.display_name}."
+        ),
+    )
     db.commit()
     db.refresh(item)
     db.refresh(card)
