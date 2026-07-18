@@ -2,7 +2,7 @@
 
 YotoWebMgr is a self-hosted household media-library and Yoto MYO card management application.
 
-This repository is scaffolded for:
+This repository currently includes:
 
 - `frontend`: React + TypeScript + Vite
 - `backend`: FastAPI + Pydantic v2 + SQLAlchemy-ready structure
@@ -93,6 +93,8 @@ http://127.0.0.1:5175/
 
 Use this URL for the MicroK8s app. Port `5173` is reserved for local Vite development and can show
 stale local state if it is running separately.
+When testing the deployed app, quick-select a local household user first. The Yoto settings screen
+and OAuth actions sit behind that local auth gate.
 
 ### Dev Shortcuts
 
@@ -134,10 +136,14 @@ The current scaffold provides:
 - Auth scaffold with quick household user selection, Argon2 password support hooks, and OAuth 2.0 placeholders
 - Import screen with browser upload and persistent filesystem drop-area support
 - Library rows with embedded playback for staged media files
+- Android-ready Capacitor wrapper with native NFC read/write support
+- Yoto OAuth with PKCE, token persistence in Kubernetes Secrets, and live debug probes
+- Local Yoto playlist drafts, generated live `POST /content` payload previews, and live playlist creation
+- Card scan-dump capture plus staged or direct blank-card write workflows
 - Python worker bootstrap
 - Mobile-first React shell with base navigation
 - Kubernetes base manifests for namespace, frontend, api, worker, and postgres
-- Documentation stubs aligned with the project brief
+- Destructive dev deployment helpers and frontend/backend build stamping
 
 ## License
 

@@ -75,7 +75,8 @@ The frontend card detail page uses these endpoints to show identifiers, NFC meta
 flags, notes, and assignment events for a single physical card.
 The scan-dump endpoints persist recent raw captures from Android native NFC or Web NFC so source
 cards can be inspected and reapplied to a fresh target card before the household commits a final
-inventory record.
+inventory record. The current UI uses them both for staged source-card cloning and for direct blank
+card rewrite/testing.
 
 ## Yoto Playlist Drafts
 
@@ -84,8 +85,12 @@ inventory record.
 - `POST /api/v1/yoto/credentials/start`
 - `POST /api/v1/yoto/credentials/callback`
 - `POST /api/v1/yoto/credentials/disconnect`
+- `POST /api/v1/yoto/credentials/probe`
+- `POST /api/v1/yoto/debug/request`
 - `GET /api/v1/yoto/playlists/{playlist_id}/versions`
 - `POST /api/v1/yoto/playlists/{playlist_id}/versions/{version_id}/restore`
+- `GET /api/v1/yoto/playlists/{playlist_id}/remote-payload`
+- `POST /api/v1/yoto/playlists/{playlist_id}/create-live`
 - `GET /api/v1/yoto/library/{item_id}/playlist-preview`
 - `GET /api/v1/yoto/library/{item_id}/playlists`
 - `POST /api/v1/yoto/library/{item_id}/playlists`
@@ -93,18 +98,28 @@ inventory record.
 The credential endpoints support Yoto browser-based OAuth with PKCE. `start` stores local OAuth
 state and returns a Yoto `/authorize` URL using the configured client ID, redirect URI, audience,
 scope, and browser-generated code challenge. `callback` exchanges the returned code with Yoto's
-token endpoint to prove authentication, then records connection metadata without persisting raw
-access or refresh tokens. Token values and client secrets are intentionally excluded from API
-responses and from the settings table.
+token endpoint to prove authentication, then persists the token payload in a Kubernetes Secret.
+Token values and client secrets are intentionally excluded from API responses and from the settings
+table. `probe` and `debug/request` use that stored token material to test live Yoto API calls and
+refresh tokens when needed.
 
 The playlist preview maps local library tracks into the Yoto-shaped payload without a live API call.
 Posting to `playlists` stores that payload as a durable local draft and queues a `create_yoto_playlist`
-job. Until the confirmed live Yoto upload flow is implemented, the worker marks the draft ready for
-manual linking rather than calling the remote API.
+job. The worker currently prepares the local draft and marks it `awaiting_remote_mapping`; it does
+not upload audio assets.
+
+`GET /playlists/{playlist_id}/remote-payload` converts a stored draft into the current live
+`POST /content` request shape used for Yoto MYO content creation. `POST /playlists/{playlist_id}/create-live`
+submits that payload to Yoto, stores the returned remote card/content identifier on the draft, and
+marks linked local cards ready for the app-side write/link workflow.
 
 Each queued playlist draft records immutable playlist version snapshots. Restoring a playlist
 version updates the local draft payload and creates a newer `restored` version; older versions remain
 available.
+
+The older `link-card` path still queues `upload_yoto_asset` for non-split items, but that worker
+job is currently a placeholder and does not complete a live Yoto upload. The newer Yoto draft
+endpoints are the active integration path.
 
 ## Card Planning
 

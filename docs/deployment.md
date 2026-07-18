@@ -55,6 +55,16 @@ http://127.0.0.1:5175/
 
 Use `5175` for the MicroK8s app. Port `5173` is left to local Vite development so a stale local
 frontend cannot be confused with the deployed cluster.
+After opening the app, quick-select a local household user before testing Settings or Yoto OAuth.
+
+For remote Android/browser testing over Tailscale, the current external dev host is:
+
+```text
+http://ziggi-pc-1.tailaf3d4b.ts.net:5175/
+```
+
+That host is useful for remote UI testing, but it is still the same dev deployment behind the local
+port-forward/proxy setup.
 
 ## Dev Shortcuts
 
@@ -108,3 +118,7 @@ initial card scaffold stores:
 
 Physical linking still remains a user-confirmed workflow until actual card/API behaviour is
 validated.
+
+The newer Yoto draft flow can now create live Yoto content and store the returned remote card/content
+ID on the draft. The older `upload_yoto_asset` job path is still a placeholder and should not be
+treated as a completed live upload workflow.

@@ -237,3 +237,32 @@ responsive controls.
 - Keep the package license/version in `docs/test-media.md` current if upgrading.
 - Do not expose arbitrary filesystem paths as audio URLs. Playback should go through API routes
   that validate media roots.
+
+## 2026-07-18 - PKCE on Tailscale HTTP Dev Host
+
+### What happened
+
+The Yoto `Test browser auth` button failed on the remote Tailscale dev URL with:
+
+```text
+Cannot read properties of undefined (reading 'digest')
+```
+
+The frontend was assuming `window.crypto.subtle.digest(...)` existed for PKCE hashing. On the
+non-HTTPS Tailscale dev origin, some browser/runtime combinations expose `crypto` but not
+`SubtleCrypto`.
+
+### Fix
+
+The frontend PKCE helper now:
+
+- uses Web Crypto when `crypto.subtle` is available
+- falls back to a local SHA-256 implementation when it is not
+- still uses `crypto.getRandomValues(...)` for verifier generation
+
+### Watch-outs
+
+- Quick-select a local household user before testing the Settings page; otherwise the auth gate
+  hides the Yoto controls.
+- Do not assume browser security APIs behave the same on `http://127.0.0.1` and on an HTTP
+  Tailscale hostname.

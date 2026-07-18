@@ -47,38 +47,48 @@ The API exposes local-only Yoto scaffolding endpoints:
   `/authorize` URL using the browser-generated PKCE code challenge. It does not call Yoto.
 - `POST /api/v1/yoto/credentials/callback` validates the returned OAuth state and exchanges the
   authorization code with Yoto's `/oauth/token` endpoint using the browser-held PKCE verifier. This
-  is a live auth call, but it records only connection metadata; raw access and refresh tokens are
-  not persisted yet.
+  is a live auth call and persists the returned token payload in a Kubernetes Secret.
 - `POST /api/v1/yoto/credentials/disconnect` clears local token references and marks the stored
   credential state as `revoked`. It does not make a live revoke call.
+- `POST /api/v1/yoto/credentials/probe` and `POST /api/v1/yoto/debug/request` use the stored token
+  material to test live Yoto API calls, including token refresh if needed.
 - `GET /api/v1/yoto/playlists/{playlist_id}/versions` lists immutable local payload snapshots for a
   queued Yoto playlist draft.
 - `POST /api/v1/yoto/playlists/{playlist_id}/versions/{version_id}/restore` restores a draft to a
   prior local snapshot and records a newer `restored` version.
+- `GET /api/v1/yoto/playlists/{playlist_id}/remote-payload` converts a local draft into the current
+  live `POST /content` request shape.
+- `POST /api/v1/yoto/playlists/{playlist_id}/create-live` submits that payload to Yoto and stores
+  the returned remote card/content identifier on the local draft.
 - `GET /api/v1/yoto/library/{item_id}/playlist-preview` maps a local library item and its tracks
   into a Yoto-shaped playlist payload without making a live Yoto API call.
 - `GET /api/v1/yoto/library/{item_id}/playlists` lists stored local playlist drafts.
 - `POST /api/v1/yoto/library/{item_id}/playlists` stores a draft payload and queues
   `create_yoto_playlist`.
 
-The preview endpoint is deliberately not an upload action. The queue endpoint is a local scaffold:
-it persists the payload, creates a trackable worker job, and currently advances the item to
-`ready_to_link` for the manual Yoto-app linking workflow. Live OAuth/upload calls will be added
-behind the same worker job once the exact supported flow is confirmed.
+The preview endpoint is deliberately not an upload action. The queue endpoint persists the payload,
+creates a trackable worker job, and currently advances the draft to `awaiting_remote_mapping` after
+local preparation. The queue worker still does not upload media assets.
 
 For local browser testing, set the redirect URI to the frontend callback route, for example
 `http://127.0.0.1:5175/settings/yoto/callback`, and register the same URI with the Yoto developer
 application.
 
+For remote Tailscale-host testing, the current deployed redirect URI is:
+
+`http://ziggi-pc-1.tailaf3d4b.ts.net:5175/settings/yoto/callback`
+
+That origin is HTTP rather than HTTPS, so browser support for `SubtleCrypto` is inconsistent.
+YotoWebMgr now falls back to a local SHA-256 implementation for PKCE generation when needed.
+
 The credential scaffold stores only connection metadata such as account label, scope, masked
-account fields, authorization URL, OAuth state, expiry timestamps, status, and an optional
+account fields, authorization URL, OAuth state, expiry timestamps, status, and a
 `token_storage_ref`. Actual refresh tokens, access tokens, client secrets, or encrypted token
-material must live in Kubernetes Secrets or a future encrypted token store. Until that storage is
-implemented, a successful callback uses a `not_persisted:browser_pkce:{id}` token reference.
+material live in Kubernetes Secrets rather than the generic settings table.
 
 Playlist versions are local payload snapshots only. A restore changes the local draft that future
-jobs will use, but it does not alter any remote Yoto playlist until the live upload/update mapping
-is implemented and explicitly queued.
+jobs or live-create actions will use, but it does not alter any already-created remote Yoto content
+until a newer explicit live-create/update call is made.
 
 ## Physical Card Inventory
 
@@ -99,3 +109,12 @@ Generic NFC card experiments should record:
 
 This metadata is deliberately separate from Yoto playlist creation. Writing or cloning NFC card
 data must not become a hidden side effect of playlist generation.
+
+## Current Known Gaps
+
+- `POST /api/v1/library/{item_id}/link-card` still queues `upload_yoto_asset` for non-split items.
+  That worker job is a placeholder and currently settles in `waiting`.
+- The newer Yoto draft endpoints and live `POST /content` creation flow are the active path for
+  playlist testing.
+- Direct blank-card write from Yoto-created content is under active validation; staged source-card
+  cloning remains available as a fallback workflow.
