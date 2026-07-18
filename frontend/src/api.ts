@@ -385,9 +385,29 @@ export interface YotoPlaylistVersion {
   created_at: string;
 }
 
+export interface YotoPlaylistRemotePayload {
+  playlist_draft_id: number;
+  can_create_live: boolean;
+  payload: Record<string, unknown> | null;
+  warnings: string[];
+  live_api_call: boolean;
+}
+
 export interface QueueYotoPlaylistResponse {
   playlist: YotoPlaylistDraft;
   job: Job;
+  live_api_call: boolean;
+}
+
+export interface CreateLiveYotoPlaylistResponse {
+  playlist: YotoPlaylistDraft;
+  credential: YotoCredentialStatus;
+  remote_card_id: string | null;
+  remote_content_response: Record<string, unknown> | unknown[] | null;
+  http_status: number | null;
+  token_refreshed: boolean;
+  response_excerpt: string | null;
+  error_detail: string | null;
   live_api_call: boolean;
 }
 
@@ -805,6 +825,14 @@ export async function fetchYotoPlaylistVersions(playlistId: number): Promise<Yot
   return response.json() as Promise<YotoPlaylistVersion[]>;
 }
 
+export async function fetchYotoPlaylistRemotePayload(playlistId: number): Promise<YotoPlaylistRemotePayload> {
+  const response = await apiFetch(`/api/v1/yoto/playlists/${playlistId}/remote-payload`);
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to load the generated Yoto payload."));
+  }
+  return response.json() as Promise<YotoPlaylistRemotePayload>;
+}
+
 export async function restoreYotoPlaylistVersion(
   playlistId: number,
   versionId: number,
@@ -835,6 +863,24 @@ export async function updateYotoPlaylistRemoteLink(
     throw new Error(await errorMessage(response, "Failed to save Yoto remote playlist mapping."));
   }
   return response.json() as Promise<YotoPlaylistDraft>;
+}
+
+export async function createLiveYotoPlaylist(
+  playlistId: number,
+  payload?: {
+    request_payload?: Record<string, unknown> | null;
+    mark_linked_cards_ready?: boolean;
+  },
+): Promise<CreateLiveYotoPlaylistResponse> {
+  const response = await apiFetch(`/api/v1/yoto/playlists/${playlistId}/create-live`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload ?? {}),
+  });
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to create live Yoto content."));
+  }
+  return response.json() as Promise<CreateLiveYotoPlaylistResponse>;
 }
 
 export async function fetchYotoCredentialStatus(): Promise<YotoCredentialStatus> {

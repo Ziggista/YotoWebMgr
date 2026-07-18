@@ -11,6 +11,7 @@ import {
   CardAssignmentEvent,
   CardScanDumpEntry,
   CardPlan,
+  CreateLiveYotoPlaylistResponse,
   ImportSourceInfo,
   ImportRequest,
   Job,
@@ -25,10 +26,12 @@ import {
   YotoCredentialProbeResponse,
   YotoCredentialStatus,
   YotoPlaylistDraft,
+  YotoPlaylistRemotePayload,
   YotoPlaylistVersion,
   applyTrackIcon,
   approveImportReview,
   createCard,
+  createLiveYotoPlaylist,
   createImport,
   createTag,
   createPodcastFeed,
@@ -56,6 +59,7 @@ import {
   fetchTags,
   fetchYotoCredentialStatus,
   fetchYotoPlaylists,
+  fetchYotoPlaylistRemotePayload,
   fetchYotoPlaylistVersions,
   hideImport,
   fetchAuthProviders,
@@ -245,6 +249,21 @@ function generatedCardPayload(playlistUri: string): {
     payloadText: trimmedUri,
     payloadHex: textToHex(trimmedUri),
   };
+}
+
+function yotoDraftChapterCount(payload: Record<string, unknown>): number {
+  const directChapters = payload.chapters;
+  if (Array.isArray(directChapters)) {
+    return directChapters.length;
+  }
+  const content = payload.content;
+  if (content && typeof content === "object" && !Array.isArray(content)) {
+    const nestedChapters = (content as { chapters?: unknown }).chapters;
+    if (Array.isArray(nestedChapters)) {
+      return nestedChapters.length;
+    }
+  }
+  return 0;
 }
 
 function currentRuntimeLabel(): string {
@@ -1318,9 +1337,12 @@ function LibraryDetailPage() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [yotoPlaylists, setYotoPlaylists] = useState<YotoPlaylistDraft[]>([]);
   const [yotoPlaylistVersions, setYotoPlaylistVersions] = useState<Record<number, YotoPlaylistVersion[]>>({});
+  const [yotoRemotePayloads, setYotoRemotePayloads] = useState<Record<number, YotoPlaylistRemotePayload>>({});
+  const [yotoRemotePayloadEditors, setYotoRemotePayloadEditors] = useState<Record<number, string>>({});
   const [yotoRemoteLinks, setYotoRemoteLinks] = useState<
     Record<number, { remotePlaylistId: string; remotePlaylistUri: string; markLinkedManually: boolean }>
   >({});
+  const [yotoLiveCreateResults, setYotoLiveCreateResults] = useState<Record<number, CreateLiveYotoPlaylistResponse>>({});
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -1356,7 +1378,21 @@ function LibraryDetailPage() {
     const versionEntries = await Promise.all(
       nextYotoPlaylists.map(async (playlist) => [playlist.id, await fetchYotoPlaylistVersions(playlist.id)] as const),
     );
+    const remotePayloadEntries = await Promise.all(
+      nextYotoPlaylists.map(async (playlist) => [playlist.id, await fetchYotoPlaylistRemotePayload(playlist.id)] as const),
+    );
     setYotoPlaylistVersions(Object.fromEntries(versionEntries));
+    const remotePayloadMap = Object.fromEntries(remotePayloadEntries);
+    setYotoRemotePayloads(remotePayloadMap);
+    setYotoRemotePayloadEditors((current) =>
+      Object.fromEntries(
+        nextYotoPlaylists.map((playlist) => [
+          playlist.id,
+          current[playlist.id] ??
+            JSON.stringify(remotePayloadMap[playlist.id]?.payload ?? playlist.payload, null, 2),
+        ]),
+      ),
+    );
     setYotoRemoteLinks((current) =>
       Object.fromEntries(
         nextYotoPlaylists.map((playlist) => [
@@ -1435,6 +1471,31 @@ function LibraryDetailPage() {
       await refreshPage();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "Yoto remote playlist mapping failed.");
+    }
+  }
+
+  async function handleCreateLiveYotoPlaylist(playlistId: number) {
+    const rawEditorValue = yotoRemotePayloadEditors[playlistId]?.trim();
+    let requestPayload: Record<string, unknown> | null | undefined;
+    if (rawEditorValue) {
+      try {
+        requestPayload = JSON.parse(rawEditorValue) as Record<string, unknown>;
+      } catch {
+        setError("The generated Yoto payload editor contains invalid JSON.");
+        return;
+      }
+    }
+
+    setError(null);
+    try {
+      const result = await createLiveYotoPlaylist(playlistId, {
+        request_payload: requestPayload,
+        mark_linked_cards_ready: true,
+      });
+      setYotoLiveCreateResults((current) => ({ ...current, [playlistId]: result }));
+      await refreshPage();
+    } catch (createError) {
+      setError(createError instanceof Error ? createError.message : "Live Yoto playlist creation failed.");
     }
   }
 
@@ -1860,8 +1921,56 @@ function LibraryDetailPage() {
                   <strong>{playlist.title}</strong>
                   <p className="muted">
                     Job {playlist.related_job_id ?? "pending"} ·{" "}
-                    {playlist.remote_playlist_uri ?? "Manual link pending"}
+                    {playlist.remote_playlist_uri ?? playlist.remote_playlist_id ?? "Live create pending"}
                   </p>
+                  <div className="inline-link-panel yoto-remote-link-panel">
+                    <p className="muted">
+                      Generated live payload
+                      {yotoRemotePayloads[playlist.id]?.can_create_live ? " Â· ready" : " Â· review needed"}
+                    </p>
+                    {yotoRemotePayloads[playlist.id]?.warnings?.length ? (
+                      <p className="auth-error">{yotoRemotePayloads[playlist.id]?.warnings.join(" ")}</p>
+                    ) : null}
+                    <label className="yoto-debug-body">
+                      `POST /content` JSON
+                      <textarea
+                        onChange={(event) =>
+                          setYotoRemotePayloadEditors((current) => ({
+                            ...current,
+                            [playlist.id]: event.target.value,
+                          }))
+                        }
+                        rows={10}
+                        value={yotoRemotePayloadEditors[playlist.id] ?? ""}
+                      />
+                    </label>
+                    <div className="button-row">
+                      <button
+                        className="primary-button"
+                        onClick={() => void handleCreateLiveYotoPlaylist(playlist.id)}
+                        type="button"
+                      >
+                        Create live playlist and link cards
+                      </button>
+                    </div>
+                    {yotoLiveCreateResults[playlist.id] ? (
+                      <div className="settings-note">
+                        <p>
+                          Live create
+                          {yotoLiveCreateResults[playlist.id]?.http_status
+                            ? ` (${yotoLiveCreateResults[playlist.id]?.http_status})`
+                            : ""}
+                          {yotoLiveCreateResults[playlist.id]?.remote_card_id
+                            ? ` Â· card ID ${yotoLiveCreateResults[playlist.id]?.remote_card_id}`
+                            : ""}
+                          {yotoLiveCreateResults[playlist.id]?.token_refreshed ? " Â· token refreshed" : ""}
+                        </p>
+                        {yotoLiveCreateResults[playlist.id]?.response_excerpt ? (
+                          <pre>{yotoLiveCreateResults[playlist.id]?.response_excerpt}</pre>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
                   <div className="inline-link-panel yoto-remote-link-panel">
                     <label>
                       Remote playlist ID
@@ -1949,7 +2058,7 @@ function LibraryDetailPage() {
                   ))}
                 </div>
                 <span className="muted">
-                  {Array.isArray(playlist.payload.chapters) ? playlist.payload.chapters.length : 0} tracks
+                  {yotoDraftChapterCount(playlist.payload)} tracks
                 </span>
               </div>
             ))}

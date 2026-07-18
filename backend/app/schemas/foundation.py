@@ -674,6 +674,31 @@ class YotoPlaylistVersionResponse(BaseModel):
     created_at: datetime
 
 
+class YotoPlaylistRemotePayloadResponse(BaseModel):
+    playlist_draft_id: int
+    can_create_live: bool
+    payload: dict[str, object] | None = None
+    warnings: list[str] = []
+    live_api_call: bool = False
+
+
+class CreateLiveYotoPlaylistRequest(BaseModel):
+    request_payload: dict[str, object] | None = None
+    mark_linked_cards_ready: bool = True
+
+
+class CreateLiveYotoPlaylistResponse(BaseModel):
+    playlist: YotoPlaylistDraftResponse
+    credential: YotoCredentialStatusResponse
+    remote_card_id: str | None = None
+    remote_content_response: dict[str, object] | list[object] | None = None
+    http_status: int | None = None
+    token_refreshed: bool = False
+    response_excerpt: str | None = None
+    error_detail: str | None = None
+    live_api_call: bool = True
+
+
 class UpdateYotoPlaylistRemoteLinkRequest(BaseModel):
     remote_playlist_id: str | None = Field(default=None, max_length=240)
     remote_playlist_uri: str | None = Field(default=None, max_length=500)

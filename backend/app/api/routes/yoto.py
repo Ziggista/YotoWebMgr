@@ -35,6 +35,8 @@ from app.services.yoto_tokens import (
 from app.schemas.foundation import (
     CompleteYotoOAuthRequest,
     CompleteYotoOAuthResponse,
+    CreateLiveYotoPlaylistRequest,
+    CreateLiveYotoPlaylistResponse,
     JobResponse,
     QueueYotoPlaylistResponse,
     StartYotoOAuthRequest,
@@ -47,6 +49,7 @@ from app.schemas.foundation import (
     YotoCredentialProbeResponse,
     YotoPlaylistDraftResponse,
     YotoPlaylistPreviewResponse,
+    YotoPlaylistRemotePayloadResponse,
     YotoPlaylistVersionResponse,
 )
 
@@ -525,6 +528,131 @@ def _record_playlist_version(
     return version
 
 
+def _best_effort_stream_format(url: str) -> str:
+    parsed = urlparse(url)
+    path = parsed.path.lower()
+    if path.endswith(".aac") or path.endswith(".m4a"):
+        return "aac"
+    if path.endswith(".ogg"):
+        return "ogg"
+    if path.endswith(".wav"):
+        return "wav"
+    return "mp3"
+
+
+def _remote_payload_preview_from_draft(
+    draft: YotoPlaylistDraft,
+) -> tuple[dict[str, object] | None, list[str], bool]:
+    try:
+        payload = json.loads(draft.payload_json)
+    except json.JSONDecodeError:
+        return None, ["Stored playlist payload is not valid JSON."], False
+
+    if not isinstance(payload, dict):
+        return None, ["Stored playlist payload must be a JSON object."], False
+
+    content = payload.get("content")
+    if isinstance(content, dict) and isinstance(content.get("chapters"), list):
+        return payload, [], True
+
+    chapters = payload.get("chapters")
+    if not isinstance(chapters, list):
+        return None, ["Draft does not include any playlist chapters."], False
+
+    remote_chapters: list[dict[str, object]] = []
+    warnings: list[str] = []
+    total_duration = 0
+
+    for index, raw_chapter in enumerate(chapters, start=1):
+        if not isinstance(raw_chapter, dict):
+            warnings.append(f"Chapter {index} is not a JSON object.")
+            continue
+
+        chapter_type = str(raw_chapter.get("type") or "audio")
+        title = str(raw_chapter.get("title") or f"Track {index}")
+        overlay_label = str(raw_chapter.get("display_number") or index)
+
+        if chapter_type != "stream":
+            warnings.append(
+                f"{title}: this draft still points at local audio and needs upload/transcode before live Yoto creation."
+            )
+            continue
+
+        stream_url = raw_chapter.get("stream_url")
+        if not isinstance(stream_url, str) or not stream_url.strip():
+            warnings.append(f"{title}: stream chapter is missing a playable URL.")
+            continue
+
+        duration_value = raw_chapter.get("duration_seconds")
+        duration_seconds = int(duration_value) if isinstance(duration_value, int) else None
+        if duration_seconds:
+            total_duration += duration_seconds
+
+        icon_value = raw_chapter.get("icon_path")
+        icon_payload = (
+            {"icon16x16": icon_value}
+            if isinstance(icon_value, str) and icon_value.startswith(("http://", "https://", "yoto:#"))
+            else None
+        )
+
+        remote_chapter: dict[str, object] = {
+            "key": f"{index:02d}",
+            "title": title,
+            "overlayLabel": overlay_label,
+            "tracks": [
+                {
+                    "key": "01",
+                    "title": title,
+                    "trackUrl": stream_url,
+                    "type": "stream",
+                    "format": _best_effort_stream_format(stream_url),
+                    "overlayLabel": overlay_label,
+                }
+            ],
+        }
+        if duration_seconds is not None:
+            remote_chapter["duration"] = duration_seconds
+            track = remote_chapter["tracks"][0]
+            if isinstance(track, dict):
+                track["duration"] = duration_seconds
+        if icon_payload is not None:
+            remote_chapter["display"] = icon_payload
+            track = remote_chapter["tracks"][0]
+            if isinstance(track, dict):
+                track["display"] = icon_payload
+        remote_chapters.append(remote_chapter)
+
+    if not remote_chapters:
+        return None, warnings or ["No live-create-ready chapters were generated from this draft."], False
+
+    generated_payload: dict[str, object] = {
+        "title": str(payload.get("title") or draft.title),
+        "content": {
+            "chapters": remote_chapters,
+            "playbackType": "linear",
+            "config": {
+                "resumeTimeout": 2592000,
+            },
+        },
+        "metadata": {
+            "description": "Created by YotoWebMgr",
+            "media": {
+                "duration": total_duration,
+            },
+        },
+    }
+
+    cover_art_path = payload.get("cover_art_path")
+    if isinstance(cover_art_path, str) and cover_art_path.startswith(("http://", "https://")):
+        metadata = generated_payload.get("metadata")
+        if isinstance(metadata, dict):
+            metadata["cover"] = {"imageL": cover_art_path}
+    elif cover_art_path:
+        warnings.append("Cover art is local-only and was not included in the live Yoto payload.")
+
+    return generated_payload, warnings, not warnings
+
+
 @router.get("/credentials/status", response_model=YotoCredentialStatusResponse)
 async def get_yoto_credential_status(
     db: Annotated[Session, Depends(get_db_session)],
@@ -885,6 +1013,143 @@ async def restore_yoto_playlist_version(
     db.commit()
     db.refresh(restored)
     return _playlist_version_response(restored)
+
+
+@router.get("/playlists/{playlist_id}/remote-payload", response_model=YotoPlaylistRemotePayloadResponse)
+async def get_yoto_playlist_remote_payload(
+    playlist_id: int,
+    db: Annotated[Session, Depends(get_db_session)],
+) -> YotoPlaylistRemotePayloadResponse:
+    draft = db.get(YotoPlaylistDraft, playlist_id)
+    if draft is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Yoto playlist draft not found")
+
+    payload, warnings, can_create_live = _remote_payload_preview_from_draft(draft)
+    return YotoPlaylistRemotePayloadResponse(
+        playlist_draft_id=draft.id,
+        can_create_live=can_create_live,
+        payload=payload,
+        warnings=warnings,
+        live_api_call=False,
+    )
+
+
+@router.post("/playlists/{playlist_id}/create-live", response_model=CreateLiveYotoPlaylistResponse)
+async def create_live_yoto_playlist(
+    playlist_id: int,
+    payload: CreateLiveYotoPlaylistRequest,
+    db: Annotated[Session, Depends(get_db_session)],
+) -> CreateLiveYotoPlaylistResponse:
+    draft = db.get(YotoPlaylistDraft, playlist_id)
+    if draft is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Yoto playlist draft not found")
+
+    item = db.get(LibraryItem, draft.library_item_id)
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Library item not found")
+
+    credential = _latest_credential(db)
+    if credential is None or not credential.token_storage_ref:
+        raise HTTPException(status_code=409, detail="Connect a Yoto account before creating a live playlist.")
+
+    request_payload = payload.request_payload
+    if request_payload is None:
+        request_payload, warnings, can_create_live = _remote_payload_preview_from_draft(draft)
+        if not can_create_live or request_payload is None:
+            raise HTTPException(
+                status_code=422,
+                detail=" ".join(warnings) if warnings else "This draft is not ready for live Yoto playlist creation.",
+            )
+
+    if not isinstance(request_payload, dict):
+        raise HTTPException(status_code=422, detail="The live Yoto payload must be a JSON object.")
+
+    result = await _execute_yoto_api_request(
+        db=db,
+        credential=credential,
+        label=f"Create live Yoto playlist draft {draft.id}",
+        method="POST",
+        relative_url="/content",
+        request_url=urljoin(_setting(db, "yoto_api_base_url", "https://api.yotoplay.com").rstrip("/") + "/", "content"),
+        json_body=request_payload,
+    )
+    if not result.ok:
+        raise HTTPException(status_code=result.http_status or 502, detail=result.error_detail or "Yoto playlist creation failed.")
+
+    remote_card_id: str | None = None
+    if isinstance(result.response_json, dict):
+        card_payload = result.response_json.get("card")
+        if isinstance(card_payload, dict):
+            remote_card_id_value = card_payload.get("cardId")
+            if isinstance(remote_card_id_value, str) and remote_card_id_value.strip():
+                remote_card_id = remote_card_id_value.strip()
+
+    draft.payload_json = json.dumps(request_payload, sort_keys=True)
+    draft.status = "remote_created"
+    draft.remote_playlist_id = remote_card_id
+    draft.last_error = None
+    item.status = "yoto_remote_created"
+    item.readiness_status = "yoto_remote_created"
+    item.readiness_detail = (
+        f"Created live Yoto content with card ID {remote_card_id}. Use the direct blank-card write flow from this app to program linked cards."
+        if remote_card_id
+        else "Created live Yoto content. Use the direct blank-card write flow from this app to program linked cards."
+    )
+
+    if payload.mark_linked_cards_ready:
+        linked_cards = db.scalars(select(PhysicalCard).where(PhysicalCard.current_library_item_id == item.id))
+        for card in linked_cards:
+            card.ready_to_link_in_app = True
+            if card.status in {"upload_queued", "planning", "available", "ready_to_link"}:
+                card.status = "ready_to_link"
+            if remote_card_id:
+                existing_notes = card.notes.strip() if card.notes else ""
+                note_line = f"Linked live Yoto card ID: {remote_card_id}"
+                card.notes = f"{existing_notes}\n{note_line}".strip() if existing_notes and note_line not in existing_notes else (existing_notes or note_line)
+            db.add(card)
+
+    _record_playlist_version(
+        db,
+        draft,
+        status="remote_created",
+        summary="Created live Yoto content from this draft.",
+        source_event="yoto_remote_created",
+    )
+    db.add(
+        VersionEvent(
+            entity_type="library_item",
+            entity_id=item.id,
+            version_number=_next_library_version(db, item.id),
+            event_type="yoto_remote_created",
+            summary="Created live Yoto content from this draft.",
+            snapshot_json=json.dumps(
+                {
+                    "playlist_draft_id": draft.id,
+                    "remote_card_id": remote_card_id,
+                    "mark_linked_cards_ready": payload.mark_linked_cards_ready,
+                },
+                sort_keys=True,
+            ),
+        )
+    )
+    db.add(draft)
+    db.add(item)
+    db.commit()
+    db.refresh(draft)
+    db.refresh(item)
+    db.refresh(credential)
+
+    return CreateLiveYotoPlaylistResponse(
+        playlist=_draft_response(draft),
+        credential=_credential_response(db, credential),
+        remote_card_id=remote_card_id,
+        remote_content_response=result.response_json,
+        http_status=result.http_status,
+        token_refreshed=result.token_refreshed,
+        response_excerpt=result.response_excerpt,
+        error_detail=result.error_detail,
+        live_api_call=True,
+    )
 
 
 @router.patch("/playlists/{playlist_id}/remote-link", response_model=YotoPlaylistDraftResponse)
