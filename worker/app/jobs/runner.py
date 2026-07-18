@@ -526,6 +526,7 @@ class JobRunner:
 
         self._mark_running(job_id, 20, "Loading local Yoto playlist draft")
         now = datetime.now(UTC)
+        preserved_newer_state = False
         with self.engine.begin() as connection:
             draft = connection.execute(
                 select(yoto_playlist_drafts)
@@ -537,28 +538,48 @@ class JobRunner:
                 raise RuntimeError("Yoto playlist job references a missing playlist draft.")
 
             json.loads(draft.payload_json)
-            connection.execute(
-                update(yoto_playlist_drafts)
-                .where(yoto_playlist_drafts.c.id == draft.id)
-                .values(
-                    status="awaiting_remote_mapping",
-                    last_error=None,
-                    updated_at=now,
+            library_item = connection.execute(
+                select(library_items).where(library_items.c.id == library_item_id)
+            ).first()
+            if library_item is None:
+                raise RuntimeError("Yoto playlist job references a missing library item.")
+
+            draft_has_remote_mapping = bool(draft.remote_playlist_id or draft.remote_playlist_uri)
+            draft_is_newer = draft.status in {"remote_created", "remote_linked"} or draft_has_remote_mapping
+            item_is_newer = library_item.status in {"yoto_remote_created", "yoto_remote_linked"}
+
+            if draft_is_newer or item_is_newer:
+                preserved_newer_state = True
+            else:
+                connection.execute(
+                    update(yoto_playlist_drafts)
+                    .where(yoto_playlist_drafts.c.id == draft.id)
+                    .values(
+                        status="awaiting_remote_mapping",
+                        last_error=None,
+                        updated_at=now,
+                    )
                 )
-            )
-            connection.execute(
-                update(library_items)
-                .where(library_items.c.id == library_item_id)
-                .values(
-                    status="awaiting_remote_mapping",
-                    readiness_status="awaiting_remote_mapping",
-                    readiness_detail=(
-                        "Local Yoto playlist payload is ready. Find or create the remote Yoto playlist, "
-                        "then record its playlist URI or ID before NFC linking."
-                    ),
-                    updated_at=now,
+                connection.execute(
+                    update(library_items)
+                    .where(library_items.c.id == library_item_id)
+                    .values(
+                        status="awaiting_remote_mapping",
+                        readiness_status="awaiting_remote_mapping",
+                        readiness_detail=(
+                            "Local Yoto playlist payload is ready. Find or create the remote Yoto playlist, "
+                            "then record its playlist URI or ID before NFC linking."
+                        ),
+                        updated_at=now,
+                    )
                 )
+
+        if preserved_newer_state:
+            self._mark_succeeded(
+                job_id,
+                "Yoto playlist draft already has newer remote state; leaving live mapping intact",
             )
+            return
 
         self._mark_succeeded(job_id, "Yoto playlist draft ready for remote mapping")
 

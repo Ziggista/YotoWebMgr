@@ -346,6 +346,65 @@ def test_runner_marks_yoto_playlist_draft_awaiting_remote_mapping() -> None:
     assert draft.status == "awaiting_remote_mapping"
 
 
+def test_runner_preserves_newer_remote_yoto_playlist_state() -> None:
+    engine = _make_engine()
+    with engine.begin() as connection:
+        connection.execute(
+            library_items.insert().values(
+                id=51,
+                title="Already Remote",
+                content_type="Audiobook",
+                status="yoto_remote_created",
+                readiness_status="yoto_remote_created",
+                readiness_detail="Created live Yoto content with card ID REMOTE123.",
+            )
+        )
+        connection.execute(
+            jobs.insert().values(
+                id=10,
+                type="create_yoto_playlist",
+                status="queued",
+                pending_delete=False,
+                retry_count=0,
+                max_retries=3,
+                progress_percent=0,
+                progress_message="Queued",
+                related_library_item_id=51,
+                created_at=datetime.now(UTC),
+            )
+        )
+        connection.execute(
+            yoto_playlist_drafts.insert().values(
+                id=4,
+                library_item_id=51,
+                related_job_id=10,
+                title="Already Remote",
+                status="remote_created",
+                payload_json=json.dumps({"title": "Already Remote", "chapters": []}),
+                remote_playlist_id="REMOTE123",
+                remote_playlist_uri="https://my.yotoplay.com/playlist/REMOTE123",
+                created_at=datetime.now(UTC),
+            )
+        )
+
+    runner = JobRunner(engine)
+
+    assert runner.process_once() is True
+    with engine.begin() as connection:
+        job = connection.execute(select(jobs).where(jobs.c.id == 10)).one()
+        library_item = connection.execute(select(library_items).where(library_items.c.id == 51)).one()
+        draft = connection.execute(select(yoto_playlist_drafts).where(yoto_playlist_drafts.c.id == 4)).one()
+
+    assert job.status == "succeeded"
+    assert "newer remote state" in job.progress_message
+    assert library_item.status == "yoto_remote_created"
+    assert library_item.readiness_status == "yoto_remote_created"
+    assert "REMOTE123" in library_item.readiness_detail
+    assert draft.status == "remote_created"
+    assert draft.remote_playlist_id == "REMOTE123"
+    assert draft.remote_playlist_uri == "https://my.yotoplay.com/playlist/REMOTE123"
+
+
 def _ffprobe_runner(args: list[str]) -> subprocess.CompletedProcess[str]:
     assert args[:2] == ["ffprobe", "-v"]
     payload = {
