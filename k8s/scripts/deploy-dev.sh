@@ -16,6 +16,7 @@ LOG_FILE="${LOG_FILE:-${LOG_DIR}/deploy-dev-${RUN_TIMESTAMP}-${GIT_SHA}.log}"
 FORCE_DESTROY=false
 ANDROID_BUILD=false
 SECRET_BACKUP_FILE=""
+YOTO_STATE_BACKUP_FILE=""
 
 usage() {
   cat <<EOF
@@ -69,8 +70,107 @@ cleanup() {
   if [[ -n "${SECRET_BACKUP_FILE}" && -f "${SECRET_BACKUP_FILE}" ]]; then
     rm -f "${SECRET_BACKUP_FILE}"
   fi
+  if [[ -n "${YOTO_STATE_BACKUP_FILE}" && -f "${YOTO_STATE_BACKUP_FILE}" ]]; then
+    rm -f "${YOTO_STATE_BACKUP_FILE}"
+  fi
 }
 trap cleanup EXIT
+
+postgres_psql() {
+  local sql="$1"
+  microk8s kubectl -n "${NAMESPACE}" exec deploy/postgres -- bash -lc \
+    "PGPASSWORD='change-me' psql -U yotowebmgr -d yotowebmgr -v ON_ERROR_STOP=1 -At -c \"$sql\""
+}
+
+backup_yoto_state() {
+  if [[ "${FORCE_DESTROY}" == "true" ]]; then
+    echo "Force mode enabled: Yoto database-backed state will not be preserved."
+    return 0
+  fi
+
+  if ! microk8s kubectl -n "${NAMESPACE}" get deploy postgres >/dev/null 2>&1; then
+    echo "No existing postgres deployment found to preserve Yoto database-backed state."
+    return 0
+  fi
+
+  local settings_json
+  local credentials_json
+  settings_json="$(postgres_psql "SELECT COALESCE(json_agg(row_to_json(t)), '[]'::json)::text FROM (SELECT key, value, description FROM settings WHERE key LIKE 'yoto_%' ORDER BY key) t;")"
+  credentials_json="$(postgres_psql "SELECT COALESCE(json_agg(row_to_json(t)), '[]'::json)::text FROM (SELECT id, account_label, status, token_storage_ref, masked_account_id, masked_email, scopes, authorization_url, oauth_state, last_refreshed_at, expires_at, error_summary, created_at, updated_at FROM yoto_credential_states ORDER BY id) t;")"
+
+  YOTO_STATE_BACKUP_FILE="$(mktemp "${TMPDIR:-/tmp}/yotowebmgr-yoto-state-${RUN_TIMESTAMP}-XXXXXX.json")"
+  python3 - <<PY
+import json
+
+settings = json.loads("""${settings_json}""")
+credentials = json.loads("""${credentials_json}""")
+with open("${YOTO_STATE_BACKUP_FILE}", "w", encoding="utf-8") as handle:
+    json.dump({"settings": settings, "credentials": credentials}, handle, indent=2)
+PY
+  echo "Backed up $(python3 - <<PY
+import json
+payload = json.load(open("${YOTO_STATE_BACKUP_FILE}", "r", encoding="utf-8"))
+print(f"{len(payload.get('settings', []))} Yoto setting(s) and {len(payload.get('credentials', []))} credential row(s)")
+PY
+) to ${YOTO_STATE_BACKUP_FILE}"
+}
+
+restore_yoto_state() {
+  if [[ -z "${YOTO_STATE_BACKUP_FILE}" || ! -f "${YOTO_STATE_BACKUP_FILE}" ]]; then
+    return 0
+  fi
+
+  echo "Restoring preserved Yoto database-backed state from ${YOTO_STATE_BACKUP_FILE}"
+  python3 - <<PY | microk8s kubectl -n "${NAMESPACE}" exec -i deploy/postgres -- bash -lc "PGPASSWORD='change-me' psql -U yotowebmgr -d yotowebmgr -v ON_ERROR_STOP=1"
+import json
+
+payload = json.load(open("${YOTO_STATE_BACKUP_FILE}", "r", encoding="utf-8"))
+
+def sql_literal(value):
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    text = str(value).replace("'", "''")
+    return f"'{text}'"
+
+print("BEGIN;")
+for row in payload.get("settings", []):
+    print(
+        "INSERT INTO settings (key, value, description) VALUES "
+        f"({sql_literal(row.get('key'))}, {sql_literal(row.get('value'))}, {sql_literal(row.get('description'))}) "
+        "ON CONFLICT (key) DO UPDATE SET "
+        "value = EXCLUDED.value, "
+        "description = EXCLUDED.description, "
+        "updated_at = NOW();"
+    )
+
+for row in payload.get("credentials", []):
+    print(
+        "INSERT INTO yoto_credential_states "
+        "(id, account_label, status, token_storage_ref, masked_account_id, masked_email, scopes, authorization_url, oauth_state, last_refreshed_at, expires_at, error_summary, created_at, updated_at) VALUES "
+        f"({sql_literal(row.get('id'))}, {sql_literal(row.get('account_label'))}, {sql_literal(row.get('status'))}, {sql_literal(row.get('token_storage_ref'))}, {sql_literal(row.get('masked_account_id'))}, {sql_literal(row.get('masked_email'))}, {sql_literal(row.get('scopes'))}, {sql_literal(row.get('authorization_url'))}, {sql_literal(row.get('oauth_state'))}, {sql_literal(row.get('last_refreshed_at'))}, {sql_literal(row.get('expires_at'))}, {sql_literal(row.get('error_summary'))}, {sql_literal(row.get('created_at'))}, {sql_literal(row.get('updated_at'))}) "
+        "ON CONFLICT (id) DO UPDATE SET "
+        "account_label = EXCLUDED.account_label, "
+        "status = EXCLUDED.status, "
+        "token_storage_ref = EXCLUDED.token_storage_ref, "
+        "masked_account_id = EXCLUDED.masked_account_id, "
+        "masked_email = EXCLUDED.masked_email, "
+        "scopes = EXCLUDED.scopes, "
+        "authorization_url = EXCLUDED.authorization_url, "
+        "oauth_state = EXCLUDED.oauth_state, "
+        "last_refreshed_at = EXCLUDED.last_refreshed_at, "
+        "expires_at = EXCLUDED.expires_at, "
+        "error_summary = EXCLUDED.error_summary, "
+        "created_at = EXCLUDED.created_at, "
+        "updated_at = EXCLUDED.updated_at;"
+    )
+
+print("SELECT setval(pg_get_serial_sequence('yoto_credential_states', 'id'), COALESCE((SELECT MAX(id) FROM yoto_credential_states), 1), true);")
+print("COMMIT;")
+PY
+  echo "Yoto database-backed state restored."
+}
 
 node_major_version() {
   local version
@@ -164,6 +264,8 @@ else
   echo "Force mode enabled: ${NAMESPACE}/${SECRET_NAME} will not be preserved."
 fi
 
+backup_yoto_state
+
 echo "Deleting existing ${NAMESPACE} namespace before building or deploying"
 microk8s kubectl delete namespace "${NAMESPACE}" --ignore-not-found=true
 while microk8s kubectl get namespace "${NAMESPACE}" >/dev/null 2>&1; do
@@ -182,6 +284,7 @@ microk8s kubectl -n "${NAMESPACE}" rollout status deployment/postgres --timeout=
 microk8s kubectl -n "${NAMESPACE}" rollout status deployment/api --timeout=180s
 microk8s kubectl -n "${NAMESPACE}" rollout status deployment/worker --timeout=180s
 microk8s kubectl -n "${NAMESPACE}" rollout status deployment/frontend --timeout=180s
+restore_yoto_state
 
 echo
 echo "Pods:"
