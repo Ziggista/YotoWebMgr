@@ -1,9 +1,13 @@
-from datetime import datetime, timedelta, timezone
-from typing import Annotated, Any
+import asyncio
 import base64
+from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 import logging
+import mimetypes
+from pathlib import Path
 from secrets import token_urlsafe
+from typing import Annotated, Any
 from urllib.parse import urlencode, urljoin
 from urllib.parse import urlparse
 
@@ -19,6 +23,7 @@ from app.models import (
     LibraryItem,
     PhysicalCard,
     PlaylistTrack,
+    ProcessedAsset,
     Setting,
     VersionEvent,
     YotoCredentialState,
@@ -332,6 +337,65 @@ async def _refresh_stored_tokens(
     return refreshed_tokens
 
 
+async def _load_live_tokens(
+    *,
+    db: Session,
+    credential: YotoCredentialState,
+) -> tuple[StoredYotoTokens, bool]:
+    try:
+        stored_tokens = await load_tokens_from_secret(credential.token_storage_ref or "")
+    except YotoTokenStoreError as error:
+        credential.status = "authorization_failed"
+        credential.error_summary = f"Unable to load stored Yoto tokens: {error}"
+        db.add(credential)
+        db.commit()
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=credential.error_summary) from error
+
+    refreshed = False
+    if _token_expired(stored_tokens.expires_at):
+        stored_tokens = await _refresh_stored_tokens(db=db, credential=credential, stored_tokens=stored_tokens)
+        refreshed = True
+        logger.info("Yoto live request refreshed expired token for credential=%s", credential.id)
+
+    return stored_tokens, refreshed
+
+
+async def _call_authenticated_yoto_api(
+    *,
+    db: Session,
+    credential: YotoCredentialState,
+    stored_tokens: StoredYotoTokens,
+    method: str,
+    relative_url: str,
+    json_body: Any | None = None,
+) -> tuple[int, Any, StoredYotoTokens, bool]:
+    refreshed = False
+    http_status, payload = await _call_yoto_api(
+        method=method,
+        api_base_url=_setting(db, "yoto_api_base_url", "https://api.yotoplay.com"),
+        relative_url=relative_url,
+        access_token=stored_tokens.access_token,
+        json_body=json_body,
+    )
+    if http_status == 401 and stored_tokens.refresh_token:
+        stored_tokens = await _refresh_stored_tokens(db=db, credential=credential, stored_tokens=stored_tokens)
+        refreshed = True
+        logger.info(
+            "Yoto authenticated request retried after 401 for credential=%s method=%s path=%s",
+            credential.id,
+            method,
+            relative_url,
+        )
+        http_status, payload = await _call_yoto_api(
+            method=method,
+            api_base_url=_setting(db, "yoto_api_base_url", "https://api.yotoplay.com"),
+            relative_url=relative_url,
+            access_token=stored_tokens.access_token,
+            json_body=json_body,
+        )
+    return http_status, payload, stored_tokens, refreshed
+
+
 def _normalize_debug_path(*, api_base_url: str, raw_path: str) -> tuple[str, str]:
     candidate = raw_path.strip()
     if not candidate:
@@ -538,6 +602,323 @@ def _best_effort_stream_format(url: str) -> str:
     if path.endswith(".wav"):
         return "wav"
     return "mp3"
+
+
+def _best_effort_audio_format(*, codec: str | None, path: Path) -> str:
+    normalized_codec = (codec or "").strip().lower()
+    if normalized_codec in {"mp3", "aac", "m4a", "wav", "ogg", "flac"}:
+        return normalized_codec
+    extension = path.suffix.lower()
+    if extension == ".m4a":
+        return "aac"
+    if extension.startswith("."):
+        return extension[1:] or "mp3"
+    return "mp3"
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _ordered_tracks_for_item(db: Session, item_id: int) -> list[PlaylistTrack]:
+    return list(
+        db.scalars(
+            select(PlaylistTrack)
+            .where(PlaylistTrack.library_item_id == item_id)
+            .order_by(PlaylistTrack.track_number.asc(), PlaylistTrack.id.asc())
+        )
+    )
+
+
+def _latest_processed_asset_by_track(db: Session, item_id: int) -> dict[int, ProcessedAsset]:
+    assets = db.scalars(
+        select(ProcessedAsset)
+        .where(ProcessedAsset.library_item_id == item_id)
+        .where(ProcessedAsset.playlist_track_id.is_not(None))
+        .order_by(ProcessedAsset.created_at.desc(), ProcessedAsset.id.desc())
+    )
+    latest_by_track: dict[int, ProcessedAsset] = {}
+    for asset in assets:
+        if asset.playlist_track_id is None or asset.playlist_track_id in latest_by_track:
+            continue
+        latest_by_track[asset.playlist_track_id] = asset
+    return latest_by_track
+
+
+def _match_draft_track(
+    *,
+    raw_chapter: dict[str, Any],
+    ordered_tracks: list[PlaylistTrack],
+) -> PlaylistTrack | None:
+    chapter_type = str(raw_chapter.get("type") or "audio")
+    source_path = raw_chapter.get("source_path")
+    stream_url = raw_chapter.get("stream_url")
+
+    for track in ordered_tracks:
+        if chapter_type == "stream":
+            if track.is_stream and isinstance(stream_url, str) and track.stream_url == stream_url:
+                return track
+        else:
+            if not track.is_stream and isinstance(source_path, str) and track.source_path == source_path:
+                return track
+
+    for track in ordered_tracks:
+        if chapter_type == "stream" and track.is_stream:
+            return track
+        if chapter_type != "stream" and not track.is_stream:
+            return track
+    return None
+
+
+async def _upload_file_to_yoto_signed_url(upload_url: str, source_path: Path) -> None:
+    content_type = mimetypes.guess_type(source_path.name)[0] or "application/octet-stream"
+    async with httpx.AsyncClient(timeout=300) as client:
+        with source_path.open("rb") as handle:
+            response = await client.put(
+                upload_url,
+                content=handle.read(),
+                headers={"Content-Type": content_type},
+            )
+    if response.status_code >= 400:
+        detail = response.text[:500] if response.text else "Upload to Yoto media store failed."
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=detail)
+
+
+async def _poll_yoto_transcoded_audio(
+    *,
+    db: Session,
+    credential: YotoCredentialState,
+    stored_tokens: StoredYotoTokens,
+    upload_id: str,
+) -> tuple[dict[str, Any], StoredYotoTokens, bool]:
+    poll_seconds = max(1, int(_setting(db, "yoto_transcode_poll_seconds", "10") or "10"))
+    timeout_minutes = max(1, int(_setting(db, "yoto_transcode_timeout_minutes", "30") or "30"))
+    deadline = datetime.now(timezone.utc) + timedelta(minutes=timeout_minutes)
+    refreshed_any = False
+
+    while datetime.now(timezone.utc) < deadline:
+        http_status, payload, stored_tokens, refreshed = await _call_authenticated_yoto_api(
+            db=db,
+            credential=credential,
+            stored_tokens=stored_tokens,
+            method="GET",
+            relative_url=f"/media/upload/{upload_id}/transcoded?loudnorm=false",
+        )
+        refreshed_any = refreshed_any or refreshed
+        if http_status >= 400:
+            raise HTTPException(
+                status_code=http_status,
+                detail=_response_excerpt(payload) or "Yoto transcode status request failed.",
+            )
+        if isinstance(payload, dict) and isinstance(payload.get("transcodedSha256"), str):
+            return payload, stored_tokens, refreshed_any
+        await asyncio.sleep(poll_seconds)
+
+    raise HTTPException(
+        status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+        detail=f"Timed out waiting for Yoto to finish transcoding upload {upload_id}.",
+    )
+
+
+async def _build_live_payload_from_draft(
+    *,
+    db: Session,
+    draft: YotoPlaylistDraft,
+    credential: YotoCredentialState,
+    stored_tokens: StoredYotoTokens,
+) -> tuple[dict[str, object] | None, list[str], bool, StoredYotoTokens, bool]:
+    try:
+        payload = json.loads(draft.payload_json)
+    except json.JSONDecodeError:
+        return None, ["Stored playlist payload is not valid JSON."], False, stored_tokens, False
+
+    if not isinstance(payload, dict):
+        return None, ["Stored playlist payload must be a JSON object."], False, stored_tokens, False
+
+    content = payload.get("content")
+    if isinstance(content, dict) and isinstance(content.get("chapters"), list):
+        return payload, [], True, stored_tokens, False
+
+    chapters = payload.get("chapters")
+    if not isinstance(chapters, list):
+        return None, ["Draft does not include any playlist chapters."], False, stored_tokens, False
+
+    ordered_tracks = _ordered_tracks_for_item(db, draft.library_item_id)
+    processed_assets = _latest_processed_asset_by_track(db, draft.library_item_id)
+    unmatched_tracks = ordered_tracks.copy()
+    remote_chapters: list[dict[str, object]] = []
+    warnings: list[str] = []
+    total_duration = 0
+    refreshed_any = False
+
+    for index, raw_chapter in enumerate(chapters, start=1):
+        if not isinstance(raw_chapter, dict):
+            warnings.append(f"Chapter {index} is not a JSON object.")
+            continue
+
+        chapter_type = str(raw_chapter.get("type") or "audio")
+        title = str(raw_chapter.get("title") or f"Track {index}")
+        overlay_label = str(raw_chapter.get("display_number") or index)
+        matched_track = _match_draft_track(raw_chapter=raw_chapter, ordered_tracks=unmatched_tracks)
+        if matched_track is not None and matched_track in unmatched_tracks:
+            unmatched_tracks.remove(matched_track)
+
+        if chapter_type == "stream":
+            stream_url = raw_chapter.get("stream_url")
+            if not isinstance(stream_url, str) or not stream_url.strip():
+                warnings.append(f"{title}: stream chapter is missing a playable URL.")
+                continue
+            duration_value = raw_chapter.get("duration_seconds")
+            duration_seconds = int(duration_value) if isinstance(duration_value, int) else None
+            if duration_seconds:
+                total_duration += duration_seconds
+            remote_chapter: dict[str, object] = {
+                "key": f"{index:02d}",
+                "title": title,
+                "overlayLabel": overlay_label,
+                "tracks": [
+                    {
+                        "key": "01",
+                        "title": title,
+                        "trackUrl": stream_url,
+                        "type": "stream",
+                        "format": _best_effort_stream_format(stream_url),
+                        "overlayLabel": overlay_label,
+                    }
+                ],
+            }
+            if duration_seconds is not None:
+                remote_chapter["duration"] = duration_seconds
+                remote_chapter["tracks"][0]["duration"] = duration_seconds
+            remote_chapters.append(remote_chapter)
+            continue
+
+        if matched_track is None:
+            warnings.append(f"{title}: could not match this draft chapter to a library track.")
+            continue
+
+        asset = processed_assets.get(matched_track.id)
+        source_path_value = asset.output_path if asset is not None else matched_track.source_path
+        if not source_path_value:
+            warnings.append(f"{title}: no source or processed file is available for upload.")
+            continue
+
+        source_path = Path(source_path_value)
+        if not source_path.exists():
+            warnings.append(f"{title}: local source file is missing at {source_path}.")
+            continue
+
+        checksum = asset.checksum_sha256 if asset is not None and asset.checksum_sha256 else _sha256_file(source_path)
+        upload_relative_url = "/media/transcode/audio/uploadUrl?" + urlencode(
+            {
+                "sha256": checksum,
+                "filename": source_path.name,
+            }
+        )
+        http_status, upload_payload, stored_tokens, refreshed = await _call_authenticated_yoto_api(
+            db=db,
+            credential=credential,
+            stored_tokens=stored_tokens,
+            method="GET",
+            relative_url=upload_relative_url,
+        )
+        refreshed_any = refreshed_any or refreshed
+        if http_status >= 400 or not isinstance(upload_payload, dict):
+            raise HTTPException(
+                status_code=http_status,
+                detail=_response_excerpt(upload_payload) or "Yoto upload URL request failed.",
+            )
+
+        upload_id = upload_payload.get("uploadId")
+        if not isinstance(upload_id, str) or not upload_id.strip():
+            raise HTTPException(status_code=502, detail="Yoto upload URL response did not include an uploadId.")
+
+        upload_url = upload_payload.get("uploadUrl")
+        if isinstance(upload_url, str) and upload_url.strip():
+            await _upload_file_to_yoto_signed_url(upload_url.strip(), source_path)
+
+        transcode_payload, stored_tokens, refreshed = await _poll_yoto_transcoded_audio(
+            db=db,
+            credential=credential,
+            stored_tokens=stored_tokens,
+            upload_id=upload_id.strip(),
+        )
+        refreshed_any = refreshed_any or refreshed
+
+        transcoded_sha = transcode_payload.get("transcodedSha256")
+        if not isinstance(transcoded_sha, str) or not transcoded_sha.strip():
+            raise HTTPException(status_code=502, detail="Yoto transcode response did not include a transcodedSha256.")
+
+        duration_seconds = (
+            asset.duration_seconds
+            if asset is not None and asset.duration_seconds is not None
+            else matched_track.duration_seconds
+            if matched_track.duration_seconds is not None
+            else raw_chapter.get("duration_seconds")
+            if isinstance(raw_chapter.get("duration_seconds"), int)
+            else None
+        )
+        size_bytes = asset.size_bytes if asset is not None and asset.size_bytes else source_path.stat().st_size
+        audio_format = _best_effort_audio_format(codec=asset.codec if asset is not None else None, path=source_path)
+        remote_track: dict[str, object] = {
+            "key": "01",
+            "uid": f"{matched_track.id}",
+            "title": title,
+            "trackUrl": f"yoto:#{transcoded_sha.strip()}",
+            "type": "audio",
+            "format": audio_format,
+            "fileSize": size_bytes,
+            "overlayLabel": overlay_label,
+        }
+        if duration_seconds is not None:
+            remote_track["duration"] = duration_seconds
+            total_duration += duration_seconds
+        if asset is not None and asset.channels:
+            remote_track["channels"] = asset.channels
+
+        remote_chapter = {
+            "key": f"{index:02d}",
+            "title": title,
+            "overlayLabel": overlay_label,
+            "tracks": [remote_track],
+        }
+        if duration_seconds is not None:
+            remote_chapter["duration"] = duration_seconds
+        remote_chapters.append(remote_chapter)
+
+    if not remote_chapters:
+        return None, warnings or ["No live-create-ready chapters were generated from this draft."], False, stored_tokens, refreshed_any
+
+    generated_payload: dict[str, object] = {
+        "title": str(payload.get("title") or draft.title),
+        "content": {
+            "chapters": remote_chapters,
+            "playbackType": "linear",
+            "config": {
+                "resumeTimeout": 2592000,
+            },
+        },
+        "metadata": {
+            "description": "Created by YotoWebMgr",
+            "media": {
+                "duration": total_duration,
+            },
+        },
+    }
+
+    cover_art_path = payload.get("cover_art_path")
+    if isinstance(cover_art_path, str) and cover_art_path.startswith(("http://", "https://")):
+        metadata = generated_payload.get("metadata")
+        if isinstance(metadata, dict):
+            metadata["cover"] = {"imageL": cover_art_path}
+    elif cover_art_path:
+        warnings.append("Cover art is local-only and was not included in the live Yoto payload.")
+
+    return generated_payload, warnings, not warnings, stored_tokens, refreshed_any
 
 
 def _remote_payload_preview_from_draft(
@@ -1052,10 +1433,17 @@ async def create_live_yoto_playlist(
     if credential is None or not credential.token_storage_ref:
         raise HTTPException(status_code=409, detail="Connect a Yoto account before creating a live playlist.")
 
+    stored_tokens, token_refreshed = await _load_live_tokens(db=db, credential=credential)
     request_payload = payload.request_payload
     if request_payload is None:
-        request_payload, warnings, can_create_live = _remote_payload_preview_from_draft(draft)
-        if not can_create_live or request_payload is None:
+        request_payload, warnings, _can_create_live, stored_tokens, build_refreshed = await _build_live_payload_from_draft(
+            db=db,
+            draft=draft,
+            credential=credential,
+            stored_tokens=stored_tokens,
+        )
+        token_refreshed = token_refreshed or build_refreshed
+        if request_payload is None:
             raise HTTPException(
                 status_code=422,
                 detail=" ".join(warnings) if warnings else "This draft is not ready for live Yoto playlist creation.",
@@ -1064,21 +1452,31 @@ async def create_live_yoto_playlist(
     if not isinstance(request_payload, dict):
         raise HTTPException(status_code=422, detail="The live Yoto payload must be a JSON object.")
 
-    result = await _execute_yoto_api_request(
+    http_status, response_payload, stored_tokens, create_refreshed = await _call_authenticated_yoto_api(
         db=db,
         credential=credential,
-        label=f"Create live Yoto playlist draft {draft.id}",
+        stored_tokens=stored_tokens,
         method="POST",
         relative_url="/content",
-        request_url=urljoin(_setting(db, "yoto_api_base_url", "https://api.yotoplay.com").rstrip("/") + "/", "content"),
         json_body=request_payload,
     )
-    if not result.ok:
-        raise HTTPException(status_code=result.http_status or 502, detail=result.error_detail or "Yoto playlist creation failed.")
+    token_refreshed = token_refreshed or create_refreshed
+    if not (200 <= http_status < 300):
+        credential.status = "connected_error"
+        credential.error_summary = f"Live Yoto playlist creation failed against /content with HTTP {http_status}."
+        db.add(credential)
+        db.commit()
+        raise HTTPException(
+            status_code=http_status or 502,
+            detail=_response_excerpt(response_payload) or "Yoto playlist creation failed.",
+        )
+
+    credential.status = "connected_tested"
+    credential.error_summary = f"Live Yoto playlist creation succeeded against /content with HTTP {http_status}."
 
     remote_card_id: str | None = None
-    if isinstance(result.response_json, dict):
-        card_payload = result.response_json.get("card")
+    if isinstance(response_payload, dict):
+        card_payload = response_payload.get("card")
         if isinstance(card_payload, dict):
             remote_card_id_value = card_payload.get("cardId")
             if isinstance(remote_card_id_value, str) and remote_card_id_value.strip():
@@ -1134,6 +1532,7 @@ async def create_live_yoto_playlist(
     )
     db.add(draft)
     db.add(item)
+    db.add(credential)
     db.commit()
     db.refresh(draft)
     db.refresh(item)
@@ -1143,11 +1542,11 @@ async def create_live_yoto_playlist(
         playlist=_draft_response(draft),
         credential=_credential_response(db, credential),
         remote_card_id=remote_card_id,
-        remote_content_response=result.response_json,
-        http_status=result.http_status,
-        token_refreshed=result.token_refreshed,
-        response_excerpt=result.response_excerpt,
-        error_detail=result.error_detail,
+        remote_content_response=_response_json(response_payload),
+        http_status=http_status,
+        token_refreshed=token_refreshed,
+        response_excerpt=_response_excerpt(response_payload),
+        error_detail=None,
         live_api_call=True,
     )
 

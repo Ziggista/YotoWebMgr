@@ -1860,3 +1860,138 @@ async def test_create_live_yoto_playlist_updates_draft_and_linked_cards(
     assert "31yYU" in refreshed_card.notes
     assert version is not None
     assert event is not None
+
+
+async def test_create_live_yoto_playlist_uploads_local_audio_assets(
+    api_client: AsyncClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    item = LibraryItem(
+        title="Uploaded Draft",
+        content_type="Audiobook",
+        status="processed",
+        readiness_status="needs_yoto_upload",
+    )
+    db_session.add(item)
+    db_session.flush()
+    track = PlaylistTrack(
+        library_item_id=item.id,
+        title="Chapter One",
+        source_path=str(tmp_path / "chapter-one-source.mp3"),
+        track_number=1,
+        duration_seconds=61,
+        is_stream=False,
+    )
+    db_session.add(track)
+    db_session.flush()
+
+    processed_path = tmp_path / "chapter-one-processed.mp3"
+    processed_path.write_bytes(b"processed-audio-bytes")
+    asset = ProcessedAsset(
+        library_item_id=item.id,
+        playlist_track_id=track.id,
+        source_path=track.source_path or str(processed_path),
+        output_path=str(processed_path),
+        codec="mp3",
+        bitrate_kbps=96,
+        channels=1,
+        duration_seconds=61,
+        size_bytes=processed_path.stat().st_size,
+        checksum_sha256="b" * 64,
+        profile="spoken_word",
+        settings_json='{"profile":"spoken_word"}',
+    )
+    credential = YotoCredentialState(
+        account_label="Household Yoto",
+        status="connected_tested",
+        token_storage_ref="k8s-secret:test-namespace:test-secret:yoto-credential-local.json",
+        scopes="openid offline_access user:content:manage",
+        expires_at=datetime.now(timezone.utc).replace(year=2027),
+    )
+    draft = YotoPlaylistDraft(
+        library_item_id=item.id,
+        title=item.title,
+        status="queued",
+        payload_json=json.dumps(
+            {
+                "title": item.title,
+                "chapters": [
+                    {
+                        "title": "Chapter One",
+                        "type": "audio",
+                        "source_path": track.source_path,
+                        "display_number": 1,
+                        "duration_seconds": 61,
+                    }
+                ],
+            }
+        ),
+    )
+    db_session.add_all([asset, credential, draft])
+    db_session.commit()
+
+    upload_calls: list[tuple[str, str]] = []
+    api_calls: list[tuple[str, str, object | None]] = []
+
+    async def fake_load_tokens_from_secret(_: str) -> StoredYotoTokens:
+        return StoredYotoTokens(
+            access_token="test-access-token",
+            refresh_token="test-refresh-token",
+            token_type="Bearer",
+            scope="openid offline_access user:content:manage",
+            expires_at=datetime.now(timezone.utc).replace(year=2027),
+        )
+
+    async def fake_upload_file_to_yoto_signed_url(upload_url: str, source_path: Path) -> None:
+        upload_calls.append((upload_url, str(source_path)))
+
+    async def fake_call_yoto_api(
+        *,
+        method: str,
+        api_base_url: str,
+        relative_url: str,
+        access_token: str,
+        json_body: object | None = None,
+    ) -> tuple[int, object]:
+        api_calls.append((method, relative_url, json_body))
+        assert api_base_url == "https://api.yotoplay.com"
+        assert access_token == "test-access-token"
+        if method == "GET" and relative_url.startswith("/media/transcode/audio/uploadUrl?"):
+            return 200, {"uploadId": "upload-123", "uploadUrl": "https://signed.example.test/upload-123"}
+        if method == "GET" and relative_url == "/media/upload/upload-123/transcoded?loudnorm=false":
+            return 200, {"transcodedSha256": "abc123sha"}
+        if method == "POST" and relative_url == "/content":
+            assert isinstance(json_body, dict)
+            chapters = json_body["content"]["chapters"]
+            assert isinstance(chapters, list)
+            assert chapters[0]["tracks"][0]["trackUrl"] == "yoto:#abc123sha"
+            assert chapters[0]["tracks"][0]["fileSize"] == processed_path.stat().st_size
+            assert chapters[0]["tracks"][0]["channels"] == 1
+            return 200, {"card": {"cardId": "REMOTE123", "title": "Uploaded Draft"}}
+        raise AssertionError(f"Unexpected Yoto API call: {method} {relative_url}")
+
+    monkeypatch.setattr(yoto_routes, "load_tokens_from_secret", fake_load_tokens_from_secret)
+    monkeypatch.setattr(yoto_routes, "_upload_file_to_yoto_signed_url", fake_upload_file_to_yoto_signed_url)
+    monkeypatch.setattr(yoto_routes, "_call_yoto_api", fake_call_yoto_api)
+
+    async with api_client as client:
+        response = await client.post(f"/api/v1/yoto/playlists/{draft.id}/create-live", json={})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["remote_card_id"] == "REMOTE123"
+    assert upload_calls == [("https://signed.example.test/upload-123", str(processed_path))]
+    assert api_calls[0][0] == "GET"
+    assert api_calls[1] == ("GET", "/media/upload/upload-123/transcoded?loudnorm=false", None)
+    assert api_calls[2][0] == "POST"
+
+    refreshed_draft = db_session.get(YotoPlaylistDraft, draft.id)
+    refreshed_item = db_session.get(LibraryItem, item.id)
+    assert refreshed_draft is not None
+    assert refreshed_draft.remote_playlist_id == "REMOTE123"
+    stored_payload = json.loads(refreshed_draft.payload_json)
+    assert stored_payload["content"]["chapters"][0]["tracks"][0]["trackUrl"] == "yoto:#abc123sha"
+    assert refreshed_item is not None
+    assert refreshed_item.status == "yoto_remote_created"

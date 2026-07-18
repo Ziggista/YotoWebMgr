@@ -111,7 +111,9 @@ not upload audio assets.
 `GET /playlists/{playlist_id}/remote-payload` converts a stored draft into the current live
 `POST /content` request shape used for Yoto MYO content creation. `POST /playlists/{playlist_id}/create-live`
 submits that payload to Yoto, stores the returned remote card/content identifier on the draft, and
-marks linked local cards ready for the app-side write/link workflow.
+marks linked local cards ready for the app-side write/link workflow. For non-stream chapters, the
+live-create route now uploads the processed/source file to Yoto first, polls Yoto's transcode
+status, then creates `/content` using the resulting `yoto:#sha256` track URLs.
 
 Each queued playlist draft records immutable playlist version snapshots. Restoring a playlist
 version updates the local draft payload and creates a newer `restored` version; older versions remain

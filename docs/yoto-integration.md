@@ -32,8 +32,12 @@ Kubernetes Secrets or a dedicated encrypted token store, not in generic applicat
 
 These values are intentionally editable placeholders until the exact Yoto-supported OAuth, upload,
 playlist, and transcode-polling workflows are confirmed against live credentials and current docs.
-HTTP route handlers should enqueue Yoto work and return quickly; uploads, playlist updates, token
-refresh, and transcode polling belong in worker jobs.
+The current codebase now uses a hybrid approach:
+
+- The queued `create_yoto_playlist` worker still prepares durable local drafts only.
+- `POST /api/v1/yoto/playlists/{playlist_id}/create-live` can now upload processed/local audio to
+  Yoto on demand, poll for Yoto's transcode result, and then create live `/content` from the
+  generated `yoto:#sha256` track references.
 
 ## Local Preview Endpoints
 
@@ -59,7 +63,9 @@ The API exposes local-only Yoto scaffolding endpoints:
 - `GET /api/v1/yoto/playlists/{playlist_id}/remote-payload` converts a local draft into the current
   live `POST /content` request shape.
 - `POST /api/v1/yoto/playlists/{playlist_id}/create-live` submits that payload to Yoto and stores
-  the returned remote card/content identifier on the local draft.
+  the returned remote card/content identifier on the local draft. For local audio chapters it now
+  requests a Yoto upload URL, uploads the processed or source file, polls Yoto transcode status,
+  and builds the final `/content` payload from the returned `transcodedSha256`.
 - `GET /api/v1/yoto/library/{item_id}/playlist-preview` maps a local library item and its tracks
   into a Yoto-shaped playlist payload without making a live Yoto API call.
 - `GET /api/v1/yoto/library/{item_id}/playlists` lists stored local playlist drafts.
@@ -68,7 +74,8 @@ The API exposes local-only Yoto scaffolding endpoints:
 
 The preview endpoint is deliberately not an upload action. The queue endpoint persists the payload,
 creates a trackable worker job, and currently advances the draft to `awaiting_remote_mapping` after
-local preparation. The queue worker still does not upload media assets.
+local preparation. Audio upload still does not happen in that worker step; it happens during the
+explicit live-create call so the user can test and inspect it directly from the app.
 
 For local browser testing, set the redirect URI to the frontend callback route, for example
 `http://127.0.0.1:5175/settings/yoto/callback`, and register the same URI with the Yoto developer
@@ -115,6 +122,6 @@ data must not become a hidden side effect of playlist generation.
 - `POST /api/v1/library/{item_id}/link-card` still queues `upload_yoto_asset` for non-split items.
   That worker job is a placeholder and currently settles in `waiting`.
 - The newer Yoto draft endpoints and live `POST /content` creation flow are the active path for
-  playlist testing.
+  playlist testing, including processed/local audio upload.
 - Direct blank-card write from Yoto-created content is under active validation; staged source-card
   cloning remains available as a fallback workflow.
