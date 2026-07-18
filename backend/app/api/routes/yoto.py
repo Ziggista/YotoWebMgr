@@ -616,6 +616,23 @@ def _best_effort_audio_format(*, codec: str | None, path: Path) -> str:
     return "mp3"
 
 
+def _best_effort_audio_channels(*, channels: int | str | None) -> str | None:
+    if isinstance(channels, str):
+        normalized = channels.strip().lower()
+        if normalized in {"mono", "stereo"}:
+            return normalized
+        if normalized == "1":
+            return "mono"
+        if normalized == "2":
+            return "stereo"
+        return None
+    if channels == 1:
+        return "mono"
+    if channels == 2:
+        return "stereo"
+    return None
+
+
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -939,17 +956,16 @@ async def _build_live_payload_from_draft(
                 remote_track["format"] = transcoded_format.strip()
             if isinstance(transcoded_file_size, int) and transcoded_file_size > 0:
                 remote_track["fileSize"] = transcoded_file_size
-            if isinstance(transcoded_channels, str):
-                normalized_channels = transcoded_channels.strip().lower()
-                if normalized_channels == "mono":
-                    remote_track["channels"] = 1
-                elif normalized_channels == "stereo":
-                    remote_track["channels"] = 2
+            normalized_channels = _best_effort_audio_channels(channels=transcoded_channels)
+            if normalized_channels is not None:
+                remote_track["channels"] = normalized_channels
         if duration_seconds is not None:
             remote_track["duration"] = duration_seconds
             total_duration += duration_seconds
-        if asset is not None and asset.channels:
-            remote_track["channels"] = asset.channels
+        if "channels" not in remote_track and asset is not None and asset.channels:
+            normalized_channels = _best_effort_audio_channels(channels=asset.channels)
+            if normalized_channels is not None:
+                remote_track["channels"] = normalized_channels
 
         remote_chapter = {
             "key": f"{index:02d}",
