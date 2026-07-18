@@ -757,6 +757,8 @@ async def _upload_file_to_yoto_signed_url(upload_url: str, source_path: Path) ->
     if response.status_code >= 400:
         detail = response.text[:500] if response.text else "Upload to Yoto media store failed."
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=detail)
+    # Give Yoto's upload pipeline a short settle window before polling transcode state.
+    await asyncio.sleep(5)
 
 
 async def _poll_yoto_transcoded_audio(
@@ -789,6 +791,8 @@ async def _poll_yoto_transcoded_audio(
             _extract_yoto_transcode_descriptor(payload) if isinstance(payload, dict) else (None, None)
         )
         if transcoded_sha is not None:
+            # Give Yoto's transcode pipeline a short settle window before content creation.
+            await asyncio.sleep(5)
             return payload, stored_tokens, refreshed_any
         await asyncio.sleep(poll_seconds)
 
