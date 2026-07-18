@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export PATH="/snap/bin:${PATH}"
+MICROK8S_BIN="${MICROK8S_BIN:-$(command -v microk8s || true)}"
 
 LOCAL_PORT="${LOCAL_PORT:-5175}"
 REMOTE_PORT="${REMOTE_PORT:-80}"
@@ -10,6 +12,14 @@ PID_FILE="${PID_FILE:-/tmp/yotowebmgr-${SERVICE}-${LOCAL_PORT}.port-forward.pid}
 LOG_FILE="${LOG_FILE:-/tmp/yotowebmgr-${SERVICE}-${LOCAL_PORT}.port-forward.log}"
 TMUX_SESSION="${TMUX_SESSION:-yotowebmgr-${SERVICE}-${LOCAL_PORT}}"
 URL="http://127.0.0.1:${LOCAL_PORT}/"
+
+if [[ -z "${MICROK8S_BIN}" && -x /snap/bin/microk8s ]]; then
+  MICROK8S_BIN="/snap/bin/microk8s"
+fi
+if [[ -z "${MICROK8S_BIN}" ]]; then
+  echo "microk8s command not found. Ensure MicroK8s is installed in WSL and available on PATH or at /snap/bin/microk8s." >&2
+  exit 1
+fi
 
 if [[ "${BIND_ADDRESS}" == "127.0.0.1" ]] && curl -fsS --max-time 2 "${URL}" >/dev/null 2>&1; then
   echo "Kubernetes ${SERVICE} is already forwarded at ${URL}"
@@ -32,10 +42,10 @@ fi
 
 echo "Starting Kubernetes ${SERVICE} port-forward at ${URL}"
 if command -v tmux >/dev/null 2>&1; then
-  tmux new-session -d -s "${TMUX_SESSION}" "microk8s kubectl -n '${NAMESPACE}' port-forward --address '${BIND_ADDRESS}' 'svc/${SERVICE}' '${LOCAL_PORT}:${REMOTE_PORT}' >'${LOG_FILE}' 2>&1"
+  tmux new-session -d -s "${TMUX_SESSION}" "\"${MICROK8S_BIN}\" kubectl -n '${NAMESPACE}' port-forward --address '${BIND_ADDRESS}' 'svc/${SERVICE}' '${LOCAL_PORT}:${REMOTE_PORT}' >'${LOG_FILE}' 2>&1"
   echo "tmux:${TMUX_SESSION}" >"${PID_FILE}"
 else
-  setsid microk8s kubectl -n "${NAMESPACE}" port-forward --address "${BIND_ADDRESS}" "svc/${SERVICE}" "${LOCAL_PORT}:${REMOTE_PORT}" >"${LOG_FILE}" 2>&1 &
+  setsid "${MICROK8S_BIN}" kubectl -n "${NAMESPACE}" port-forward --address "${BIND_ADDRESS}" "svc/${SERVICE}" "${LOCAL_PORT}:${REMOTE_PORT}" >"${LOG_FILE}" 2>&1 &
   forward_pid="$!"
   echo "${forward_pid}" >"${PID_FILE}"
 fi

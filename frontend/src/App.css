@@ -939,6 +939,23 @@ a {
   margin: 0;
 }
 
+.workflow-overview-panel h3,
+.workflow-overview-card h3 {
+  margin: 0;
+}
+
+.workflow-fact-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.workflow-overview-card {
+  display: grid;
+  gap: 12px;
+}
+
 .review-panel {
   display: grid;
   gap: 12px;

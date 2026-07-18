@@ -2,6 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+export PATH="/snap/bin:${PATH}"
+MICROK8S_BIN="${MICROK8S_BIN:-$(command -v microk8s || true)}"
 NAMESPACE="${NAMESPACE:-yotowebmgr}"
 SECRET_NAME="${SECRET_NAME:-yotowebmgr-secrets}"
 BIND_ADDRESS="${BIND_ADDRESS:-127.0.0.1}"
@@ -9,6 +11,7 @@ FRONTEND_DIR="${ROOT_DIR}/frontend"
 ANDROID_DIR="${FRONTEND_DIR}/android"
 ANDROID_ASSETS_DIR="${ANDROID_DIR}/app/src/main/assets/public"
 ANDROID_LOCAL_PROPERTIES_FILE="${ANDROID_DIR}/local.properties"
+ANDROID_KEYSTORE_PROPERTIES_FILE="${ANDROID_DIR}/keystore.properties"
 LOG_DIR="${LOG_DIR:-${ROOT_DIR}/scripts/dev/logs}"
 RUN_TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 GIT_SHA="$(git -C "${ROOT_DIR}" rev-parse --short HEAD 2>/dev/null || echo "nogit")"
@@ -17,6 +20,14 @@ FORCE_DESTROY=false
 ANDROID_BUILD=false
 SECRET_BACKUP_FILE=""
 YOTO_STATE_BACKUP_FILE=""
+
+if [[ -z "${MICROK8S_BIN}" && -x /snap/bin/microk8s ]]; then
+  MICROK8S_BIN="/snap/bin/microk8s"
+fi
+if [[ -z "${MICROK8S_BIN}" ]]; then
+  echo "microk8s command not found. Ensure MicroK8s is installed in WSL and available on PATH or at /snap/bin/microk8s." >&2
+  exit 1
+fi
 
 usage() {
   cat <<EOF
@@ -78,7 +89,7 @@ trap cleanup EXIT
 
 postgres_psql() {
   local sql="$1"
-  microk8s kubectl -n "${NAMESPACE}" exec deploy/postgres -- bash -lc \
+  "${MICROK8S_BIN}" kubectl -n "${NAMESPACE}" exec deploy/postgres -- bash -lc \
     "PGPASSWORD='change-me' psql -U yotowebmgr -d yotowebmgr -v ON_ERROR_STOP=1 -At -c \"$sql\""
 }
 
@@ -88,7 +99,7 @@ backup_yoto_state() {
     return 0
   fi
 
-  if ! microk8s kubectl -n "${NAMESPACE}" get deploy postgres >/dev/null 2>&1; then
+  if ! "${MICROK8S_BIN}" kubectl -n "${NAMESPACE}" get deploy postgres >/dev/null 2>&1; then
     echo "No existing postgres deployment found to preserve Yoto database-backed state."
     return 0
   fi
@@ -121,7 +132,7 @@ restore_yoto_state() {
   fi
 
   echo "Restoring preserved Yoto database-backed state from ${YOTO_STATE_BACKUP_FILE}"
-  python3 - <<PY | microk8s kubectl -n "${NAMESPACE}" exec -i deploy/postgres -- bash -lc "PGPASSWORD='change-me' psql -U yotowebmgr -d yotowebmgr -v ON_ERROR_STOP=1"
+  python3 - <<PY | "${MICROK8S_BIN}" kubectl -n "${NAMESPACE}" exec -i deploy/postgres -- bash -lc "PGPASSWORD='change-me' psql -U yotowebmgr -d yotowebmgr -v ON_ERROR_STOP=1"
 import json
 
 payload = json.load(open("${YOTO_STATE_BACKUP_FILE}", "r", encoding="utf-8"))
@@ -245,16 +256,16 @@ echo "Android build: ${ANDROID_BUILD}"
 echo "Port-forward bind address: ${BIND_ADDRESS}"
 echo
 
-if ! microk8s status --wait-ready | grep -q "registry.*enabled"; then
+if ! "${MICROK8S_BIN}" status --wait-ready | grep -q "registry.*enabled"; then
   echo "Enabling MicroK8s registry addon"
-  microk8s enable registry
+  "${MICROK8S_BIN}" enable registry
 fi
 
 if [[ "${FORCE_DESTROY}" != "true" ]]; then
-  if microk8s kubectl -n "${NAMESPACE}" get secret "${SECRET_NAME}" >/dev/null 2>&1; then
+  if "${MICROK8S_BIN}" kubectl -n "${NAMESPACE}" get secret "${SECRET_NAME}" >/dev/null 2>&1; then
     SECRET_BACKUP_FILE="$(mktemp "${TMPDIR:-/tmp}/yotowebmgr-secret-${RUN_TIMESTAMP}-XXXXXX.json")"
     echo "Backing up ${NAMESPACE}/${SECRET_NAME} to ${SECRET_BACKUP_FILE}"
-    microk8s kubectl -n "${NAMESPACE}" get secret "${SECRET_NAME}" -o json \
+    "${MICROK8S_BIN}" kubectl -n "${NAMESPACE}" get secret "${SECRET_NAME}" -o json \
       | python3 -c 'import json,sys; source=json.load(sys.stdin); sanitized={"apiVersion":"v1","kind":"Secret","metadata":{"name":source["metadata"]["name"],"namespace":source["metadata"]["namespace"]},"type":source.get("type","Opaque"),"data":source.get("data",{})}; json.dump(sanitized, sys.stdout)' \
       > "${SECRET_BACKUP_FILE}"
   else
@@ -267,38 +278,47 @@ fi
 backup_yoto_state
 
 echo "Deleting existing ${NAMESPACE} namespace before building or deploying"
-microk8s kubectl delete namespace "${NAMESPACE}" --ignore-not-found=true
-while microk8s kubectl get namespace "${NAMESPACE}" >/dev/null 2>&1; do
+"${MICROK8S_BIN}" kubectl delete namespace "${NAMESPACE}" --ignore-not-found=true
+while "${MICROK8S_BIN}" kubectl get namespace "${NAMESPACE}" >/dev/null 2>&1; do
   echo "Waiting for ${NAMESPACE} namespace deletion"
   sleep 2
 done
 
 "${ROOT_DIR}/k8s/scripts/build-images.sh"
 
-microk8s kubectl apply -k "${ROOT_DIR}/k8s/overlays/dev"
+"${MICROK8S_BIN}" kubectl apply -k "${ROOT_DIR}/k8s/overlays/dev"
 if [[ -n "${SECRET_BACKUP_FILE}" && -f "${SECRET_BACKUP_FILE}" ]]; then
   echo "Restoring preserved ${NAMESPACE}/${SECRET_NAME}"
-  microk8s kubectl apply -f "${SECRET_BACKUP_FILE}"
+  "${MICROK8S_BIN}" kubectl apply -f "${SECRET_BACKUP_FILE}"
 fi
-microk8s kubectl -n "${NAMESPACE}" rollout status deployment/postgres --timeout=180s
-microk8s kubectl -n "${NAMESPACE}" rollout status deployment/api --timeout=180s
-microk8s kubectl -n "${NAMESPACE}" rollout status deployment/worker --timeout=180s
-microk8s kubectl -n "${NAMESPACE}" rollout status deployment/frontend --timeout=180s
+"${MICROK8S_BIN}" kubectl -n "${NAMESPACE}" rollout status deployment/postgres --timeout=180s
+"${MICROK8S_BIN}" kubectl -n "${NAMESPACE}" rollout status deployment/api --timeout=180s
+"${MICROK8S_BIN}" kubectl -n "${NAMESPACE}" rollout status deployment/worker --timeout=180s
+"${MICROK8S_BIN}" kubectl -n "${NAMESPACE}" rollout status deployment/frontend --timeout=180s
 restore_yoto_state
 
 echo
 echo "Pods:"
-microk8s kubectl -n "${NAMESPACE}" get pods -o wide
+"${MICROK8S_BIN}" kubectl -n "${NAMESPACE}" get pods -o wide
 echo
 echo "Recent backend API logs:"
-microk8s kubectl -n "${NAMESPACE}" logs deployment/api --tail=200 || true
+"${MICROK8S_BIN}" kubectl -n "${NAMESPACE}" logs deployment/api --tail=200 || true
 echo
 echo "Recent frontend logs:"
-microk8s kubectl -n "${NAMESPACE}" logs deployment/frontend --tail=200 || true
+"${MICROK8S_BIN}" kubectl -n "${NAMESPACE}" logs deployment/frontend --tail=200 || true
 echo
 
 if [[ "${ANDROID_BUILD}" == "true" ]]; then
-  echo "Building Android debug APK"
+  android_gradle_task="assembleDebug"
+  android_output_path="${ANDROID_DIR}/app/build/outputs/apk/debug/app-debug.apk"
+  android_build_label="debug APK"
+  if [[ -f "${ANDROID_KEYSTORE_PROPERTIES_FILE}" ]]; then
+    android_gradle_task="assembleRelease"
+    android_output_path="${ANDROID_DIR}/app/build/outputs/apk/release/app-release.apk"
+    android_build_label="signed release APK"
+  fi
+
+  echo "Building Android ${android_build_label}"
   if [[ ! -d "${FRONTEND_DIR}" ]]; then
     echo "Frontend directory not found at ${FRONTEND_DIR}" >&2
     exit 1
@@ -326,11 +346,11 @@ if [[ "${ANDROID_BUILD}" == "true" ]]; then
   fi
 
   pushd "${ANDROID_DIR}" >/dev/null
-  ./gradlew assembleDebug
+  ./gradlew "${android_gradle_task}"
   popd >/dev/null
 
-  echo "Android APK built:"
-  echo "  ${ANDROID_DIR}/app/build/outputs/apk/debug/app-debug.apk"
+  echo "Android ${android_build_label} built:"
+  echo "  ${android_output_path}"
   echo
 fi
 

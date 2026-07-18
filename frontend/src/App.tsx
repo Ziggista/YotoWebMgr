@@ -112,7 +112,7 @@ const yotoDebugPresets = [
   { label: "Family images", method: "GET" as const, path: "/media/family/images" },
 ];
 
-type CardWorkflowStep = {
+type WorkflowStep = {
   key: string;
   label: string;
   done: boolean;
@@ -291,7 +291,7 @@ async function copyToClipboard(value: string): Promise<boolean> {
   }
 }
 
-function cardWorkflowSteps(card: PhysicalCard | null): CardWorkflowStep[] {
+function cardWorkflowSteps(card: PhysicalCard | null): WorkflowStep[] {
   const readSummary = card?.nfc_serial_number ?? card?.programmable_id ?? card?.ndef_payload_text;
   return [
     {
@@ -325,6 +325,95 @@ function cardWorkflowSteps(card: PhysicalCard | null): CardWorkflowStep[] {
       detail: card?.notes ?? "Tap the card on the player and record the result.",
     },
   ];
+}
+
+function latestJobForItem(jobs: Job[], type: string): Job | null {
+  return jobs
+    .filter((job) => job.type === type)
+    .sort((left, right) => right.id - left.id)[0] ?? null;
+}
+
+function latestYotoPlaylist(playlists: YotoPlaylistDraft[]): YotoPlaylistDraft | null {
+  return [...playlists].sort((left, right) => right.id - left.id)[0] ?? null;
+}
+
+function yotoPlaylistWorkflowSteps(
+  detail: LibraryItemDetail,
+  jobs: Job[],
+  playlists: YotoPlaylistDraft[],
+): WorkflowStep[] {
+  const processingJob = latestJobForItem(jobs, "transcode_audio");
+  const playlistJob = latestJobForItem(jobs, "create_yoto_playlist");
+  const playlist = latestYotoPlaylist(playlists);
+  const processed = detail.processed_assets.length > 0;
+  const localDraftReady = Boolean(playlist);
+  const remoteCreated = Boolean(
+    playlist &&
+      (playlist.status === "remote_created" ||
+        playlist.status === "remote_linked" ||
+        playlist.remote_playlist_id ||
+        playlist.remote_playlist_uri),
+  );
+  const readyForCards = Boolean(playlist?.remote_playlist_uri || playlist?.remote_playlist_id);
+
+  return [
+    {
+      key: "processed",
+      label: "Audio processed",
+      done: processed,
+      detail: processed
+        ? `Generated ${detail.processed_assets.length} Yoto-ready asset(s).`
+        : processingJob
+          ? `${processingJob.status} · ${processingJob.progress_percent}% · ${processingJob.progress_message}`
+          : "Run Process audio to create Yoto-ready files first.",
+    },
+    {
+      key: "draft",
+      label: "Local playlist draft",
+      done: localDraftReady,
+      detail: localDraftReady
+        ? `Draft #${playlist?.id ?? "?"} is ${playlist?.status ?? "queued"} with ${yotoDraftChapterCount(
+            playlist?.payload ?? {},
+          )} track(s).`
+        : playlistJob
+          ? `${playlistJob.status} · ${playlistJob.progress_percent}% · ${playlistJob.progress_message}`
+          : "Queue Yoto playlist to build the local payload and draft.",
+    },
+    {
+      key: "cloud",
+      label: "Yoto cloud content",
+      done: remoteCreated,
+      detail: remoteCreated
+        ? `Created in Yoto cloud as ${playlist?.remote_playlist_uri ?? playlist?.remote_playlist_id}.`
+        : playlist?.last_error
+          ? `Last cloud error: ${playlist.last_error}`
+          : localDraftReady
+            ? "Use Create live playlist and link cards, then wait for the remote playlist ID or URI."
+            : "Cloud create starts after the local draft exists.",
+    },
+    {
+      key: "cards",
+      label: "Ready for card write/link",
+      done: readyForCards,
+      detail: readyForCards
+        ? "The Yoto playlist exists remotely. Go to Cards to write the payload to a blank card or mark an existing card linked."
+        : "Card programming stays blocked until the remote playlist ID or URI is recorded here.",
+    },
+  ];
+}
+
+function workflowStatusSummary(steps: WorkflowStep[]): { title: string; detail: string } {
+  const nextStep = steps.find((step) => !step.done);
+  if (!nextStep) {
+    return {
+      title: "Workflow complete",
+      detail: "The known steps are complete. Final verification now happens on the physical card and player.",
+    };
+  }
+  return {
+    title: `Current stage: ${nextStep.label}`,
+    detail: nextStep.detail,
+  };
 }
 
 function PlaceholderPage({ title }: { title: string }) {
@@ -429,10 +518,10 @@ function YotoJsonTree({ value, depth = 0 }: { value: unknown; depth?: number }) 
   return <span className="json-primitive">{String(value)}</span>;
 }
 
-function CardWorkflowChecklist({ card }: { card: PhysicalCard | null }) {
+function WorkflowChecklist({ steps }: { steps: WorkflowStep[] }) {
   return (
     <div className="card-workflow-steps">
-      {cardWorkflowSteps(card).map((step, index) => (
+      {steps.map((step, index) => (
         <article className={`workflow-step${step.done ? " workflow-step-done" : ""}`} key={step.key}>
           <span className="workflow-step-number">{step.done ? "OK" : index + 1}</span>
           <div>
@@ -443,6 +532,10 @@ function CardWorkflowChecklist({ card }: { card: PhysicalCard | null }) {
       ))}
     </div>
   );
+}
+
+function CardWorkflowChecklist({ card }: { card: PhysicalCard | null }) {
+  return <WorkflowChecklist steps={cardWorkflowSteps(card)} />;
 }
 
 function formatDuration(seconds: number | null): string {
@@ -1672,6 +1765,9 @@ function LibraryDetailPage() {
     (total, track) => total + (track.duration_seconds ?? 0),
     0,
   );
+  const yotoSteps = yotoPlaylistWorkflowSteps(detail, jobs, yotoPlaylists);
+  const yotoSummary = workflowStatusSummary(yotoSteps);
+  const currentYotoPlaylist = latestYotoPlaylist(yotoPlaylists);
 
   return (
     <section className="panel">
@@ -1735,6 +1831,23 @@ function LibraryDetailPage() {
         <div className="summary-tile">
           <span className="summary-label">Assets</span>
           <strong>{detail.processed_assets.length}</strong>
+        </div>
+      </div>
+
+      <div className="detail-note workflow-overview-panel">
+        <p className="eyebrow">Yoto workflow</p>
+        <h3>{yotoSummary.title}</h3>
+        <p>{yotoSummary.detail}</p>
+        <div className="workflow-fact-row">
+          <span className={`status-pill${currentYotoPlaylist?.remote_playlist_uri || currentYotoPlaylist?.remote_playlist_id ? "" : " status-pill-muted"}`}>
+            Cloud {currentYotoPlaylist?.remote_playlist_uri || currentYotoPlaylist?.remote_playlist_id ? "created" : "pending"}
+          </span>
+          <span className="status-pill status-pill-muted">
+            Draft {currentYotoPlaylist?.status ?? "not queued"}
+          </span>
+          <span className="status-pill status-pill-muted">
+            Next {yotoSteps.find((step) => !step.done)?.label ?? "Verify physical card"}
+          </span>
         </div>
       </div>
 
@@ -2007,6 +2120,7 @@ function LibraryDetailPage() {
             Queue Yoto playlist
           </button>
         </div>
+        <WorkflowChecklist steps={yotoSteps} />
         {yotoPlaylists.length === 0 ? (
           <EmptyState message="No Yoto playlist drafts queued yet." />
         ) : (
@@ -3900,6 +4014,9 @@ function CardDetailPage() {
     );
   }
 
+  const cardSteps = cardWorkflowSteps(card);
+  const cardSummary = workflowStatusSummary(cardSteps);
+
   return (
     <section className="panel">
       <div className="section-header">
@@ -3916,6 +4033,11 @@ function CardDetailPage() {
       </div>
 
       <div className="detail-grid">
+        <article className="detail-block workflow-overview-card">
+          <h3>{cardSummary.title}</h3>
+          <p className="muted">{cardSummary.detail}</p>
+          <WorkflowChecklist steps={cardSteps} />
+        </article>
         <article className="detail-block">
           <h3>Identifiers</h3>
           <p className="muted">Programmable ID: {card.programmable_id ?? "Not recorded"}</p>
