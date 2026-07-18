@@ -16,6 +16,7 @@ htmlcov/
 dist/
 build/
 frontend/android/local.properties
+frontend/android/keystore.properties
 *.egg-info/
 node_modules/
 .vite/
