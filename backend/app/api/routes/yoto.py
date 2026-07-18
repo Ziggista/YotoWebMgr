@@ -649,6 +649,20 @@ def _latest_processed_asset_by_track(db: Session, item_id: int) -> dict[int, Pro
     return latest_by_track
 
 
+def _extract_yoto_upload_descriptor(upload_payload: dict[str, Any]) -> tuple[str | None, str | None]:
+    nested_upload = upload_payload.get("upload")
+    if isinstance(nested_upload, dict):
+        upload_id = nested_upload.get("uploadId")
+        upload_url = nested_upload.get("uploadUrl")
+    else:
+        upload_id = upload_payload.get("uploadId")
+        upload_url = upload_payload.get("uploadUrl")
+
+    normalized_upload_id = upload_id.strip() if isinstance(upload_id, str) and upload_id.strip() else None
+    normalized_upload_url = upload_url.strip() if isinstance(upload_url, str) and upload_url.strip() else None
+    return normalized_upload_id, normalized_upload_url
+
+
 def _match_draft_track(
     *,
     raw_chapter: dict[str, Any],
@@ -833,19 +847,18 @@ async def _build_live_payload_from_draft(
                 detail=_response_excerpt(upload_payload) or "Yoto upload URL request failed.",
             )
 
-        upload_id = upload_payload.get("uploadId")
-        if not isinstance(upload_id, str) or not upload_id.strip():
+        upload_id, upload_url = _extract_yoto_upload_descriptor(upload_payload)
+        if upload_id is None:
             raise HTTPException(status_code=502, detail="Yoto upload URL response did not include an uploadId.")
 
-        upload_url = upload_payload.get("uploadUrl")
-        if isinstance(upload_url, str) and upload_url.strip():
-            await _upload_file_to_yoto_signed_url(upload_url.strip(), source_path)
+        if upload_url is not None:
+            await _upload_file_to_yoto_signed_url(upload_url, source_path)
 
         transcode_payload, stored_tokens, refreshed = await _poll_yoto_transcoded_audio(
             db=db,
             credential=credential,
             stored_tokens=stored_tokens,
-            upload_id=upload_id.strip(),
+            upload_id=upload_id,
         )
         refreshed_any = refreshed_any or refreshed
 
