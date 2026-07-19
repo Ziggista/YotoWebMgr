@@ -970,6 +970,33 @@ a {
   gap: 12px;
 }
 
+.create-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.create-card-panel {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 16px;
+  background: rgba(6, 22, 26, 0.52);
+  border: 1px solid rgba(255, 240, 214, 0.12);
+}
+
+.create-card-panel h3,
+.create-card-summary p {
+  margin: 0;
+}
+
+.create-card-summary {
+  display: grid;
+  gap: 6px;
+}
+
 .review-panel {
   display: grid;
   gap: 12px;

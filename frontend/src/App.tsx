@@ -89,7 +89,7 @@ import {
 import { resolveAndroidUpdateManifestUrl } from "./api-config";
 import "./App.css";
 
-const sections = ["Library", "Import", "Cards", "Jobs", "Tags", "Settings"];
+const sections = ["Library", "Create", "Import", "Cards", "Jobs", "Tags", "Settings"];
 const sessionStorageKey = "yotowebmgr.session";
 const contentTypes = [
   "Audiobook",
@@ -491,6 +491,41 @@ function workflowStatusSummary(steps: WorkflowStep[]): { title: string; detail: 
     title: `Current stage: ${nextStep.label}`,
     detail: nextStep.detail,
   };
+}
+
+function preferredCreateItem(items: LibraryItem[]): LibraryItem | null {
+  const ranked = [...items].sort((left, right) => {
+    const score = (item: LibraryItem) => {
+      if (item.readiness_status === "yoto_remote_created" || item.readiness_status === "yoto_remote_linked") {
+        return 0;
+      }
+      if (item.readiness_status === "awaiting_remote_mapping") {
+        return 1;
+      }
+      if (item.readiness_status === "needs_yoto_upload") {
+        return 2;
+      }
+      return 3;
+    };
+    return score(left) - score(right) || left.id - right.id;
+  });
+  return ranked[0] ?? null;
+}
+
+function preferredCreateCard(cards: PhysicalCard[]): PhysicalCard | null {
+  const ranked = [...cards].sort((left, right) => {
+    const score = (card: PhysicalCard) => {
+      if (card.status === "available" || card.status === "ready_to_link") {
+        return 0;
+      }
+      if (!card.yoto_playlist_uri) {
+        return 1;
+      }
+      return 2;
+    };
+    return score(left) - score(right) || left.id - right.id;
+  });
+  return ranked[0] ?? null;
 }
 
 function PlaceholderPage({ title }: { title: string }) {
@@ -1588,6 +1623,333 @@ function LibraryPage() {
         </div>
       ) : null}
       {linkMessage ? <p className="muted">{linkMessage}</p> : null}
+    </section>
+  );
+}
+
+function CreateCardPage() {
+  const [items, setItems] = useState<LibraryItem[]>([]);
+  const [cards, setCards] = useState<PhysicalCard[]>([]);
+  const [selectedItemId, setSelectedItemId] = useState<number | null>(null);
+  const [selectedCardId, setSelectedCardId] = useState<number | null>(null);
+  const [detail, setDetail] = useState<LibraryItemDetail | null>(null);
+  const [readiness, setReadiness] = useState<ReadinessResponse | null>(null);
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [yotoPlaylists, setYotoPlaylists] = useState<YotoPlaylistDraft[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+
+  async function loadSelections() {
+    const [nextItems, nextCards] = await Promise.all([fetchLibraryItems(), fetchCards()]);
+    setItems(nextItems);
+    setCards(nextCards);
+    setSelectedItemId((current) => current ?? preferredCreateItem(nextItems)?.id ?? nextItems[0]?.id ?? null);
+    setSelectedCardId((current) => current ?? preferredCreateCard(nextCards)?.id ?? nextCards[0]?.id ?? null);
+  }
+
+  async function refreshSelectedItem(itemId: number) {
+    const [nextDetail, nextReadiness, nextJobs, nextPlaylists] = await Promise.all([
+      fetchLibraryItemDetail(itemId),
+      fetchReadiness(itemId),
+      fetchJobs(),
+      fetchYotoPlaylists(itemId),
+    ]);
+    setDetail(nextDetail);
+    setReadiness(nextReadiness);
+    setJobs(nextJobs.filter((job) => job.related_library_item_id === itemId));
+    setYotoPlaylists(nextPlaylists);
+    setItems((current) => current.map((item) => (item.id === nextDetail.item.id ? nextDetail.item : item)));
+  }
+
+  useEffect(() => {
+    setLoading(true);
+    void loadSelections()
+      .catch((loadError) =>
+        setError(loadError instanceof Error ? loadError.message : "Failed to load create-card data."),
+      )
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    if (!selectedItemId) {
+      setDetail(null);
+      setReadiness(null);
+      setJobs([]);
+      setYotoPlaylists([]);
+      return;
+    }
+    setLoading(true);
+    void refreshSelectedItem(selectedItemId)
+      .catch((loadError) =>
+        setError(loadError instanceof Error ? loadError.message : "Failed to load the selected library item."),
+      )
+      .finally(() => setLoading(false));
+  }, [selectedItemId]);
+
+  async function runAction(action: () => Promise<void>, successMessage: string) {
+    setWorking(true);
+    setError(null);
+    setMessage(null);
+    try {
+      await action();
+      if (selectedItemId) {
+        await refreshSelectedItem(selectedItemId);
+      }
+      const nextCards = await fetchCards();
+      setCards(nextCards);
+      setMessage(successMessage);
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "Action failed.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  const selectedCard = cards.find((card) => card.id === selectedCardId) ?? null;
+  const latestPlaylist = latestYotoPlaylist(yotoPlaylists);
+  const itemSteps = detail ? yotoPlaylistWorkflowSteps(detail, jobs, yotoPlaylists) : [];
+  const itemSummary = itemSteps.length > 0 ? workflowStatusSummary(itemSteps) : null;
+  const canCreateLive = Boolean(latestPlaylist && !latestPlaylist.remote_playlist_id && !latestPlaylist.remote_playlist_uri);
+  const readyToLink = Boolean(
+    detail &&
+      latestPlaylist &&
+      (latestPlaylist.remote_playlist_id || latestPlaylist.remote_playlist_uri),
+  );
+  const canQueueLink = Boolean(
+    detail &&
+      selectedCardId &&
+      latestPlaylist &&
+      (latestPlaylist.remote_playlist_id || latestPlaylist.remote_playlist_uri),
+  );
+
+  if (loading && !detail) {
+    return (
+      <section className="panel">
+        <p className="eyebrow">Create</p>
+        <h2>Loading workflow</h2>
+      </section>
+    );
+  }
+
+  return (
+    <section className="panel">
+      <div className="section-header">
+        <div>
+          <p className="eyebrow">Create</p>
+          <h2>Create Yoto card</h2>
+          <p className="muted">Pick a library item, create it in Yoto cloud, then hand it off to a physical card.</p>
+        </div>
+        <button
+          className="ghost-button"
+          onClick={() => {
+            setLoading(true);
+            void loadSelections()
+              .catch((loadError) =>
+                setError(loadError instanceof Error ? loadError.message : "Failed to refresh create-card data."),
+              )
+              .finally(() => setLoading(false));
+          }}
+          type="button"
+        >
+          Refresh
+        </button>
+      </div>
+
+      {error ? <p className="auth-error">{error}</p> : null}
+      {message ? <p className="muted">{message}</p> : null}
+      {readyToLink ? (
+        <div className="detail-note create-card-notice">
+          <p className="eyebrow">Ready</p>
+          <h3>Done processing. Ready to link to card.</h3>
+          <p>
+            Yoto cloud content exists for <strong>{detail?.item.title}</strong>. Choose a target card below, queue the
+            handoff, then open the Cards screen to write, clone, or test the physical tag.
+          </p>
+        </div>
+      ) : null}
+
+      <div className="create-card-grid">
+        <article className="create-card-panel">
+          <h3>1. Choose content</h3>
+          <label>
+            Library item
+            <select
+              onChange={(event) => setSelectedItemId(event.target.value ? Number(event.target.value) : null)}
+              value={selectedItemId ?? ""}
+            >
+              {items.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.title} ({item.content_type})
+                </option>
+              ))}
+            </select>
+          </label>
+          {detail ? (
+            <div className="create-card-summary">
+              <strong>{detail.item.title}</strong>
+              <p className="muted">
+                {detail.item.status} · {detail.item.readiness_status} · {detail.tracks.length} tracks
+              </p>
+              <p className="muted">
+                {detail.processed_assets.length} processed asset(s) · {yotoPlaylists.length} Yoto draft(s)
+              </p>
+            </div>
+          ) : (
+            <EmptyState message="Choose a library item to start." />
+          )}
+          {readiness ? (
+            <div className="compact-list">
+              {readiness.checks.slice(0, 4).map((check) => (
+                <p className="muted" key={check.key}>
+                  {check.ok ? "OK" : "Review"} · {check.label}: {check.detail}
+                </p>
+              ))}
+            </div>
+          ) : null}
+          {detail ? (
+            <div className="button-row">
+              <Link className="secondary-button" to={`/library/${detail.item.id}`}>
+                Open library detail
+              </Link>
+            </div>
+          ) : null}
+        </article>
+
+        <article className="create-card-panel">
+          <h3>2. Cloud workflow</h3>
+          {itemSummary ? (
+            <div className="detail-note workflow-overview-panel">
+              <h3>{itemSummary.title}</h3>
+              <p>{itemSummary.detail}</p>
+            </div>
+          ) : (
+            <EmptyState message="Choose a library item to see workflow state." />
+          )}
+          {itemSteps.length > 0 ? <WorkflowChecklist steps={itemSteps} /> : null}
+          <div className="button-row">
+            <button
+              className="primary-button"
+              disabled={!selectedItemId || working}
+              onClick={() =>
+                void runAction(
+                  async () => {
+                    await queueLibraryItemProcessing(selectedItemId as number);
+                  },
+                  "Queued audio processing.",
+                )
+              }
+              type="button"
+            >
+              Process audio
+            </button>
+            <button
+              className="secondary-button"
+              disabled={!selectedItemId || working}
+              onClick={() =>
+                void runAction(
+                  async () => {
+                    await queueYotoPlaylist(selectedItemId as number);
+                  },
+                  "Queued local Yoto playlist draft creation.",
+                )
+              }
+              type="button"
+            >
+              Queue Yoto draft
+            </button>
+            <button
+              className="secondary-button"
+              disabled={!latestPlaylist || !canCreateLive || working}
+              onClick={() =>
+                void runAction(
+                  async () => {
+                    await createLiveYotoPlaylist(latestPlaylist!.id, {
+                      request_payload: null,
+                      mark_linked_cards_ready: true,
+                    });
+                  },
+                  "Created live Yoto cloud content.",
+                )
+              }
+              type="button"
+            >
+              Create in Yoto cloud
+            </button>
+          </div>
+          {latestPlaylist ? (
+            <p className="muted">
+              Latest draft #{latestPlaylist.id}: {latestPlaylist.status}
+              {latestPlaylist.remote_playlist_uri || latestPlaylist.remote_playlist_id
+                ? ` · ${latestPlaylist.remote_playlist_uri ?? latestPlaylist.remote_playlist_id}`
+                : ""}
+              {latestPlaylist.last_error ? ` · error: ${latestPlaylist.last_error}` : ""}
+            </p>
+          ) : null}
+        </article>
+
+        <article className="create-card-panel">
+          <h3>3. Choose card</h3>
+          <label>
+            Target card
+            <select
+              onChange={(event) => setSelectedCardId(event.target.value ? Number(event.target.value) : null)}
+              value={selectedCardId ?? ""}
+            >
+              {cards.map((card) => (
+                <option key={card.id} value={card.id}>
+                  {card.display_name} ({card.card_code})
+                </option>
+              ))}
+            </select>
+          </label>
+          {selectedCard ? (
+            <>
+              <div className="create-card-summary">
+                <strong>{selectedCard.display_name}</strong>
+                <p className="muted">
+                  {selectedCard.status} · {selectedCard.card_kind} ·{" "}
+                  {selectedCard.yoto_playlist_uri ?? "No linked playlist yet"}
+                </p>
+              </div>
+              <CardWorkflowChecklist card={selectedCard} />
+              <div className="button-row">
+                <button
+                  className="primary-button"
+                  disabled={!canQueueLink || working}
+                  onClick={() =>
+                    void runAction(
+                      async () => {
+                        await linkLibraryItemToCard(selectedItemId as number, selectedCard.id);
+                      },
+                      `Queued ${selectedCard.display_name} for linking/programming handoff.`,
+                    )
+                  }
+                  type="button"
+                >
+                  Hand off to this card
+                </button>
+                <Link className="secondary-button" to={`/cards/${selectedCard.id}`}>
+                  Open card detail
+                </Link>
+              </div>
+              <p className="muted">
+                This step records the library item to card handoff. Use the Cards screen to scan, write, clone, or
+                test the physical tag.
+              </p>
+              <p className="muted">
+                Next action:{" "}
+                {canQueueLink
+                  ? "hand off to this card, then open card detail to write or clone the physical tag."
+                  : "finish the Yoto cloud step first, then return here to hand off to a card."}
+              </p>
+            </>
+          ) : (
+            <EmptyState message="Create or scan a card first in the Cards tab if none are available yet." />
+          )}
+        </article>
+      </div>
     </section>
   );
 }
@@ -5284,6 +5646,10 @@ export default function App() {
           <Route
             path="/"
             element={session ? <LibraryPage /> : <PlaceholderPage title="Home" />}
+          />
+          <Route
+            path="/create"
+            element={session ? <CreateCardPage /> : <PlaceholderPage title="Create" />}
           />
           <Route
             path="/library/:itemId"
