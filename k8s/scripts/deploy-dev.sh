@@ -93,6 +93,74 @@ postgres_psql() {
     "PGPASSWORD='change-me' psql -U yotowebmgr -d yotowebmgr -v ON_ERROR_STOP=1 -At -c \"$sql\""
 }
 
+postgres_table_exists() {
+  local table_name="$1"
+  [[ "$(postgres_psql "SELECT to_regclass('public.${table_name}') IS NOT NULL;" 2>/dev/null || true)" == "t" ]]
+}
+
+wait_for_database_schema() {
+  local timeout_seconds="${1:-180}"
+  local started_at
+  local elapsed
+  local settings_present
+  local jobs_present
+  local version_value
+  started_at="$(date +%s)"
+
+  echo "Waiting for Alembic migrations to materialise the database schema"
+  while true; do
+    settings_present="$(postgres_psql "SELECT to_regclass('public.settings') IS NOT NULL;" 2>/dev/null || true)"
+    jobs_present="$(postgres_psql "SELECT to_regclass('public.jobs') IS NOT NULL;" 2>/dev/null || true)"
+    version_value="$(postgres_psql "SELECT COALESCE((SELECT version_num FROM alembic_version LIMIT 1), '');" 2>/dev/null || true)"
+    if [[ "${settings_present}" == "t" && "${jobs_present}" == "t" && -n "${version_value}" ]]; then
+      echo "Database schema is ready at Alembic revision ${version_value}"
+      return 0
+    fi
+
+    elapsed="$(( $(date +%s) - started_at ))"
+    if (( elapsed >= timeout_seconds )); then
+      echo "Timed out waiting for database schema readiness after ${timeout_seconds}s." >&2
+      echo "settings table present: ${settings_present:-unknown}" >&2
+      echo "jobs table present: ${jobs_present:-unknown}" >&2
+      echo "alembic version: ${version_value:-missing}" >&2
+      "${MICROK8S_BIN}" kubectl -n "${NAMESPACE}" logs deployment/api --tail=120 || true
+      return 1
+    fi
+
+    sleep 2
+  done
+}
+
+assert_deployment_available() {
+  local deployment_name="$1"
+  local timeout_seconds="${2:-120}"
+  local started_at
+  local elapsed
+  local status_lines
+  started_at="$(date +%s)"
+
+  echo "Waiting for ${deployment_name} pods to stay Ready"
+  while true; do
+    status_lines="$("${MICROK8S_BIN}" kubectl -n "${NAMESPACE}" get pods -l "app=${deployment_name}" --no-headers 2>/dev/null || true)"
+    if [[ -n "${status_lines}" ]] && ! grep -Eq 'CrashLoopBackOff|Error|ImagePullBackOff|RunContainerError|CreateContainerConfigError|Completed' <<<"${status_lines}"; then
+      if awk '{if ($2 !~ /^1\/1$/) exit 1} END {exit 0}' <<<"${status_lines}"; then
+        echo "${deployment_name} pods are Ready"
+        return 0
+      fi
+    fi
+
+    elapsed="$(( $(date +%s) - started_at ))"
+    if (( elapsed >= timeout_seconds )); then
+      echo "Timed out waiting for ${deployment_name} pods to become stable." >&2
+      "${MICROK8S_BIN}" kubectl -n "${NAMESPACE}" get pods -l "app=${deployment_name}" -o wide || true
+      "${MICROK8S_BIN}" kubectl -n "${NAMESPACE}" logs "deployment/${deployment_name}" --tail=120 || true
+      return 1
+    fi
+
+    sleep 2
+  done
+}
+
 backup_yoto_state() {
   if [[ "${FORCE_DESTROY}" == "true" ]]; then
     echo "Force mode enabled: Yoto database-backed state will not be preserved."
@@ -101,6 +169,16 @@ backup_yoto_state() {
 
   if ! "${MICROK8S_BIN}" kubectl -n "${NAMESPACE}" get deploy postgres >/dev/null 2>&1; then
     echo "No existing postgres deployment found to preserve Yoto database-backed state."
+    return 0
+  fi
+
+  if ! postgres_table_exists "settings"; then
+    echo "Skipping Yoto database-backed state backup because the current database schema is incomplete (missing settings table)."
+    return 0
+  fi
+
+  if ! postgres_table_exists "yoto_credential_states"; then
+    echo "Skipping Yoto credential-row backup because the current database schema is incomplete (missing yoto_credential_states table)."
     return 0
   fi
 
@@ -317,9 +395,13 @@ if [[ -n "${SECRET_BACKUP_FILE}" && -f "${SECRET_BACKUP_FILE}" ]]; then
 fi
 "${MICROK8S_BIN}" kubectl -n "${NAMESPACE}" rollout status deployment/postgres --timeout=180s
 "${MICROK8S_BIN}" kubectl -n "${NAMESPACE}" rollout status deployment/api --timeout=180s
+wait_for_database_schema 180
+restore_yoto_state
 "${MICROK8S_BIN}" kubectl -n "${NAMESPACE}" rollout status deployment/worker --timeout=180s
 "${MICROK8S_BIN}" kubectl -n "${NAMESPACE}" rollout status deployment/frontend --timeout=180s
-restore_yoto_state
+assert_deployment_available api 120
+assert_deployment_available worker 120
+assert_deployment_available frontend 120
 
 echo
 echo "Pods:"

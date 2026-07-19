@@ -1,6 +1,6 @@
 """add card programming session states
 
-Revision ID: 0017_card_programming_session_states
+Revision ID: 0017_programming_session_state
 Revises: 0016_card_programming_sessions
 Create Date: 2026-07-19 01:00:00
 """
@@ -11,7 +11,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = "0017_card_programming_session_states"
+revision: str = "0017_programming_session_state"
 down_revision: Union[str, None] = "0016_card_programming_sessions"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
