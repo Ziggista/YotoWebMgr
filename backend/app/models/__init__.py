@@ -4,7 +4,13 @@ from app.models.artwork import ArtworkAsset
 from app.models.imports import ImportRequest
 from app.models.job import Job
 from app.models.library import LibraryItem
-from app.models.card import CardAssignmentEvent, CardProgrammingEvent, CardScanDump, PhysicalCard
+from app.models.card import (
+    CardAssignmentEvent,
+    CardProgrammingEvent,
+    CardProgrammingSession,
+    CardScanDump,
+    PhysicalCard,
+)
 from app.models.playlist import (
     CardPlanPart,
     CardPlanTrackAssignment,
@@ -29,6 +35,7 @@ __all__ = [
     "CardPlanTrackAssignment",
     "CardAssignmentEvent",
     "CardProgrammingEvent",
+    "CardProgrammingSession",
     "CardScanDump",
     "Job",
     "LibraryItem",

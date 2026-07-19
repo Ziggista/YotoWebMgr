@@ -581,6 +581,46 @@ class CardProgrammingEventResponse(BaseModel):
     created_at: datetime
 
 
+class CardProgrammingSessionUpdate(BaseModel):
+    session_key: str = Field(default="default", min_length=1, max_length=80)
+    active_card_id: int | None = Field(default=None, gt=0)
+    source: str | None = Field(default=None, max_length=80)
+    target_label: str | None = Field(default=None, max_length=240)
+    detail: str | None = Field(default=None, max_length=4000)
+    library_item_id: int | None = Field(default=None, gt=0)
+    playlist_draft_id: int | None = Field(default=None, gt=0)
+    playlist_uri: str | None = Field(default=None, max_length=500)
+    programmable_id: str | None = Field(default=None, max_length=160)
+    ndef_payload_text: str | None = Field(default=None, max_length=2000)
+    ndef_payload_hex: str | None = Field(default=None, max_length=4000)
+    source_scan_dump_id: int | None = Field(default=None, gt=0)
+    verification_armed: bool | None = None
+    last_verification_event_id: int | None = Field(default=None, gt=0)
+    extra_json: dict[str, Any] | None = None
+    clear: bool = False
+
+
+class CardProgrammingSessionResponse(BaseModel):
+    id: int
+    session_key: str
+    active_card_id: int | None
+    source: str | None
+    target_label: str | None
+    detail: str | None
+    library_item_id: int | None
+    playlist_draft_id: int | None
+    playlist_uri: str | None
+    programmable_id: str | None
+    ndef_payload_text: str | None
+    ndef_payload_hex: str | None
+    source_scan_dump_id: int | None
+    verification_armed: bool
+    last_verification_event_id: int | None
+    extra_json: dict[str, Any] | None
+    created_at: datetime
+    updated_at: datetime
+
+
 class LinkCardRequest(BaseModel):
     card_id: int = Field(gt=0)
 

@@ -375,6 +375,27 @@ export interface CardProgrammingEvent {
   created_at: string;
 }
 
+export interface CardProgrammingSession {
+  id: number;
+  session_key: string;
+  active_card_id: number | null;
+  source: string | null;
+  target_label: string | null;
+  detail: string | null;
+  library_item_id: number | null;
+  playlist_draft_id: number | null;
+  playlist_uri: string | null;
+  programmable_id: string | null;
+  ndef_payload_text: string | null;
+  ndef_payload_hex: string | null;
+  source_scan_dump_id: number | null;
+  verification_armed: boolean;
+  last_verification_event_id: number | null;
+  extra_json: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface LinkCardResponse {
   library_item: LibraryItem;
   card: PhysicalCard;
@@ -1255,6 +1276,43 @@ export async function createCardProgrammingEvent(payload: {
     throw new Error(await errorMessage(response, "Failed to save card programming event."));
   }
   return response.json() as Promise<CardProgrammingEvent>;
+}
+
+export async function fetchCardProgrammingSession(sessionKey = "default"): Promise<CardProgrammingSession> {
+  const response = await apiFetch(`/api/v1/cards/programming-session?session_key=${encodeURIComponent(sessionKey)}`);
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to load card programming session."));
+  }
+  return response.json() as Promise<CardProgrammingSession>;
+}
+
+export async function updateCardProgrammingSession(payload: {
+  session_key?: string;
+  active_card_id?: number | null;
+  source?: string | null;
+  target_label?: string | null;
+  detail?: string | null;
+  library_item_id?: number | null;
+  playlist_draft_id?: number | null;
+  playlist_uri?: string | null;
+  programmable_id?: string | null;
+  ndef_payload_text?: string | null;
+  ndef_payload_hex?: string | null;
+  source_scan_dump_id?: number | null;
+  verification_armed?: boolean | null;
+  last_verification_event_id?: number | null;
+  extra_json?: Record<string, unknown> | null;
+  clear?: boolean;
+}): Promise<CardProgrammingSession> {
+  const response = await apiFetch("/api/v1/cards/programming-session", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to save card programming session."));
+  }
+  return response.json() as Promise<CardProgrammingSession>;
 }
 
 export async function dumpCardScan(payload: CardScanDumpRequest): Promise<void> {

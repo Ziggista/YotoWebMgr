@@ -8,12 +8,20 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db_session
-from app.models import CardAssignmentEvent, CardProgrammingEvent, CardScanDump, PhysicalCard
+from app.models import (
+    CardAssignmentEvent,
+    CardProgrammingEvent,
+    CardProgrammingSession,
+    CardScanDump,
+    PhysicalCard,
+)
 from app.schemas.foundation import (
     CardAssignmentEventResponse,
     CardCreate,
     CardProgrammingEventCreate,
     CardProgrammingEventResponse,
+    CardProgrammingSessionResponse,
+    CardProgrammingSessionUpdate,
     CardResponse,
     CardScanDumpEntry,
     CardScanDumpRequest,
@@ -110,6 +118,29 @@ def _build_card_programming_event_response(event: CardProgrammingEvent) -> CardP
     )
 
 
+def _build_card_programming_session_response(session: CardProgrammingSession) -> CardProgrammingSessionResponse:
+    return CardProgrammingSessionResponse(
+        id=session.id,
+        session_key=session.session_key,
+        active_card_id=session.active_card_id,
+        source=session.source,
+        target_label=session.target_label,
+        detail=session.detail,
+        library_item_id=session.library_item_id,
+        playlist_draft_id=session.playlist_draft_id,
+        playlist_uri=session.playlist_uri,
+        programmable_id=session.programmable_id,
+        ndef_payload_text=session.ndef_payload_text,
+        ndef_payload_hex=session.ndef_payload_hex,
+        source_scan_dump_id=session.source_scan_dump_id,
+        verification_armed=session.verification_armed,
+        last_verification_event_id=session.last_verification_event_id,
+        extra_json=session.extra_json,
+        created_at=session.created_at,
+        updated_at=session.updated_at,
+    )
+
+
 @router.get("", response_model=list[CardResponse])
 async def list_cards(db: Annotated[Session, Depends(get_db_session)]) -> list[CardResponse]:
     query = select(PhysicalCard).order_by(PhysicalCard.card_code.asc(), PhysicalCard.id.asc())
@@ -136,6 +167,86 @@ async def list_card_programming_events(
         .limit(50)
     )
     return [_build_card_programming_event_response(event) for event in events]
+
+
+@router.get("/programming-session", response_model=CardProgrammingSessionResponse)
+async def get_card_programming_session(
+    session_key: str = "default",
+    db: Annotated[Session, Depends(get_db_session)] = None,
+) -> CardProgrammingSessionResponse:
+    session = db.scalar(select(CardProgrammingSession).where(CardProgrammingSession.session_key == session_key))
+    if session is None:
+        session = CardProgrammingSession(session_key=session_key)
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+    return _build_card_programming_session_response(session)
+
+
+@router.put("/programming-session", response_model=CardProgrammingSessionResponse)
+async def update_card_programming_session(
+    payload: CardProgrammingSessionUpdate,
+    db: Annotated[Session, Depends(get_db_session)],
+) -> CardProgrammingSessionResponse:
+    session = db.scalar(
+        select(CardProgrammingSession).where(CardProgrammingSession.session_key == payload.session_key)
+    )
+    if session is None:
+        session = CardProgrammingSession(session_key=payload.session_key)
+        db.add(session)
+        db.flush()
+
+    if payload.clear:
+        session.active_card_id = None
+        session.source = None
+        session.target_label = None
+        session.detail = None
+        session.library_item_id = None
+        session.playlist_draft_id = None
+        session.playlist_uri = None
+        session.programmable_id = None
+        session.ndef_payload_text = None
+        session.ndef_payload_hex = None
+        session.source_scan_dump_id = None
+        session.verification_armed = False
+        session.last_verification_event_id = None
+        session.extra_json = None
+    else:
+        if payload.active_card_id is not None:
+            if db.get(PhysicalCard, payload.active_card_id) is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Card not found")
+            session.active_card_id = payload.active_card_id
+        if payload.source is not None:
+            session.source = payload.source
+        if payload.target_label is not None:
+            session.target_label = payload.target_label
+        if payload.detail is not None:
+            session.detail = payload.detail
+        if payload.library_item_id is not None:
+            session.library_item_id = payload.library_item_id
+        if payload.playlist_draft_id is not None:
+            session.playlist_draft_id = payload.playlist_draft_id
+        if payload.playlist_uri is not None:
+            session.playlist_uri = payload.playlist_uri
+        if payload.programmable_id is not None:
+            session.programmable_id = payload.programmable_id
+        if payload.ndef_payload_text is not None:
+            session.ndef_payload_text = payload.ndef_payload_text
+        if payload.ndef_payload_hex is not None:
+            session.ndef_payload_hex = payload.ndef_payload_hex
+        if payload.source_scan_dump_id is not None:
+            session.source_scan_dump_id = payload.source_scan_dump_id
+        if payload.verification_armed is not None:
+            session.verification_armed = payload.verification_armed
+        if payload.last_verification_event_id is not None:
+            session.last_verification_event_id = payload.last_verification_event_id
+        if payload.extra_json is not None:
+            session.extra_json = payload.extra_json
+
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    return _build_card_programming_session_response(session)
 
 
 @router.post("/scan-dumps", response_model=CardScanDumpResponse, status_code=202)

@@ -110,3 +110,32 @@ class CardProgrammingEvent(Base):
     observed_ndef_payload_hex: Mapped[str | None] = mapped_column(Text, nullable=True)
     extra_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class CardProgrammingSession(Base):
+    __tablename__ = "card_programming_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_key: Mapped[str] = mapped_column(String(80), unique=True, index=True, default="default")
+    active_card_id: Mapped[int | None] = mapped_column(ForeignKey("physical_cards.id"), nullable=True, index=True)
+    source: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    target_label: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    library_item_id: Mapped[int | None] = mapped_column(ForeignKey("library_items.id"), nullable=True, index=True)
+    playlist_draft_id: Mapped[int | None] = mapped_column(ForeignKey("yoto_playlist_drafts.id"), nullable=True, index=True)
+    playlist_uri: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    programmable_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    ndef_payload_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ndef_payload_hex: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_scan_dump_id: Mapped[int | None] = mapped_column(ForeignKey("card_scan_dumps.id"), nullable=True, index=True)
+    verification_armed: Mapped[bool] = mapped_column(Boolean, default=False)
+    last_verification_event_id: Mapped[int | None] = mapped_column(
+        ForeignKey("card_programming_events.id"), nullable=True, index=True
+    )
+    extra_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )

@@ -731,6 +731,45 @@ async def test_card_programming_event_endpoints_persist_write_and_verification(
     assert refreshed_card.last_scanned_at is not None
 
 
+async def test_card_programming_session_can_stage_and_clear_target(
+    api_client: AsyncClient,
+) -> None:
+    async with api_client as client:
+        initial = await client.get("/api/v1/cards/programming-session")
+        updated = await client.put(
+            "/api/v1/cards/programming-session",
+            json={
+                "session_key": "default",
+                "source": "yoto_playlist",
+                "target_label": "Bedtime Mix",
+                "detail": "https://my.yotoplay.com/playlist/playlist-123",
+                "playlist_uri": "https://my.yotoplay.com/playlist/playlist-123",
+                "programmable_id": "yoto:playlist:playlist-123",
+                "ndef_payload_text": "https://my.yotoplay.com/playlist/playlist-123",
+                "ndef_payload_hex": "68747470",
+                "verification_armed": True,
+                "extra_json": {"route": "/create"},
+            },
+        )
+        cleared = await client.put(
+            "/api/v1/cards/programming-session",
+            json={"session_key": "default", "clear": True},
+        )
+
+    assert initial.status_code == 200
+    assert initial.json()["session_key"] == "default"
+
+    assert updated.status_code == 200
+    assert updated.json()["target_label"] == "Bedtime Mix"
+    assert updated.json()["verification_armed"] is True
+    assert updated.json()["extra_json"]["route"] == "/create"
+
+    assert cleared.status_code == 200
+    assert cleared.json()["target_label"] is None
+    assert cleared.json()["playlist_uri"] is None
+    assert cleared.json()["verification_armed"] is False
+
+
 async def test_library_playlist_settings_tracks_icons_and_readiness(
     api_client: AsyncClient,
 ) -> None:
