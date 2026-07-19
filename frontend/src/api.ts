@@ -511,6 +511,12 @@ export interface BuildInfo {
   environment: string;
 }
 
+export interface UploadProgress {
+  loaded: number;
+  total: number | null;
+  percent: number | null;
+}
+
 export interface YotoApiDebugResponse {
   credential: YotoCredentialStatus;
   label: string;
@@ -536,6 +542,80 @@ async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
 
     clearStoredApiBaseUrl();
     return fetch(path, init);
+  }
+}
+
+function parseErrorDetail(payload: unknown, fallback: string): string {
+  if (payload && typeof payload === "object" && "detail" in payload) {
+    const detail = (payload as { detail?: unknown }).detail;
+    if (typeof detail === "string" && detail.trim()) {
+      return detail;
+    }
+  }
+  return fallback;
+}
+
+async function uploadFormData<T>(
+  path: string,
+  formData: FormData,
+  fallbackError: string,
+  onProgress?: (progress: UploadProgress) => void,
+): Promise<T> {
+  const uploadToUrl = (url: string) =>
+    new Promise<T>((resolve, reject) => {
+      const request = new XMLHttpRequest();
+      request.open("POST", url);
+      request.responseType = "text";
+      request.upload.onprogress = (event) => {
+        if (!onProgress) {
+          return;
+        }
+        const total = event.lengthComputable ? event.total : null;
+        const percent = total && total > 0 ? Math.min(100, Math.round((event.loaded / total) * 100)) : null;
+        onProgress({
+          loaded: event.loaded,
+          total,
+          percent,
+        });
+      };
+      request.onload = () => {
+        const responseText = request.responseText || "";
+        let payload: unknown = null;
+        if (responseText) {
+          try {
+            payload = JSON.parse(responseText);
+          } catch {
+            payload = responseText;
+          }
+        }
+        if (request.status >= 200 && request.status < 300) {
+          onProgress?.({
+            loaded: 1,
+            total: 1,
+            percent: 100,
+          });
+          resolve(payload as T);
+          return;
+        }
+        reject(new Error(parseErrorDetail(payload, fallbackError)));
+      };
+      request.onerror = () => {
+        reject(new TypeError("Network request failed."));
+      };
+      request.onabort = () => {
+        reject(new Error("Upload was cancelled."));
+      };
+      request.send(formData);
+    });
+
+  try {
+    return await uploadToUrl(resolveApiUrl(path));
+  } catch (error) {
+    if (!(error instanceof TypeError) || !hasStoredApiBaseUrl()) {
+      throw error;
+    }
+    clearStoredApiBaseUrl();
+    return uploadToUrl(path);
   }
 }
 
@@ -698,17 +778,19 @@ export async function updateLibraryItemSettings(
   return response.json() as Promise<LibraryItem>;
 }
 
-export async function uploadCoverArt(itemId: number, artworkFile: File): Promise<LibraryItem> {
+export async function uploadCoverArt(
+  itemId: number,
+  artworkFile: File,
+  onProgress?: (progress: UploadProgress) => void,
+): Promise<LibraryItem> {
   const formData = new FormData();
   formData.append("artwork_file", artworkFile);
-  const response = await apiFetch(`/api/v1/library/${itemId}/cover-art`, {
-    method: "POST",
-    body: formData,
-  });
-  if (!response.ok) {
-    throw new Error(await errorMessage(response, "Failed to upload cover art."));
-  }
-  return response.json() as Promise<LibraryItem>;
+  return uploadFormData<LibraryItem>(
+    `/api/v1/library/${itemId}/cover-art`,
+    formData,
+    "Failed to upload cover art.",
+    onProgress,
+  );
 }
 
 export async function queueArtworkPixelise(itemId: number): Promise<Job> {
@@ -1097,6 +1179,7 @@ export async function uploadImport(payload: {
   content_type: string;
   requested_by_user_slug?: string;
   media_file: File;
+  onProgress?: (progress: UploadProgress) => void;
 }): Promise<ImportRequest> {
   const formData = new FormData();
   formData.append("title", payload.title);
@@ -1105,15 +1188,12 @@ export async function uploadImport(payload: {
     formData.append("requested_by_user_slug", payload.requested_by_user_slug);
   }
   formData.append("media_file", payload.media_file);
-
-  const response = await apiFetch("/api/v1/imports/uploads", {
-    method: "POST",
-    body: formData,
-  });
-  if (!response.ok) {
-    throw new Error(await errorMessage(response, "Failed to upload import."));
-  }
-  return response.json() as Promise<ImportRequest>;
+  return uploadFormData<ImportRequest>(
+    "/api/v1/imports/uploads",
+    formData,
+    "Failed to upload import.",
+    payload.onProgress,
+  );
 }
 
 export async function fetchJobs(): Promise<Job[]> {

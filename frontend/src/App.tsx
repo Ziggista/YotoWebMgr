@@ -25,6 +25,7 @@ import {
   ReadinessResponse,
   SessionResponse,
   Tag,
+  UploadProgress,
   VersionEvent,
   YotoApiDebugResponse,
   YotoCredentialProbeResponse,
@@ -584,6 +585,29 @@ function currentRuntimeLabel(): string {
     return `${window.location.protocol}//${window.location.hostname || "browser"}`;
   }
   return "unknown";
+}
+
+function formatUploadBytes(value: number): string {
+  if (value < 1024) {
+    return `${value} B`;
+  }
+  if (value < 1024 * 1024) {
+    return `${(value / 1024).toFixed(1)} KB`;
+  }
+  if (value < 1024 * 1024 * 1024) {
+    return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+function uploadProgressLabel(progress: UploadProgress | null): string | null {
+  if (!progress) {
+    return null;
+  }
+  if (progress.total && progress.total > 0) {
+    return `${progress.percent ?? 0}% · ${formatUploadBytes(progress.loaded)} of ${formatUploadBytes(progress.total)}`;
+  }
+  return `${formatUploadBytes(progress.loaded)} uploaded`;
 }
 
 async function copyToClipboard(value: string): Promise<boolean> {
@@ -1276,6 +1300,7 @@ function LibraryPage() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [coverArtPath, setCoverArtPath] = useState("");
   const [coverArtFile, setCoverArtFile] = useState<File | null>(null);
+  const [coverArtUploadProgress, setCoverArtUploadProgress] = useState<UploadProgress | null>(null);
   const [trackIconPath, setTrackIconPath] = useState("");
   const [bulkTrackBehavior, setBulkTrackBehavior] = useState("continue");
   const [radioForm, setRadioForm] = useState({ title: "", stream_url: "", icon_path: "" });
@@ -1376,14 +1401,17 @@ function LibraryPage() {
   async function handleUploadCoverArt() {
     if (!detail || !coverArtFile) return;
     setError(null);
+    setCoverArtUploadProgress({ loaded: 0, total: coverArtFile.size || null, percent: 0 });
     try {
-      const updated = await uploadCoverArt(detail.item.id, coverArtFile);
+      const updated = await uploadCoverArt(detail.item.id, coverArtFile, setCoverArtUploadProgress);
       setCoverArtPath(updated.cover_art_path ?? "");
       setCoverArtFile(null);
       await refreshDetail(updated.id);
       setLinkMessage("Cover artwork uploaded.");
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : "Failed to upload cover art.");
+    } finally {
+      setCoverArtUploadProgress(null);
     }
   }
 
@@ -1762,12 +1790,29 @@ function LibraryPage() {
               </label>
               <button
                 className="ghost-button"
-                disabled={!coverArtFile}
+                disabled={!coverArtFile || coverArtUploadProgress !== null}
                 onClick={() => void handleUploadCoverArt()}
                 type="button"
               >
-                Upload cover
+                {coverArtUploadProgress ? `Uploading ${coverArtUploadProgress.percent ?? 0}%` : "Upload cover"}
               </button>
+              {coverArtUploadProgress ? (
+                <div className="upload-progress" aria-live="polite">
+                  <div
+                    className="upload-progress-bar"
+                    role="progressbar"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={coverArtUploadProgress.percent ?? 0}
+                  >
+                    <span
+                      className="upload-progress-fill"
+                      style={{ width: `${coverArtUploadProgress.percent ?? 0}%` }}
+                    />
+                  </div>
+                  <p className="muted">{uploadProgressLabel(coverArtUploadProgress)}</p>
+                </div>
+              ) : null}
               <label className="checkbox-row">
                 <input
                   checked={detail.item.playlist_always_play_from_start}
@@ -3369,6 +3414,7 @@ function ImportPage({ session }: { session: SessionResponse }) {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
 
   async function refreshImports() {
     setImports(await fetchImports());
@@ -3389,11 +3435,13 @@ function ImportPage({ session }: { session: SessionResponse }) {
         if (!selectedFile) {
           throw new Error("Choose a media file to upload.");
         }
+        setUploadProgress({ loaded: 0, total: selectedFile.size || null, percent: 0 });
         await uploadImport({
           title: form.title,
           content_type: form.content_type,
           requested_by_user_slug: session.user.slug,
           media_file: selectedFile,
+          onProgress: setUploadProgress,
         });
       } else {
         await createImport({
@@ -3411,6 +3459,7 @@ function ImportPage({ session }: { session: SessionResponse }) {
       setError(submitError instanceof Error ? submitError.message : "Import failed.");
     } finally {
       setSubmitting(false);
+      setUploadProgress(null);
     }
   }
 
@@ -3538,6 +3587,23 @@ function ImportPage({ session }: { session: SessionResponse }) {
               Uploads are staged in{" "}
               {sources?.browser_upload_path ?? "/var/lib/yotowebmgr/media/imports/uploads"}.
             </p>
+            {uploadProgress ? (
+              <div className="upload-progress" aria-live="polite">
+                <div
+                  className="upload-progress-bar"
+                  role="progressbar"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={uploadProgress.percent ?? 0}
+                >
+                  <span
+                    className="upload-progress-fill"
+                    style={{ width: `${uploadProgress.percent ?? 0}%` }}
+                  />
+                </div>
+                <p className="muted">{uploadProgressLabel(uploadProgress)}</p>
+              </div>
+            ) : null}
           </div>
         ) : (
           <div className="drop-panel">
@@ -3563,7 +3629,11 @@ function ImportPage({ session }: { session: SessionResponse }) {
         <div className="form-actions">
           <span className="muted">Queued as {session.user.display_name}</span>
           <button className="primary-button" disabled={submitting} type="submit">
-            {submitting ? "Queueing" : "Queue import"}
+            {submitting && mode === "upload" && uploadProgress
+              ? `Uploading ${uploadProgress.percent ?? 0}%`
+              : submitting
+                ? "Queueing"
+                : "Queue import"}
           </button>
         </div>
       </form>
