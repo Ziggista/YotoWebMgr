@@ -90,6 +90,10 @@ As of July 19, 2026, the working repeatable live test path is:
 6. Run `POST /api/v1/yoto/playlists/{playlist_id}/create-live` to upload the processed/source
    audio to Yoto, wait through Yoto transcode, and create live `/content`.
 
+`create-live` can now be called with an empty JSON body or no body at all. When no explicit
+`request_payload` is supplied, the API builds the live Yoto `/content` payload from the stored
+draft plus any processed assets it can map for that library item.
+
 This flow was verified against the Alice LibriVox sample and returned a live Yoto card/content ID.
 
 Do not treat a hardcoded `/var/lib/yotowebmgr/media/imports/drop/...` source path from a previous

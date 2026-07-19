@@ -12,7 +12,7 @@ from urllib.parse import urlencode, urljoin
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -1513,8 +1513,8 @@ async def get_yoto_playlist_remote_payload(
 @router.post("/playlists/{playlist_id}/create-live", response_model=CreateLiveYotoPlaylistResponse)
 async def create_live_yoto_playlist(
     playlist_id: int,
-    payload: CreateLiveYotoPlaylistRequest,
     db: Annotated[Session, Depends(get_db_session)],
+    payload: CreateLiveYotoPlaylistRequest | None = Body(default=None),
 ) -> CreateLiveYotoPlaylistResponse:
     draft = db.get(YotoPlaylistDraft, playlist_id)
     if draft is None:
@@ -1529,7 +1529,8 @@ async def create_live_yoto_playlist(
         raise HTTPException(status_code=409, detail="Connect a Yoto account before creating a live playlist.")
 
     stored_tokens, token_refreshed = await _load_live_tokens(db=db, credential=credential)
-    request_payload = payload.request_payload
+    request = payload or CreateLiveYotoPlaylistRequest()
+    request_payload = request.request_payload
     if request_payload is None:
         request_payload, warnings, _can_create_live, stored_tokens, build_refreshed = await _build_live_payload_from_draft(
             db=db,
@@ -1589,7 +1590,7 @@ async def create_live_yoto_playlist(
         else "Created live Yoto content. Use the direct blank-card write flow from this app to program linked cards."
     )
 
-    if payload.mark_linked_cards_ready:
+    if request.mark_linked_cards_ready:
         linked_cards = db.scalars(select(PhysicalCard).where(PhysicalCard.current_library_item_id == item.id))
         for card in linked_cards:
             card.ready_to_link_in_app = True
@@ -1619,7 +1620,7 @@ async def create_live_yoto_playlist(
                 {
                     "playlist_draft_id": draft.id,
                     "remote_card_id": remote_card_id,
-                    "mark_linked_cards_ready": payload.mark_linked_cards_ready,
+                    "mark_linked_cards_ready": request.mark_linked_cards_ready,
                 },
                 sort_keys=True,
             ),
