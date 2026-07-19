@@ -11,6 +11,7 @@ import {
   AuthProvidersResponse,
   BuildInfo,
   CardAssignmentEvent,
+  CardProgrammingEvent,
   CardScanDumpEntry,
   CardPlan,
   CreateLiveYotoPlaylistResponse,
@@ -33,6 +34,7 @@ import {
   applyTrackIcon,
   approveImportReview,
   createCard,
+  createCardProgrammingEvent,
   createLiveYotoPlaylist,
   createImport,
   createTag,
@@ -46,6 +48,7 @@ import {
   fetchBackendBuildInfo,
   fetchCard,
   fetchCardHistory,
+  fetchCardProgrammingEvents,
   fetchCardScanDumps,
   fetchCards,
   fetchCardPlan,
@@ -368,6 +371,11 @@ function normaliseTextValue(value: string | null | undefined): string | null {
   }
   const normalized = value.trim();
   return normalized || null;
+}
+
+function normalizedCardCode(value: string | null | undefined): string | null {
+  const normalized = normaliseTextValue(value);
+  return normalized ? normalized.toUpperCase() : null;
 }
 
 function readStoredJson<T>(storageKey: string): T | null {
@@ -3637,6 +3645,7 @@ function TagsPage() {
 function CardsPage() {
   const [cards, setCards] = useState<PhysicalCard[]>([]);
   const [scanDumps, setScanDumps] = useState<CardScanDumpEntry[]>([]);
+  const [programmingEvents, setProgrammingEvents] = useState<CardProgrammingEvent[]>([]);
   const [stagedDump, setStagedDump] = useState<CardScanDumpEntry | null>(() =>
     readStoredJson<CardScanDumpEntry>(stagedCardDumpStorageKey),
   );
@@ -3725,8 +3734,12 @@ function CardsPage() {
     setScanDumps(await fetchCardScanDumps());
   }
 
+  async function refreshProgrammingEvents() {
+    setProgrammingEvents(await fetchCardProgrammingEvents());
+  }
+
   useEffect(() => {
-    void Promise.all([refreshCards(), refreshScanDumps()]).catch((loadError) =>
+    void Promise.all([refreshCards(), refreshScanDumps(), refreshProgrammingEvents()]).catch((loadError) =>
       setError(loadError instanceof Error ? loadError.message : "Failed to load cards."),
     );
   }, []);
@@ -3851,6 +3864,10 @@ function CardsPage() {
         notes: current.notes || "Wrote the current NDEF payload with native Android NFC.",
       }));
       setHelperMessage("Native NFC write completed. Re-scan the card or test it in the Yoto app.");
+      void persistProgrammingEvent({
+        event_type: "write_completed",
+        detail: "Native NFC write completed. Re-scan to verify the payload on the physical card.",
+      });
       setNativeWritePending(false);
       setScanning(false);
     });
@@ -3924,12 +3941,77 @@ function CardsPage() {
     const result = evaluateCardVerification(readArmedVerificationTarget(), observed);
     if (result) {
       setVerificationResult(result);
+      void persistProgrammingEvent({
+        event_type: result.matched ? "verification_succeeded" : "verification_failed",
+        detail: result.detail,
+        compared_field: result.comparedField,
+        matched: result.matched,
+        observed_programmable_id: result.observedProgrammableId,
+        observed_nfc_serial_number: result.observedSerialNumber,
+        observed_ndef_payload_text: result.observedPayloadText,
+        observed_ndef_payload_hex: result.observedPayloadHex,
+      });
     }
   }
 
   function stageWriteTarget(target: CardWriteTarget) {
     setStagedWriteTarget(target);
     setVerificationResult(null);
+  }
+
+  function matchingCardForCurrentForm(): PhysicalCard | null {
+    const normalizedCardCode = form.card_code.trim().toUpperCase();
+    if (normalizedCardCode) {
+      return cards.find((card) => card.card_code.toUpperCase() === normalizedCardCode) ?? null;
+    }
+    return null;
+  }
+
+  async function persistProgrammingEvent(
+    payload: Partial<CardProgrammingEvent> & { event_type: string },
+    targetOverride?: CardWriteTarget | null,
+  ) {
+    const target = targetOverride ?? readArmedVerificationTarget() ?? stagedWriteTarget;
+    const matchingCard = matchingCardForCurrentForm();
+    const resolvedCardCode = payload.card_code ?? normalizedCardCode(matchingCard?.card_code ?? form.card_code);
+    const resolvedProgrammableId =
+      payload.programmable_id ?? target?.programmableId ?? normaliseTextValue(form.programmable_id);
+    const resolvedSerialNumber =
+      payload.nfc_serial_number ?? normaliseTextValue(form.nfc_serial_number);
+    const resolvedPayloadText =
+      payload.ndef_payload_text ?? target?.payloadText ?? normaliseTextValue(form.ndef_payload_text);
+    const resolvedPayloadHex =
+      payload.ndef_payload_hex ?? target?.payloadHex ?? normaliseHexString(form.ndef_payload_hex);
+    try {
+      await createCardProgrammingEvent({
+        card_id: payload.card_id ?? matchingCard?.id ?? null,
+        card_code: resolvedCardCode,
+        event_type: payload.event_type,
+        runtime: payload.runtime ?? currentRuntimeLabel(),
+        source: payload.source ?? target?.source ?? null,
+        target_label: payload.target_label ?? target?.label ?? null,
+        detail: payload.detail ?? target?.detail ?? null,
+        compared_field: payload.compared_field ?? null,
+        matched: payload.matched ?? null,
+        playlist_uri: payload.playlist_uri ?? target?.playlistUri ?? null,
+        programmable_id: resolvedProgrammableId,
+        nfc_serial_number: resolvedSerialNumber,
+        ndef_payload_text: resolvedPayloadText,
+        ndef_payload_hex: resolvedPayloadHex,
+        observed_programmable_id: payload.observed_programmable_id ?? null,
+        observed_nfc_serial_number: payload.observed_nfc_serial_number ?? null,
+        observed_ndef_payload_text: payload.observed_ndef_payload_text ?? null,
+        observed_ndef_payload_hex: payload.observed_ndef_payload_hex ?? null,
+        extra_json: payload.extra_json ?? null,
+      });
+      await refreshProgrammingEvents();
+    } catch (persistError) {
+      setHelperMessage(
+        persistError instanceof Error
+          ? `Programming event persistence failed: ${persistError.message}`
+          : "Programming event persistence failed.",
+      );
+    }
   }
 
   function applyScanDumpToForm(entry: CardScanDumpEntry) {
@@ -4016,6 +4098,13 @@ function CardsPage() {
     setScanning(true);
     setNativeWritePending(true);
     setScanMessage(`Hold the card against the phone to write ${successLabel}.`);
+    void persistProgrammingEvent(
+      {
+        event_type: "write_armed",
+        detail: `Prepared ${successLabel} for native NFC write.`,
+      },
+      target,
+    );
 
     try {
       await NFC.writeNDEF({
@@ -4065,8 +4154,16 @@ function CardsPage() {
     setScanning(true);
     setNativeWritePending(true);
     setScanMessage(`Hold the new card against the phone to write scan dump #${entry.id}.`);
-    writeStoredJson(armedCardVerificationStorageKey, createWriteTargetFromScanDump(entry));
+    const scanDumpTarget = createWriteTargetFromScanDump(entry);
+    writeStoredJson(armedCardVerificationStorageKey, scanDumpTarget);
     setVerificationResult(null);
+    void persistProgrammingEvent(
+      {
+        event_type: "write_armed",
+        detail: `Prepared scan dump #${entry.id} for native NFC write.`,
+      },
+      scanDumpTarget,
+    );
 
     try {
       await NFC.writeNDEF({
@@ -4141,8 +4238,16 @@ function CardsPage() {
     setScanning(true);
     setNativeWritePending(true);
     setScanMessage("Hold the card against the phone to write the prepared payload.");
-    writeStoredJson(armedCardVerificationStorageKey, createWriteTargetFromCurrentForm(form));
+    const currentFormTarget = createWriteTargetFromCurrentForm(form);
+    writeStoredJson(armedCardVerificationStorageKey, currentFormTarget);
     setVerificationResult(null);
+    void persistProgrammingEvent(
+      {
+        event_type: "write_armed",
+        detail: "Prepared the current payload for native NFC write.",
+      },
+      currentFormTarget,
+    );
 
     try {
       await NFC.writeNDEF({
@@ -4470,6 +4575,42 @@ function CardsPage() {
           <p className="muted">
             After a write, scan the card again. The app will compare the next scan against the armed write target automatically.
           </p>
+        )}
+      </section>
+
+      <section className="card-console-panel">
+        <div className="section-header">
+          <div>
+            <p className="eyebrow">Persisted Log</p>
+            <h3>Recent write and verification events</h3>
+          </div>
+          <div className="button-row">
+            <button className="secondary-button" onClick={() => void refreshProgrammingEvents()} type="button">
+              Refresh events
+            </button>
+            <span className="status-pill status-pill-muted">{programmingEvents.length} stored</span>
+          </div>
+        </div>
+        {programmingEvents.length === 0 ? (
+          <p className="muted">No persisted programming events yet. Write or verify a card to capture one.</p>
+        ) : (
+          <div className="compact-list">
+            {programmingEvents.map((entry) => (
+              <article className="stage-status-row" key={entry.id}>
+                <span className={`status-pill${entry.matched ? " status-pill-ok" : entry.matched === false ? " status-pill-muted" : ""}`}>
+                  {entry.event_type}
+                </span>
+                <p className="muted">
+                  <strong>{entry.target_label ?? entry.card_code ?? "Card workflow event"}</strong> Â·{" "}
+                  {entry.detail ?? entry.source ?? "No detail"}
+                </p>
+                <p className="muted">
+                  Card: {entry.card_code ?? "Unknown"} Â· Compared: {entry.compared_field ?? "n/a"} Â· Playlist:{" "}
+                  {entry.playlist_uri ?? "n/a"}
+                </p>
+              </article>
+            ))}
+          </div>
         )}
       </section>
 

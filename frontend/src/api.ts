@@ -351,6 +351,30 @@ export interface CardAssignmentEvent {
   created_at: string;
 }
 
+export interface CardProgrammingEvent {
+  id: number;
+  card_id: number | null;
+  card_code: string | null;
+  event_type: string;
+  runtime: string | null;
+  source: string | null;
+  target_label: string | null;
+  detail: string | null;
+  compared_field: string | null;
+  matched: boolean | null;
+  playlist_uri: string | null;
+  programmable_id: string | null;
+  nfc_serial_number: string | null;
+  ndef_payload_text: string | null;
+  ndef_payload_hex: string | null;
+  observed_programmable_id: string | null;
+  observed_nfc_serial_number: string | null;
+  observed_ndef_payload_text: string | null;
+  observed_ndef_payload_hex: string | null;
+  extra_json: Record<string, unknown> | null;
+  created_at: string;
+}
+
 export interface LinkCardResponse {
   library_item: LibraryItem;
   card: PhysicalCard;
@@ -1190,6 +1214,47 @@ export async function fetchCardHistory(cardId: number): Promise<CardAssignmentEv
     throw new Error(await errorMessage(response, "Failed to load card history."));
   }
   return response.json() as Promise<CardAssignmentEvent[]>;
+}
+
+export async function fetchCardProgrammingEvents(cardId?: number): Promise<CardProgrammingEvent[]> {
+  const path = cardId ? `/api/v1/cards/${cardId}/programming-events` : "/api/v1/cards/programming-events";
+  const response = await apiFetch(path);
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to load card programming events."));
+  }
+  return response.json() as Promise<CardProgrammingEvent[]>;
+}
+
+export async function createCardProgrammingEvent(payload: {
+  card_id?: number | null;
+  card_code?: string | null;
+  event_type: string;
+  runtime?: string | null;
+  source?: string | null;
+  target_label?: string | null;
+  detail?: string | null;
+  compared_field?: string | null;
+  matched?: boolean | null;
+  playlist_uri?: string | null;
+  programmable_id?: string | null;
+  nfc_serial_number?: string | null;
+  ndef_payload_text?: string | null;
+  ndef_payload_hex?: string | null;
+  observed_programmable_id?: string | null;
+  observed_nfc_serial_number?: string | null;
+  observed_ndef_payload_text?: string | null;
+  observed_ndef_payload_hex?: string | null;
+  extra_json?: Record<string, unknown> | null;
+}): Promise<CardProgrammingEvent> {
+  const response = await apiFetch("/api/v1/cards/programming-events", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to save card programming event."));
+  }
+  return response.json() as Promise<CardProgrammingEvent>;
 }
 
 export async function dumpCardScan(payload: CardScanDumpRequest): Promise<void> {

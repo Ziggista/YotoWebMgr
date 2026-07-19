@@ -84,3 +84,29 @@ class CardScanDump(Base):
     tag_info: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     records: Mapped[list | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class CardProgrammingEvent(Base):
+    __tablename__ = "card_programming_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    card_id: Mapped[int | None] = mapped_column(ForeignKey("physical_cards.id"), nullable=True, index=True)
+    card_code: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    event_type: Mapped[str] = mapped_column(String(120), index=True)
+    runtime: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    source: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    target_label: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    compared_field: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    matched: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    playlist_uri: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    programmable_id: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    nfc_serial_number: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    ndef_payload_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ndef_payload_hex: Mapped[str | None] = mapped_column(Text, nullable=True)
+    observed_programmable_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    observed_nfc_serial_number: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    observed_ndef_payload_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    observed_ndef_payload_hex: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extra_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)

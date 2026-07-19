@@ -535,6 +535,52 @@ class CardScanDumpEntry(BaseModel):
     created_at: datetime
 
 
+class CardProgrammingEventCreate(BaseModel):
+    card_id: int | None = Field(default=None, gt=0)
+    card_code: str | None = Field(default=None, min_length=1, max_length=80, pattern=r"^[A-Za-z0-9]+$")
+    event_type: str = Field(min_length=1, max_length=120)
+    runtime: str | None = Field(default=None, max_length=120)
+    source: str | None = Field(default=None, max_length=80)
+    target_label: str | None = Field(default=None, max_length=240)
+    detail: str | None = Field(default=None, max_length=4000)
+    compared_field: str | None = Field(default=None, max_length=80)
+    matched: bool | None = None
+    playlist_uri: str | None = Field(default=None, max_length=500)
+    programmable_id: str | None = Field(default=None, max_length=160)
+    nfc_serial_number: str | None = Field(default=None, max_length=160)
+    ndef_payload_text: str | None = Field(default=None, max_length=2000)
+    ndef_payload_hex: str | None = Field(default=None, max_length=4000)
+    observed_programmable_id: str | None = Field(default=None, max_length=160)
+    observed_nfc_serial_number: str | None = Field(default=None, max_length=160)
+    observed_ndef_payload_text: str | None = Field(default=None, max_length=2000)
+    observed_ndef_payload_hex: str | None = Field(default=None, max_length=4000)
+    extra_json: dict[str, Any] | None = None
+
+
+class CardProgrammingEventResponse(BaseModel):
+    id: int
+    card_id: int | None
+    card_code: str | None
+    event_type: str
+    runtime: str | None
+    source: str | None
+    target_label: str | None
+    detail: str | None
+    compared_field: str | None
+    matched: bool | None
+    playlist_uri: str | None
+    programmable_id: str | None
+    nfc_serial_number: str | None
+    ndef_payload_text: str | None
+    ndef_payload_hex: str | None
+    observed_programmable_id: str | None
+    observed_nfc_serial_number: str | None
+    observed_ndef_payload_text: str | None
+    observed_ndef_payload_hex: str | None
+    extra_json: dict[str, Any] | None
+    created_at: datetime
+
+
 class LinkCardRequest(BaseModel):
     card_id: int = Field(gt=0)
 

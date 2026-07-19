@@ -8,10 +8,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db_session
-from app.models import CardAssignmentEvent, CardScanDump, PhysicalCard
+from app.models import CardAssignmentEvent, CardProgrammingEvent, CardScanDump, PhysicalCard
 from app.schemas.foundation import (
     CardAssignmentEventResponse,
     CardCreate,
+    CardProgrammingEventCreate,
+    CardProgrammingEventResponse,
     CardResponse,
     CardScanDumpEntry,
     CardScanDumpRequest,
@@ -82,6 +84,32 @@ def _build_card_scan_dump_response(entry: CardScanDump) -> CardScanDumpEntry:
     )
 
 
+def _build_card_programming_event_response(event: CardProgrammingEvent) -> CardProgrammingEventResponse:
+    return CardProgrammingEventResponse(
+        id=event.id,
+        card_id=event.card_id,
+        card_code=event.card_code,
+        event_type=event.event_type,
+        runtime=event.runtime,
+        source=event.source,
+        target_label=event.target_label,
+        detail=event.detail,
+        compared_field=event.compared_field,
+        matched=event.matched,
+        playlist_uri=event.playlist_uri,
+        programmable_id=event.programmable_id,
+        nfc_serial_number=event.nfc_serial_number,
+        ndef_payload_text=event.ndef_payload_text,
+        ndef_payload_hex=event.ndef_payload_hex,
+        observed_programmable_id=event.observed_programmable_id,
+        observed_nfc_serial_number=event.observed_nfc_serial_number,
+        observed_ndef_payload_text=event.observed_ndef_payload_text,
+        observed_ndef_payload_hex=event.observed_ndef_payload_hex,
+        extra_json=event.extra_json,
+        created_at=event.created_at,
+    )
+
+
 @router.get("", response_model=list[CardResponse])
 async def list_cards(db: Annotated[Session, Depends(get_db_session)]) -> list[CardResponse]:
     query = select(PhysicalCard).order_by(PhysicalCard.card_code.asc(), PhysicalCard.id.asc())
@@ -96,6 +124,18 @@ async def list_card_scan_dumps(
         select(CardScanDump).order_by(CardScanDump.created_at.desc(), CardScanDump.id.desc()).limit(20)
     )
     return [_build_card_scan_dump_response(entry) for entry in dumps]
+
+
+@router.get("/programming-events", response_model=list[CardProgrammingEventResponse])
+async def list_card_programming_events(
+    db: Annotated[Session, Depends(get_db_session)],
+) -> list[CardProgrammingEventResponse]:
+    events = db.scalars(
+        select(CardProgrammingEvent)
+        .order_by(CardProgrammingEvent.created_at.desc(), CardProgrammingEvent.id.desc())
+        .limit(50)
+    )
+    return [_build_card_programming_event_response(event) for event in events]
 
 
 @router.post("/scan-dumps", response_model=CardScanDumpResponse, status_code=202)
@@ -127,6 +167,43 @@ async def create_card_scan_dump(
     )
 
 
+@router.post("/programming-events", response_model=CardProgrammingEventResponse, status_code=201)
+async def create_card_programming_event(
+    payload: CardProgrammingEventCreate,
+    db: Annotated[Session, Depends(get_db_session)],
+) -> CardProgrammingEventResponse:
+    if payload.card_id is not None and db.get(PhysicalCard, payload.card_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Card not found")
+
+    event = CardProgrammingEvent(
+        card_id=payload.card_id,
+        card_code=payload.card_code,
+        event_type=payload.event_type,
+        runtime=payload.runtime,
+        source=payload.source,
+        target_label=payload.target_label,
+        detail=payload.detail,
+        compared_field=payload.compared_field,
+        matched=payload.matched,
+        playlist_uri=payload.playlist_uri,
+        programmable_id=payload.programmable_id,
+        nfc_serial_number=payload.nfc_serial_number,
+        ndef_payload_text=payload.ndef_payload_text,
+        ndef_payload_hex=payload.ndef_payload_hex,
+        observed_programmable_id=payload.observed_programmable_id,
+        observed_nfc_serial_number=payload.observed_nfc_serial_number,
+        observed_ndef_payload_text=payload.observed_ndef_payload_text,
+        observed_ndef_payload_hex=payload.observed_ndef_payload_hex,
+        extra_json=payload.extra_json,
+    )
+    db.add(event)
+    db.commit()
+    db.refresh(event)
+
+    logger.info("CARD_PROGRAMMING_EVENT %s", payload.model_dump_json())
+    return _build_card_programming_event_response(event)
+
+
 @router.get("/{card_id}", response_model=CardResponse)
 async def get_card(
     card_id: int,
@@ -152,6 +229,22 @@ async def list_card_assignment_history(
         .order_by(CardAssignmentEvent.created_at.desc(), CardAssignmentEvent.id.desc())
     )
     return [_build_card_assignment_event_response(event) for event in events]
+
+
+@router.get("/{card_id}/programming-events", response_model=list[CardProgrammingEventResponse])
+async def list_card_programming_events_for_card(
+    card_id: int,
+    db: Annotated[Session, Depends(get_db_session)],
+) -> list[CardProgrammingEventResponse]:
+    card = db.get(PhysicalCard, card_id)
+    if card is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Card not found")
+    events = db.scalars(
+        select(CardProgrammingEvent)
+        .where(CardProgrammingEvent.card_id == card.id)
+        .order_by(CardProgrammingEvent.created_at.desc(), CardProgrammingEvent.id.desc())
+    )
+    return [_build_card_programming_event_response(event) for event in events]
 
 
 @router.post("", response_model=CardResponse, status_code=201)
@@ -240,4 +333,3 @@ async def update_card(
         ) from error
     db.refresh(card)
     return _build_card_response(card)
-

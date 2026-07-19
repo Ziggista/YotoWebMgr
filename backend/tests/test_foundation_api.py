@@ -655,13 +655,11 @@ async def test_card_scan_dump_endpoint_accepts_debug_payload(api_client: AsyncCl
             },
         )
 
-    assert response.status_code == 202
-    payload = response.json()
-    assert payload["status"] == "accepted"
-    assert payload["detail"] == "Captured card scan dump in backend logs."
-    assert payload["dumped_at"] is not None
-
-    async with api_client as client:
+        assert response.status_code == 202
+        payload = response.json()
+        assert payload["status"] == "accepted"
+        assert payload["detail"] == "Captured card scan dump in backend logs."
+        assert payload["dumped_at"] is not None
         listed = await client.get("/api/v1/cards/scan-dumps")
 
     assert listed.status_code == 200
@@ -669,6 +667,58 @@ async def test_card_scan_dump_endpoint_accepts_debug_payload(api_client: AsyncCl
     assert dumps[0]["scan_source"] == "native_nfc"
     assert dumps[0]["nfc_serial_number"] == "04A1B2C3D4"
     assert dumps[0]["records"][0]["type"] == "U"
+
+
+async def test_card_programming_event_endpoints_persist_write_and_verification(
+    api_client: AsyncClient,
+) -> None:
+    async with api_client as client:
+        created_card = await client.post(
+            "/api/v1/cards",
+            json={"card_code": "CARDPROG1", "display_name": "Programming Card"},
+        )
+        card_id = created_card.json()["id"]
+        created_event = await client.post(
+            "/api/v1/cards/programming-events",
+            json={
+                "card_id": card_id,
+                "card_code": "CARDPROG1",
+                "event_type": "verification_succeeded",
+                "runtime": "capacitor_android",
+                "source": "yoto_playlist",
+                "target_label": "Bedtime Mix",
+                "detail": "Verification matched the written payload bytes.",
+                "compared_field": "payload_hex",
+                "matched": True,
+                "playlist_uri": "https://my.yotoplay.com/playlist/playlist-123",
+                "programmable_id": "yoto:playlist:playlist-123",
+                "ndef_payload_text": "https://my.yotoplay.com/playlist/playlist-123",
+                "ndef_payload_hex": "68747470733a2f2f6d792e796f746f706c61792e636f6d2f706c61796c6973742f706c61796c6973742d313233",
+                "observed_programmable_id": "yoto:playlist:playlist-123",
+                "observed_nfc_serial_number": "04A1B2C3D4",
+                "observed_ndef_payload_text": "https://my.yotoplay.com/playlist/playlist-123",
+                "observed_ndef_payload_hex": "68747470733a2f2f6d792e796f746f706c61792e636f6d2f706c61796c6973742f706c61796c6973742d313233",
+                "extra_json": {"route": "/create"},
+            },
+        )
+        listed_all = await client.get("/api/v1/cards/programming-events")
+        listed_for_card = await client.get(f"/api/v1/cards/{card_id}/programming-events")
+
+    assert created_event.status_code == 201
+    event_payload = created_event.json()
+    assert event_payload["event_type"] == "verification_succeeded"
+    assert event_payload["matched"] is True
+    assert event_payload["card_id"] == card_id
+    assert event_payload["target_label"] == "Bedtime Mix"
+    assert event_payload["extra_json"]["route"] == "/create"
+
+    assert listed_all.status_code == 200
+    assert listed_all.json()[0]["event_type"] == "verification_succeeded"
+    assert listed_all.json()[0]["card_code"] == "CARDPROG1"
+
+    assert listed_for_card.status_code == 200
+    assert listed_for_card.json()[0]["card_id"] == card_id
+    assert listed_for_card.json()[0]["observed_nfc_serial_number"] == "04A1B2C3D4"
 
 
 async def test_library_playlist_settings_tracks_icons_and_readiness(
