@@ -671,6 +671,7 @@ async def test_card_scan_dump_endpoint_accepts_debug_payload(api_client: AsyncCl
 
 async def test_card_programming_event_endpoints_persist_write_and_verification(
     api_client: AsyncClient,
+    db_session: Session,
 ) -> None:
     async with api_client as client:
         created_card = await client.post(
@@ -719,6 +720,15 @@ async def test_card_programming_event_endpoints_persist_write_and_verification(
     assert listed_for_card.status_code == 200
     assert listed_for_card.json()[0]["card_id"] == card_id
     assert listed_for_card.json()[0]["observed_nfc_serial_number"] == "04A1B2C3D4"
+
+    refreshed_card = db_session.get(PhysicalCard, card_id)
+    assert refreshed_card is not None
+    assert refreshed_card.status == "ready_to_link"
+    assert refreshed_card.ndef_prepared is True
+    assert refreshed_card.yoto_playlist_uri == "https://my.yotoplay.com/playlist/playlist-123"
+    assert refreshed_card.programmable_id == "yoto:playlist:playlist-123"
+    assert refreshed_card.nfc_serial_number == "04A1B2C3D4"
+    assert refreshed_card.last_scanned_at is not None
 
 
 async def test_library_playlist_settings_tracks_icons_and_readiness(

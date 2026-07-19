@@ -5121,6 +5121,7 @@ function CardDetailPage() {
   const numericCardId = Number(cardId);
   const [card, setCard] = useState<PhysicalCard | null>(null);
   const [history, setHistory] = useState<CardAssignmentEvent[]>([]);
+  const [programmingEvents, setProgrammingEvents] = useState<CardProgrammingEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -5129,9 +5130,14 @@ function CardDetailPage() {
     if (!Number.isFinite(numericCardId)) {
       throw new Error("Invalid card.");
     }
-    const [nextCard, nextHistory] = await Promise.all([fetchCard(numericCardId), fetchCardHistory(numericCardId)]);
+    const [nextCard, nextHistory, nextProgrammingEvents] = await Promise.all([
+      fetchCard(numericCardId),
+      fetchCardHistory(numericCardId),
+      fetchCardProgrammingEvents(numericCardId),
+    ]);
     setCard(nextCard);
     setHistory(nextHistory);
+    setProgrammingEvents(nextProgrammingEvents);
   }
 
   useEffect(() => {
@@ -5332,6 +5338,28 @@ function CardDetailPage() {
               Mark tested
             </button>
           </div>
+        </article>
+        <article className="detail-block">
+          <h3>Programming log</h3>
+          {programmingEvents.length === 0 ? (
+            <p className="muted">No persisted write or verification events are attached to this card yet.</p>
+          ) : (
+            <div className="compact-list">
+              {programmingEvents.slice(0, 8).map((event) => (
+                <article className="stage-status-row" key={event.id}>
+                  <span className={`status-pill${event.matched ? " status-pill-ok" : event.matched === false ? " status-pill-muted" : ""}`}>
+                    {event.event_type}
+                  </span>
+                  <p className="muted">
+                    {event.detail ?? event.target_label ?? event.source ?? "No detail"}
+                  </p>
+                  <p className="muted">
+                    Compared: {event.compared_field ?? "n/a"} Â· Playlist: {event.playlist_uri ?? "n/a"}
+                  </p>
+                </article>
+              ))}
+            </div>
+          )}
         </article>
         <article className="detail-block">
           <h3>Notes</h3>

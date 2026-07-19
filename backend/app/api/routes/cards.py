@@ -172,7 +172,8 @@ async def create_card_programming_event(
     payload: CardProgrammingEventCreate,
     db: Annotated[Session, Depends(get_db_session)],
 ) -> CardProgrammingEventResponse:
-    if payload.card_id is not None and db.get(PhysicalCard, payload.card_id) is None:
+    card = db.get(PhysicalCard, payload.card_id) if payload.card_id is not None else None
+    if payload.card_id is not None and card is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Card not found")
 
     event = CardProgrammingEvent(
@@ -197,6 +198,61 @@ async def create_card_programming_event(
         extra_json=payload.extra_json,
     )
     db.add(event)
+
+    if card is not None:
+        now = datetime.now(UTC)
+        previous_status = card.status
+        previous_playlist_uri = card.yoto_playlist_uri
+        if payload.card_code:
+            card.card_code = payload.card_code
+        if payload.runtime and not card.scan_source:
+            card.scan_source = payload.runtime
+        if payload.playlist_uri:
+            card.yoto_playlist_uri = payload.playlist_uri
+        if payload.programmable_id:
+            card.programmable_id = payload.programmable_id
+        if payload.nfc_serial_number:
+            card.nfc_serial_number = payload.nfc_serial_number
+        if payload.ndef_payload_text:
+            card.ndef_payload_text = payload.ndef_payload_text
+        if payload.ndef_payload_hex:
+            card.ndef_payload_hex = payload.ndef_payload_hex
+
+        if payload.event_type == "write_completed":
+            card.ndef_prepared = True
+            card.last_programmed_at = now
+            if card.status == "available":
+                card.status = "ready_to_link"
+        elif payload.event_type in {"verification_succeeded", "verification_failed"}:
+            card.last_scanned_at = now
+            if payload.observed_programmable_id:
+                card.programmable_id = payload.observed_programmable_id
+            if payload.observed_nfc_serial_number:
+                card.nfc_serial_number = payload.observed_nfc_serial_number
+            if payload.observed_ndef_payload_text:
+                card.ndef_payload_text = payload.observed_ndef_payload_text
+            if payload.observed_ndef_payload_hex:
+                card.ndef_payload_hex = payload.observed_ndef_payload_hex
+            if payload.event_type == "verification_succeeded":
+                card.ndef_prepared = True
+                if card.status == "available":
+                    card.status = "ready_to_link"
+
+        db.add(card)
+        db.add(
+            CardAssignmentEvent(
+                card_id=card.id,
+                event_type="card_programming_event",
+                previous_library_item_id=card.current_library_item_id,
+                library_item_id=card.current_library_item_id,
+                previous_status=previous_status,
+                new_status=card.status,
+                previous_yoto_playlist_uri=previous_playlist_uri,
+                yoto_playlist_uri=card.yoto_playlist_uri,
+                summary=f"Persisted programming event: {payload.event_type}",
+            )
+        )
+
     db.commit()
     db.refresh(event)
 
