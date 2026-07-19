@@ -219,6 +219,9 @@ async def update_card_programming_session(
         session.extra_json = None
     else:
         updates = payload.model_dump(exclude={"session_key", "clear"}, exclude_unset=True)
+        if "extra_json" in updates and isinstance(updates["extra_json"], dict):
+            existing_extra = session.extra_json if isinstance(session.extra_json, dict) else {}
+            updates["extra_json"] = {**existing_extra, **updates["extra_json"]}
         if "active_card_id" in updates and updates["active_card_id"] is not None:
             if db.get(PhysicalCard, updates["active_card_id"]) is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Card not found")

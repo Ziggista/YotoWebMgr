@@ -774,6 +774,42 @@ async def test_card_programming_session_can_stage_and_clear_target(
     assert cleared.json()["write_state"] == "idle"
 
 
+async def test_card_programming_session_merges_extra_json_updates(
+    api_client: AsyncClient,
+) -> None:
+    async with api_client as client:
+        seeded = await client.put(
+            "/api/v1/cards/programming-session",
+            json={
+                "session_key": "default",
+                "extra_json": {
+                    "route": "/create",
+                    "create_workflow_stage": "draft_ready",
+                    "selected_card_id": 12,
+                },
+            },
+        )
+        merged = await client.put(
+            "/api/v1/cards/programming-session",
+            json={
+                "session_key": "default",
+                "extra_json": {
+                    "route": "/cards",
+                    "workflow_status": "verified",
+                },
+            },
+        )
+
+    assert seeded.status_code == 200
+    assert merged.status_code == 200
+    assert merged.json()["extra_json"] == {
+        "route": "/cards",
+        "create_workflow_stage": "draft_ready",
+        "selected_card_id": 12,
+        "workflow_status": "verified",
+    }
+
+
 async def test_library_playlist_settings_tracks_icons_and_readiness(
     api_client: AsyncClient,
 ) -> None:

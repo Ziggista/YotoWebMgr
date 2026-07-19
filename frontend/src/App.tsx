@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { Link, NavLink, Route, Routes, useParams } from "react-router-dom";
 import AudioPlayer from "react-h5-audio-player";
 import "react-h5-audio-player/lib/styles.css";
@@ -861,6 +861,91 @@ function workflowStatusSummary(steps: WorkflowStep[]): { title: string; detail: 
     title: `Current stage: ${nextStep.label}`,
     detail: nextStep.detail,
   };
+}
+
+type CreateWorkflowSnapshot = {
+  route: "/create";
+  selected_item_id: number | null;
+  selected_card_id: number | null;
+  create_workflow_stage: string;
+  create_workflow_title: string | null;
+  create_workflow_status: string | null;
+  create_workflow_detail: string | null;
+  create_playlist_draft_id: number | null;
+  create_playlist_status: string | null;
+  create_remote_playlist_id: string | null;
+  create_remote_playlist_uri: string | null;
+  create_card_display_name: string | null;
+  create_next_action: string | null;
+};
+
+function deriveCreateWorkflowStage(statuses: CreateStageStatus[]): string {
+  const processing = statuses.find((status) => status.key === "processing");
+  const draft = statuses.find((status) => status.key === "draft");
+  const cloud = statuses.find((status) => status.key === "cloud");
+  const card = statuses.find((status) => status.key === "card");
+
+  if (card?.state === "done") {
+    return "card_ready";
+  }
+  if (card?.state === "active") {
+    return "card_handoff";
+  }
+  if (cloud?.state === "done") {
+    return "cloud_ready";
+  }
+  if (cloud?.state === "active") {
+    return "creating_cloud";
+  }
+  if (draft?.state === "done") {
+    return "draft_ready";
+  }
+  if (draft?.state === "active") {
+    return "draft_queued";
+  }
+  if (processing?.state === "done") {
+    return "audio_ready";
+  }
+  if (processing?.state === "active") {
+    return "processing_audio";
+  }
+  return "choose_content";
+}
+
+function buildCreateWorkflowSnapshot(args: {
+  selectedItemId: number | null;
+  selectedCardId: number | null;
+  detail: LibraryItemDetail | null;
+  latestPlaylist: YotoPlaylistDraft | null;
+  selectedCard: PhysicalCard | null;
+  itemSummary: { title: string; detail: string } | null;
+  itemSteps: WorkflowStep[];
+  stageStatuses: CreateStageStatus[];
+}): CreateWorkflowSnapshot {
+  const nextAction = args.itemSteps.find((step) => !step.done)?.label ?? "Verify physical card";
+  return {
+    route: "/create",
+    selected_item_id: args.selectedItemId,
+    selected_card_id: args.selectedCardId,
+    create_workflow_stage: deriveCreateWorkflowStage(args.stageStatuses),
+    create_workflow_title: args.detail?.item.title ?? null,
+    create_workflow_status: args.itemSummary?.title ?? null,
+    create_workflow_detail: args.itemSummary?.detail ?? null,
+    create_playlist_draft_id: args.latestPlaylist?.id ?? null,
+    create_playlist_status: args.latestPlaylist?.status ?? null,
+    create_remote_playlist_id: args.latestPlaylist?.remote_playlist_id ?? null,
+    create_remote_playlist_uri: args.latestPlaylist?.remote_playlist_uri ?? null,
+    create_card_display_name: args.selectedCard?.display_name ?? null,
+    create_next_action: nextAction,
+  };
+}
+
+function readCreateWorkflowSnapshot(session: CardProgrammingSession | null): CreateWorkflowSnapshot | null {
+  const extra = session?.extra_json;
+  if (!extra || Array.isArray(extra) || extra.route !== "/create") {
+    return null;
+  }
+  return extra as unknown as CreateWorkflowSnapshot;
 }
 
 function preferredCreateItem(items: LibraryItem[]): LibraryItem | null {
@@ -2017,6 +2102,7 @@ function LibraryPage() {
 function CreateCardPage() {
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [cards, setCards] = useState<PhysicalCard[]>([]);
+  const [programmingSession, setProgrammingSession] = useState<CardProgrammingSession | null>(null);
   const [selectedItemId, setSelectedItemId] = useState<number | null>(null);
   const [selectedCardId, setSelectedCardId] = useState<number | null>(null);
   const [detail, setDetail] = useState<LibraryItemDetail | null>(null);
@@ -2036,6 +2122,7 @@ function CreateCardPage() {
     ]);
     setItems(nextItems);
     setCards(nextCards);
+    setProgrammingSession(session);
     setSelectedItemId(
       (current) => current ?? session.library_item_id ?? preferredCreateItem(nextItems)?.id ?? nextItems[0]?.id ?? null,
     );
@@ -2120,6 +2207,8 @@ function CreateCardPage() {
       (latestPlaylist.remote_playlist_id || latestPlaylist.remote_playlist_uri),
   );
   const canStageBlankWrite = Boolean(detail && latestPlaylist?.remote_playlist_uri);
+  const workflowSnapshotRef = useRef<string | null>(null);
+  const recoveredWorkflow = readCreateWorkflowSnapshot(programmingSession);
 
   useEffect(() => {
     if (!detail || !latestPlaylist || !readyToLink) {
@@ -2129,15 +2218,43 @@ function CreateCardPage() {
   }, [detail, latestPlaylist, readyToLink]);
 
   useEffect(() => {
-    if (!selectedCardId) {
+    if (!selectedItemId) {
+      workflowSnapshotRef.current = null;
       return;
     }
+    const snapshot = buildCreateWorkflowSnapshot({
+      selectedItemId,
+      selectedCardId,
+      detail,
+      latestPlaylist,
+      selectedCard,
+      itemSummary,
+      itemSteps,
+      stageStatuses,
+    });
+    const snapshotKey = JSON.stringify(snapshot);
+    if (workflowSnapshotRef.current === snapshotKey) {
+      return;
+    }
+    workflowSnapshotRef.current = snapshotKey;
     void updateCardProgrammingSession({
       session_key: "default",
+      library_item_id: selectedItemId,
       active_card_id: selectedCardId,
-      extra_json: { route: "/create", selected_card_id: selectedCardId },
-    }).catch(() => undefined);
-  }, [selectedCardId]);
+      extra_json: snapshot as unknown as Record<string, unknown>,
+    })
+      .then(setProgrammingSession)
+      .catch(() => undefined);
+  }, [
+    detail,
+    itemSteps,
+    itemSummary,
+    latestPlaylist,
+    selectedCard,
+    selectedCardId,
+    selectedItemId,
+    stageStatuses,
+  ]);
 
   function handleStageBlankWriteTarget() {
     if (!detail || !latestPlaylist) {
@@ -2210,6 +2327,18 @@ function CreateCardPage() {
 
       {error ? <p className="auth-error">{error}</p> : null}
       {message ? <p className="muted">{message}</p> : null}
+      {recoveredWorkflow ? (
+        <div className="detail-note workflow-overview-panel">
+          <p className="eyebrow">Recovered workflow</p>
+          <h3>{recoveredWorkflow.create_workflow_status ?? "Workflow restored"}</h3>
+          <p>{recoveredWorkflow.create_workflow_detail ?? "The last known Create workflow state was restored from the backend session."}</p>
+          <p className="muted">
+            Stage: {recoveredWorkflow.create_workflow_stage} Â· Card:{" "}
+            {recoveredWorkflow.create_card_display_name ?? "none selected"} Â· Next:{" "}
+            {recoveredWorkflow.create_next_action ?? "continue"}
+          </p>
+        </div>
+      ) : null}
       {readyToLink ? (
         <div className="detail-note create-card-notice">
           <p className="eyebrow">Ready</p>
