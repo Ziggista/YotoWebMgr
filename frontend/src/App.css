@@ -835,6 +835,12 @@ a {
   border: 1px solid rgba(122, 204, 164, 0.24);
 }
 
+.status-pill-active {
+  background: rgba(80, 168, 255, 0.16);
+  color: #b8ddff;
+  border: 1px solid rgba(80, 168, 255, 0.24);
+}
+
 .oauth-strip {
   display: flex;
   align-items: center;
@@ -993,6 +999,11 @@ a {
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 12px;
+}
+
+.workflow-inline-panel {
+  display: grid;
+  gap: 10px;
 }
 
 .workflow-overview-card {

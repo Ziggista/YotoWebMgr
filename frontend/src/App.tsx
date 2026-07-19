@@ -587,6 +587,78 @@ function currentRuntimeLabel(): string {
   return "unknown";
 }
 
+function isJobActive(job: Job | null | undefined): boolean {
+  return job?.status === "queued" || job?.status === "running";
+}
+
+function hasActiveJobs(jobs: Job[]): boolean {
+  return jobs.some((job) => isJobActive(job));
+}
+
+function workflowStageTone(stage: "done" | "active" | "blocked"): "ok" | "active" | "muted" {
+  if (stage === "done") {
+    return "ok";
+  }
+  if (stage === "active") {
+    return "active";
+  }
+  return "muted";
+}
+
+function stagePillClassName(tone: "ok" | "active" | "muted"): string {
+  if (tone === "ok") {
+    return "status-pill status-pill-ok";
+  }
+  if (tone === "active") {
+    return "status-pill status-pill-active";
+  }
+  return "status-pill status-pill-muted";
+}
+
+function importWorkflowStage(importRequest: ImportRequest, jobs: Job[]): { label: string; tone: "ok" | "active" | "muted" } {
+  const job =
+    jobs.find((candidate) => candidate.id === importRequest.related_job_id) ??
+    jobs.find((candidate) => candidate.related_import_id === importRequest.id) ??
+    null;
+
+  if (job?.status === "failed") {
+    return { label: `Failed: ${job.type}`, tone: "muted" };
+  }
+  if (job?.status === "running") {
+    return { label: `Running: ${job.type}`, tone: "active" };
+  }
+  if (job?.status === "queued") {
+    return { label: `Queued: ${job.type}`, tone: "active" };
+  }
+  if (importRequest.review_status === "approved") {
+    return { label: "Approved", tone: "ok" };
+  }
+  if (importRequest.review_status === "reviewed") {
+    return { label: "Needs approval", tone: "active" };
+  }
+  if (importRequest.status === "pending_delete") {
+    return { label: "Hidden", tone: "muted" };
+  }
+  return { label: importRequest.status, tone: "muted" };
+}
+
+function shouldAutoRefreshWorkflow(item: LibraryItem | null, jobs: Job[], latestPlaylist: YotoPlaylistDraft | null): boolean {
+  if (hasActiveJobs(jobs)) {
+    return true;
+  }
+  const itemStatus = item?.status ?? "";
+  const readinessStatus = item?.readiness_status ?? "";
+  if (
+    itemStatus === "processing_queued" ||
+    itemStatus === "yoto_playlist_queued" ||
+    readinessStatus === "yoto_playlist_queued" ||
+    readinessStatus === "awaiting_remote_mapping"
+  ) {
+    return true;
+  }
+  return latestPlaylist?.status === "queued";
+}
+
 function formatUploadBytes(value: number): string {
   if (value < 1024) {
     return `${value} B`;
@@ -620,6 +692,29 @@ async function copyToClipboard(value: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+function CopyValueButton({ label, value }: { label: string; value: string | null | undefined }) {
+  const [copied, setCopied] = useState(false);
+
+  if (!value) {
+    return null;
+  }
+  const nextValue = value;
+
+  async function handleCopy() {
+    const ok = await copyToClipboard(nextValue);
+    setCopied(ok);
+    if (ok) {
+      window.setTimeout(() => setCopied(false), 1600);
+    }
+  }
+
+  return (
+    <button className="inline-button" onClick={() => void handleCopy()} type="button">
+      {copied ? `${label} copied` : `Copy ${label}`}
+    </button>
+  );
 }
 
 async function fetchAndroidUpdateManifest(): Promise<AndroidUpdateManifest> {
@@ -1134,9 +1229,7 @@ function CreateStageOverview({ statuses }: { statuses: CreateStageStatus[] }) {
     <div className="compact-list">
       {statuses.map((status) => (
         <article className="stage-status-row" key={status.key}>
-          <span
-            className={`status-pill${status.state === "blocked" ? " status-pill-muted" : ""}${status.state === "done" ? " status-pill-ok" : ""}`}
-          >
+          <span className={stagePillClassName(workflowStageTone(status.state))}>
             {status.label} {status.state}
           </span>
           <p className="muted">{status.detail}</p>
@@ -2215,6 +2308,16 @@ function CreateCardPage() {
       .finally(() => setLoading(false));
   }, [selectedItemId]);
 
+  useEffect(() => {
+    if (!selectedItemId || !shouldAutoRefreshWorkflow(detail?.item ?? null, jobs, latestYotoPlaylist(yotoPlaylists))) {
+      return;
+    }
+    const intervalId = window.setInterval(() => {
+      void refreshSelectedItem(selectedItemId).catch(() => undefined);
+    }, 2500);
+    return () => window.clearInterval(intervalId);
+  }, [detail?.item, jobs, selectedItemId, yotoPlaylists]);
+
   async function runAction(action: () => Promise<void>, successMessage: string) {
     setWorking(true);
     setError(null);
@@ -2392,6 +2495,10 @@ function CreateCardPage() {
             Yoto cloud content exists for <strong>{detail?.item.title}</strong>. Choose a target card below, queue the
             handoff, then open the Cards screen to write, clone, or test the physical tag.
           </p>
+          <div className="button-row">
+            <CopyValueButton label="card ID" value={latestPlaylist?.remote_playlist_id ?? null} />
+            <CopyValueButton label="playlist URI" value={latestPlaylist?.remote_playlist_uri ?? null} />
+          </div>
         </div>
       ) : null}
 
@@ -2518,13 +2625,20 @@ function CreateCardPage() {
             </button>
           </div>
           {latestPlaylist ? (
-            <p className="muted">
-              Latest draft #{latestPlaylist.id}: {latestPlaylist.status}
-              {latestPlaylist.remote_playlist_uri || latestPlaylist.remote_playlist_id
-                ? ` · ${latestPlaylist.remote_playlist_uri ?? latestPlaylist.remote_playlist_id}`
-                : ""}
-              {latestPlaylist.last_error ? ` · error: ${latestPlaylist.last_error}` : ""}
-            </p>
+            <div className="workflow-inline-panel">
+              <p className="muted">
+                Latest draft #{latestPlaylist.id}: {latestPlaylist.status}
+                {latestPlaylist.remote_playlist_uri || latestPlaylist.remote_playlist_id
+                  ? ` · ${latestPlaylist.remote_playlist_uri ?? latestPlaylist.remote_playlist_id}`
+                  : ""}
+                {latestPlaylist.last_error ? ` · error: ${latestPlaylist.last_error}` : ""}
+              </p>
+              <div className="button-row">
+                <CopyValueButton label="draft ID" value={String(latestPlaylist.id)} />
+                <CopyValueButton label="remote ID" value={latestPlaylist.remote_playlist_id ?? null} />
+                <CopyValueButton label="remote URI" value={latestPlaylist.remote_playlist_uri ?? null} />
+              </div>
+            </div>
           ) : null}
         </article>
 
@@ -2683,6 +2797,16 @@ function LibraryDetailPage() {
       )
       .finally(() => setLoading(false));
   }, [numericItemId]);
+
+  useEffect(() => {
+    if (!shouldAutoRefreshWorkflow(detail?.item ?? null, jobs, latestYotoPlaylist(yotoPlaylists))) {
+      return;
+    }
+    const intervalId = window.setInterval(() => {
+      void refreshPage().catch(() => undefined);
+    }, 2500);
+    return () => window.clearInterval(intervalId);
+  }, [detail?.item, jobs, yotoPlaylists]);
 
   async function handleRetry(jobId: number) {
     setError(null);
@@ -2927,6 +3051,10 @@ function LibraryDetailPage() {
             Next {yotoSteps.find((step) => !step.done)?.label ?? "Verify physical card"}
           </span>
         </div>
+        <div className="button-row">
+          <CopyValueButton label="playlist ID" value={currentYotoPlaylist?.remote_playlist_id ?? null} />
+          <CopyValueButton label="playlist URI" value={currentYotoPlaylist?.remote_playlist_uri ?? null} />
+        </div>
       </div>
 
       {detail.item.readiness_detail ? (
@@ -3144,6 +3272,7 @@ function LibraryDetailPage() {
                     <p className="muted">
                       {job.status} · {job.progress_percent}% · {job.progress_message}
                     </p>
+                    {job.error_summary ? <p className="auth-error">{job.error_summary}</p> : null}
                   </div>
                   {job.status === "failed" ? (
                     <button className="ghost-button" onClick={() => void handleRetry(job.id)} type="button">
@@ -3181,7 +3310,10 @@ function LibraryDetailPage() {
                     {formatDuration(asset.duration_seconds)}
                   </p>
                 </div>
-                <span className="muted">{Math.round(asset.size_bytes / 1024)} KB</span>
+                <div className="row-actions">
+                  <span className="muted">{Math.round(asset.size_bytes / 1024)} KB</span>
+                  <CopyValueButton label="asset path" value={asset.output_path} />
+                </div>
               </div>
             ))}
           </div>
@@ -3258,6 +3390,17 @@ function LibraryDetailPage() {
                             : ""}
                           {yotoLiveCreateResults[playlist.id]?.token_refreshed ? " Â· token refreshed" : ""}
                         </p>
+                        <div className="button-row">
+                          <CopyValueButton
+                            label="remote card ID"
+                            value={yotoLiveCreateResults[playlist.id]?.remote_card_id ?? null}
+                          />
+                          <CopyValueButton label="remote playlist ID" value={playlist.remote_playlist_id ?? null} />
+                          <CopyValueButton
+                            label="remote playlist URI"
+                            value={playlist.remote_playlist_uri ?? null}
+                          />
+                        </div>
                         {yotoLiveCreateResults[playlist.id]?.response_excerpt ? (
                           <pre>{yotoLiveCreateResults[playlist.id]?.response_excerpt}</pre>
                         ) : null}
@@ -3398,6 +3541,7 @@ function LibraryDetailPage() {
 
 function ImportPage({ session }: { session: SessionResponse }) {
   const [imports, setImports] = useState<ImportRequest[]>([]);
+  const [jobs, setJobs] = useState<Job[]>([]);
   const [sources, setSources] = useState<ImportSourceInfo | null>(null);
   const [mode, setMode] = useState<"upload" | "filesystem">("upload");
   const [form, setForm] = useState({
@@ -3417,7 +3561,9 @@ function ImportPage({ session }: { session: SessionResponse }) {
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
 
   async function refreshImports() {
-    setImports(await fetchImports());
+    const [nextImports, nextJobs] = await Promise.all([fetchImports(), fetchJobs()]);
+    setImports(nextImports);
+    setJobs(nextJobs);
   }
 
   useEffect(() => {
@@ -3425,6 +3571,16 @@ function ImportPage({ session }: { session: SessionResponse }) {
       setError(loadError instanceof Error ? loadError.message : "Failed to load imports."),
     );
   }, []);
+
+  useEffect(() => {
+    if (!hasActiveJobs(jobs)) {
+      return;
+    }
+    const intervalId = window.setInterval(() => {
+      void refreshImports().catch(() => undefined);
+    }, 2500);
+    return () => window.clearInterval(intervalId);
+  }, [jobs]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -3709,41 +3865,47 @@ function ImportPage({ session }: { session: SessionResponse }) {
         {imports.length === 0 ? (
           <EmptyState message="No imports queued yet." />
         ) : (
-          imports.map((item) => (
-            <article className="list-row" key={item.id}>
-              <div>
-                <h3>{item.title}</h3>
-                <p className="muted">
-                  {item.source_type} · {item.content_type} · {item.status}
-                </p>
-                <p className="muted">
-                  Review: {item.review_status}
-                  {item.review_notes ? ` · ${item.review_notes}` : ""}
-                </p>
-              </div>
-              <div className="row-actions">
-                <span className="status-pill status-pill-muted">
-                  Job {item.related_job_id ?? "pending"}
-                </span>
-                <button
-                  className="ghost-button"
-                  onClick={() => handleSelectReview(item)}
-                  type="button"
-                >
-                  Review
-                </button>
-                <button
-                  aria-label={`Hide ${item.title}`}
-                  className="danger-icon-button"
-                  onClick={() => void handleHideImport(item.id)}
-                  title="Hide and mark ready for deletion"
-                  type="button"
-                >
-                  x
-                </button>
-              </div>
-            </article>
-          ))
+          imports.map((item) => {
+            const relatedJobs = jobs.filter((job) => job.related_import_id === item.id);
+            const workflowStage = importWorkflowStage(item, relatedJobs);
+
+            return (
+              <article className="list-row" key={item.id}>
+                <div>
+                  <h3>{item.title}</h3>
+                  <p className="muted">
+                    {item.source_type} · {item.content_type} · {item.status}
+                  </p>
+                  <p className="muted">
+                    Review: {item.review_status}
+                    {item.review_notes ? ` · ${item.review_notes}` : ""}
+                  </p>
+                </div>
+                <div className="row-actions">
+                  <span className={stagePillClassName(workflowStage.tone)}>
+                    {workflowStage.label}
+                  </span>
+                  <span className="status-pill status-pill-muted">Job {item.related_job_id ?? "pending"}</span>
+                  <button
+                    className="ghost-button"
+                    onClick={() => handleSelectReview(item)}
+                    type="button"
+                  >
+                    Review
+                  </button>
+                  <button
+                    aria-label={`Hide ${item.title}`}
+                    className="danger-icon-button"
+                    onClick={() => void handleHideImport(item.id)}
+                    title="Hide and mark ready for deletion"
+                    type="button"
+                  >
+                    x
+                  </button>
+                </div>
+              </article>
+            );
+          })
         )}
       </div>
     </section>
@@ -3763,6 +3925,16 @@ function JobsPage() {
       setError(loadError instanceof Error ? loadError.message : "Failed to load jobs."),
     );
   }, []);
+
+  useEffect(() => {
+    if (!hasActiveJobs(jobs)) {
+      return;
+    }
+    const intervalId = window.setInterval(() => {
+      void refreshJobs().catch(() => undefined);
+    }, 2500);
+    return () => window.clearInterval(intervalId);
+  }, [jobs]);
 
   async function handleRetry(jobId: number) {
     setError(null);
