@@ -91,6 +91,10 @@ Then browse to:
 http://127.0.0.1:5175/
 ```
 
+The deploy script now defaults the frontend port-forward bind address to `0.0.0.0`, so the same
+dev deployment is reachable from remote devices over the current Windows/Tailscale forwarding path
+without needing to pass `--bind-address 0.0.0.0` each time.
+
 Use this URL for the MicroK8s app. Port `5173` is reserved for local Vite development and can show
 stale local state if it is running separately.
 When testing the deployed app, quick-select a local household user first. The Yoto settings screen
@@ -127,6 +131,10 @@ Filesystem imports use a persistent MicroK8s volume mounted into the API and wor
 
 Use `/var/lib/yotowebmgr/media/imports/drop` for files copied into the pod-backed import area and
 `/var/lib/yotowebmgr/media/imports/uploads` for browser-uploaded files staged by the API.
+
+For repeatable end-to-end tests after a destructive redeploy, prefer browser upload through
+`POST /api/v1/imports/uploads` or the Import screen. The `drop` directory is only reliable if the
+current PVC has been seeded again after namespace deletion.
 
 ## Initial Scope
 

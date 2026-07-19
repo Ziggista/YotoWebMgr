@@ -40,6 +40,10 @@ Keep `RESET_DATABASE_ON_START=false` outside disposable dev deployments.
 k8s/scripts/deploy-dev.sh
 ```
 
+`k8s/scripts/deploy-dev.sh` now defaults the frontend port-forward bind address to `0.0.0.0`.
+That makes the forwarded `5175` service reachable from remote Android/browser clients when the
+Windows host or Tailscale layer forwards the port onward.
+
 The deployment script starts or refreshes the local frontend port-forward automatically. To check or
 restart the frontend service forward after deployment:
 
@@ -65,6 +69,13 @@ http://ziggi-pc-1.tailaf3d4b.ts.net:5175/
 
 That host is useful for remote UI testing, but it is still the same dev deployment behind the local
 port-forward/proxy setup.
+
+The deploy script also now waits for:
+
+- Alembic to finish materialising the schema before any Yoto database-state restore runs.
+- `api`, `worker`, and `frontend` pods to remain `Ready`, not merely to report a Kubernetes rollout.
+
+This matters because a container can crash after image start but before the app is genuinely usable.
 
 ## Dev Shortcuts
 
@@ -100,6 +111,11 @@ The import area is split by purpose:
   the configured import storage roots.
 - In the dev pipeline this PVC is recreated whenever `k8s/scripts/deploy-dev.sh` deletes the
   namespace. For non-destructive environments, keep this PVC and the media PVCs persistent.
+
+Practical testing rule: after a destructive dev redeploy, prefer browser upload or
+`POST /api/v1/imports/uploads` for end-to-end media tests unless you have explicitly reseeded the
+current `drop` PVC. A source path copied from a previous run can be valid locally but absent inside
+the new API/worker pods.
 
 ## Card Inventory Fields
 

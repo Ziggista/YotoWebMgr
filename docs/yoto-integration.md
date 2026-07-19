@@ -77,6 +77,25 @@ creates a trackable worker job, and currently advances the draft to `awaiting_re
 local preparation. Audio upload still does not happen in that worker step; it happens during the
 explicit live-create call so the user can test and inspect it directly from the app.
 
+## Current Tested End-to-End Flow
+
+As of July 19, 2026, the working repeatable live test path is:
+
+1. Upload media through `POST /api/v1/imports/uploads` or the Import screen.
+2. Wait for `inspect_media` to succeed so the library item has concrete playlist tracks.
+3. Run `POST /api/v1/library/{item_id}/process` and wait for `transcode_audio` to succeed.
+4. Run `POST /api/v1/yoto/library/{item_id}/playlists` and wait for `create_yoto_playlist` to
+   settle the draft into `awaiting_remote_mapping`.
+5. Optionally inspect `GET /api/v1/yoto/playlists/{playlist_id}/remote-payload`.
+6. Run `POST /api/v1/yoto/playlists/{playlist_id}/create-live` to upload the processed/source
+   audio to Yoto, wait through Yoto transcode, and create live `/content`.
+
+This flow was verified against the Alice LibriVox sample and returned a live Yoto card/content ID.
+
+Do not treat a hardcoded `/var/lib/yotowebmgr/media/imports/drop/...` source path from a previous
+destructive dev deploy as stable. After namespace deletion, that PVC may be empty even when a local
+workspace copy still exists on the Windows filesystem.
+
 For local browser testing, set the redirect URI to the frontend callback route, for example
 `http://127.0.0.1:5175/settings/yoto/callback`, and register the same URI with the Yoto developer
 application.

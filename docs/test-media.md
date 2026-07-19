@@ -38,6 +38,14 @@ public-domain recording:
 The default app import path is `/var/lib/yotowebmgr/media/imports/drop`. For local testing, point
 `IMPORT_DROP_PATH` at `local-media/imports/drop` or copy these files into the MicroK8s import PVC.
 
+For destructive MicroK8s dev redeploys, the most reliable repeatable test path is browser upload or
+`POST /api/v1/imports/uploads` using these same local files. The upload flow stages the file into
+the current pod-backed `/var/lib/yotowebmgr/media/imports/uploads` PVC automatically, so the worker
+and API both see the same source path for inspect/process/Yoto tests.
+
+The direct `/var/lib/yotowebmgr/media/imports/drop/...` path is only safe when you have reseeded
+the current `imports-pvc` after the latest namespace delete.
+
 ## Copyleft Music Candidate
 
 Prefer Creative Commons Attribution-ShareAlike music for copyleft-style tests. CC BY-SA permits
