@@ -212,36 +212,12 @@ async def update_card_programming_session(
         session.last_verification_event_id = None
         session.extra_json = None
     else:
-        if payload.active_card_id is not None:
-            if db.get(PhysicalCard, payload.active_card_id) is None:
+        updates = payload.model_dump(exclude={"session_key", "clear"}, exclude_unset=True)
+        if "active_card_id" in updates and updates["active_card_id"] is not None:
+            if db.get(PhysicalCard, updates["active_card_id"]) is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Card not found")
-            session.active_card_id = payload.active_card_id
-        if payload.source is not None:
-            session.source = payload.source
-        if payload.target_label is not None:
-            session.target_label = payload.target_label
-        if payload.detail is not None:
-            session.detail = payload.detail
-        if payload.library_item_id is not None:
-            session.library_item_id = payload.library_item_id
-        if payload.playlist_draft_id is not None:
-            session.playlist_draft_id = payload.playlist_draft_id
-        if payload.playlist_uri is not None:
-            session.playlist_uri = payload.playlist_uri
-        if payload.programmable_id is not None:
-            session.programmable_id = payload.programmable_id
-        if payload.ndef_payload_text is not None:
-            session.ndef_payload_text = payload.ndef_payload_text
-        if payload.ndef_payload_hex is not None:
-            session.ndef_payload_hex = payload.ndef_payload_hex
-        if payload.source_scan_dump_id is not None:
-            session.source_scan_dump_id = payload.source_scan_dump_id
-        if payload.verification_armed is not None:
-            session.verification_armed = payload.verification_armed
-        if payload.last_verification_event_id is not None:
-            session.last_verification_event_id = payload.last_verification_event_id
-        if payload.extra_json is not None:
-            session.extra_json = payload.extra_json
+        for field, value in updates.items():
+            setattr(session, field, value)
 
     db.add(session)
     db.commit()

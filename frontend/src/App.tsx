@@ -2131,6 +2131,17 @@ function CreateCardPage() {
     void maybeNotifyReadyToLink(detail.item, latestPlaylist).catch(() => undefined);
   }, [detail, latestPlaylist, readyToLink]);
 
+  useEffect(() => {
+    if (!selectedCardId) {
+      return;
+    }
+    void updateCardProgrammingSession({
+      session_key: "default",
+      active_card_id: selectedCardId,
+      extra_json: { route: "/create", selected_card_id: selectedCardId },
+    }).catch(() => undefined);
+  }, [selectedCardId]);
+
   function handleStageBlankWriteTarget() {
     if (!detail || !latestPlaylist) {
       setError("Select a library item with a Yoto playlist first.");
@@ -2144,6 +2155,7 @@ function CreateCardPage() {
     setWorking(true);
     void updateCardProgrammingSession({
       session_key: "default",
+      active_card_id: selectedCardId ?? null,
       source: target.source,
       target_label: target.label,
       detail: target.detail,
@@ -3801,6 +3813,16 @@ function CardsPage() {
   }, [stagedDump]);
 
   useEffect(() => {
+    if (!programmingSession?.source_scan_dump_id) {
+      return;
+    }
+    const matchingDump = scanDumps.find((entry) => entry.id === programmingSession.source_scan_dump_id) ?? null;
+    if (matchingDump) {
+      setStagedDump(matchingDump);
+    }
+  }, [programmingSession, scanDumps]);
+
+  useEffect(() => {
     if (stagedWriteTarget) {
       writeStoredJson(stagedWriteTargetStorageKey, stagedWriteTarget);
       return;
@@ -4015,6 +4037,7 @@ function CardsPage() {
     setVerificationResult(null);
     void updateCardProgrammingSession({
       session_key: "default",
+      active_card_id: matchingCardForCurrentForm()?.id ?? programmingSession?.active_card_id ?? null,
       source: target.source,
       target_label: target.label,
       detail: target.detail,
@@ -4043,7 +4066,11 @@ function CardsPage() {
     payload: Partial<CardProgrammingEvent> & { event_type: string },
     targetOverride?: CardWriteTarget | null,
   ) {
-    const target = targetOverride ?? readArmedVerificationTarget() ?? stagedWriteTarget;
+    const target =
+      targetOverride ??
+      (programmingSession?.verification_armed ? stagedWriteTarget : null) ??
+      stagedWriteTarget ??
+      readArmedVerificationTarget();
     const matchingCard = matchingCardForCurrentForm();
     const resolvedCardCode = payload.card_code ?? normalizedCardCode(matchingCard?.card_code ?? form.card_code);
     const resolvedProgrammableId =
@@ -4104,11 +4131,32 @@ function CardsPage() {
   function stageScanDump(entry: CardScanDumpEntry) {
     setStagedDump(entry);
     stageWriteTarget(createWriteTargetFromScanDump(entry));
+    void updateCardProgrammingSession({
+      session_key: "default",
+      source_scan_dump_id: entry.id,
+      source: "scan_dump",
+      target_label: `Scan dump #${entry.id}`,
+      detail: entry.ndef_payload_text ?? entry.programmable_id ?? "Captured NFC payload",
+      programmable_id: entry.programmable_id ?? null,
+      ndef_payload_text: entry.ndef_payload_text ?? null,
+      ndef_payload_hex: entry.ndef_payload_hex ?? null,
+      verification_armed: false,
+      extra_json: { route: "/cards", staged_dump_id: entry.id },
+    })
+      .then(setProgrammingSession)
+      .catch(() => undefined);
     setHelperMessage(`Staged source card from scan dump #${entry.id}.`);
   }
 
   function clearStagedDump() {
     setStagedDump(null);
+    void updateCardProgrammingSession({
+      session_key: "default",
+      source_scan_dump_id: null,
+      extra_json: { route: "/cards", staged_dump_id: null },
+    })
+      .then(setProgrammingSession)
+      .catch(() => undefined);
     setHelperMessage("Cleared the staged source card.");
   }
 
