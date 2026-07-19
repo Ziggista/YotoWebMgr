@@ -375,6 +375,7 @@ async def test_library_item_link_is_immediate_when_remote_yoto_content_exists(
     api_client: AsyncClient,
     db_session: Session,
 ) -> None:
+    card_id: int
     async with api_client as client:
         created = await client.post(
             "/api/v1/library",
@@ -385,24 +386,24 @@ async def test_library_item_link_is_immediate_when_remote_yoto_content_exists(
             "/api/v1/cards",
             json={"card_code": "CARD03", "display_name": "Card 03"},
         )
+        card_id = card.json()["id"]
 
-    draft = YotoPlaylistDraft(
-        library_item_id=item_id,
-        title="Already In Yoto",
-        status="remote_created",
-        payload_json=json.dumps({"title": "Already In Yoto", "content": {"chapters": []}}),
-        remote_playlist_id="31yYU",
-        remote_playlist_uri="https://my.yotoplay.com/playlist/31yYU",
-    )
-    db_session.add(draft)
-    db_session.commit()
+        draft = YotoPlaylistDraft(
+            library_item_id=item_id,
+            title="Already In Yoto",
+            status="remote_created",
+            payload_json=json.dumps({"title": "Already In Yoto", "content": {"chapters": []}}),
+            remote_playlist_id="31yYU",
+            remote_playlist_uri="https://my.yotoplay.com/playlist/31yYU",
+        )
+        db_session.add(draft)
+        db_session.commit()
 
-    async with api_client as client:
         linked = await client.post(
             f"/api/v1/library/{item_id}/link-card",
-            json={"card_id": card.json()["id"]},
+            json={"card_id": card_id},
         )
-        history = await client.get(f"/api/v1/cards/{card.json()['id']}/history")
+        history = await client.get(f"/api/v1/cards/{card_id}/history")
 
     assert linked.status_code == 202
     payload = linked.json()
@@ -1537,7 +1538,16 @@ async def test_yoto_probe_refreshes_tokens_and_calls_groups_endpoint(
         assert tokens.refresh_token == "refresh-2"
         return "k8s-secret:test-namespace:test-secret:yoto-credential-1.json"
 
-    async def fake_call_yoto_api(*, api_base_url: str, relative_url: str, access_token: str) -> tuple[int, object]:
+    async def fake_call_yoto_api(
+        *,
+        method: str,
+        api_base_url: str,
+        relative_url: str,
+        access_token: str,
+        json_body: object | None = None,
+    ) -> tuple[int, object]:
+        assert method == "GET"
+        assert json_body is None
         assert api_base_url == "https://api.yotoplay.com"
         assert relative_url == "/card/family/library/groups"
         assert access_token == refreshed_access_token
@@ -2107,7 +2117,7 @@ async def test_create_live_yoto_playlist_uploads_local_audio_assets(
             assert isinstance(chapters, list)
             assert chapters[0]["tracks"][0]["trackUrl"] == "yoto:#abc123sha"
             assert chapters[0]["tracks"][0]["fileSize"] == processed_path.stat().st_size
-            assert chapters[0]["tracks"][0]["channels"] == 1
+            assert chapters[0]["tracks"][0]["channels"] == "mono"
             return 200, {"card": {"cardId": "REMOTE123", "title": "Uploaded Draft"}}
         raise AssertionError(f"Unexpected Yoto API call: {method} {relative_url}")
 
