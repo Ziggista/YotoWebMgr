@@ -3,6 +3,7 @@ import { Link, NavLink, Route, Routes, useParams } from "react-router-dom";
 import AudioPlayer from "react-h5-audio-player";
 import "react-h5-audio-player/lib/styles.css";
 import { Capacitor } from "@capacitor/core";
+import { LocalNotifications } from "@capacitor/local-notifications";
 import { CapacitorUpdater } from "@capgo/capacitor-updater";
 import { NFC, type NDEFMessagesTransformable } from "@exxili/capacitor-nfc";
 import {
@@ -106,6 +107,7 @@ const yotoPkceStorageKey = "yotowebmgr.yoto.pkce";
 const yotoPkceExchangeKey = "yotowebmgr.yoto.pkce.exchange";
 const frontendBuildSha = import.meta.env.VITE_APP_BUILD_SHA ?? "dev";
 const stagedCardDumpStorageKey = "yotowebmgr.cards.stagedDump";
+const readyToLinkNotificationStorageKey = "yotowebmgr.notifications.readyToLink";
 const yotoDebugPresets = [
   { label: "MYO content", method: "GET" as const, path: "/content/mine?showdeleted=false" },
   { label: "Family library groups", method: "GET" as const, path: "/card/family/library/groups" },
@@ -177,12 +179,14 @@ type AndroidUpdateState =
       remoteVersion: string;
       bundleId: string;
     }
-  | {
-      kind: "error";
-      detail: string;
-      currentVersion: string | null;
-      nativeVersion: string | null;
-    };
+    | {
+        kind: "error";
+        detail: string;
+        currentVersion: string | null;
+        nativeVersion: string | null;
+      };
+
+type NotificationPermissionState = "prompt" | "prompt-with-rationale" | "granted" | "denied";
 
 type NdefRecordWithData = {
   data?: ArrayBuffer | DataView | Uint8Array | null;
@@ -366,6 +370,71 @@ async function fetchAndroidUpdateManifest(): Promise<AndroidUpdateManifest> {
     throw new Error(`Update manifest request failed with HTTP ${response.status}.`);
   }
   return response.json() as Promise<AndroidUpdateManifest>;
+}
+
+async function getNotificationPermissionState(): Promise<NotificationPermissionState | null> {
+  if (!isNativeAndroidRuntime()) {
+    return null;
+  }
+  const result = await LocalNotifications.checkPermissions();
+  return result.display;
+}
+
+async function requestNotificationPermissionState(): Promise<NotificationPermissionState | null> {
+  if (!isNativeAndroidRuntime()) {
+    return null;
+  }
+  const result = await LocalNotifications.requestPermissions();
+  return result.display;
+}
+
+async function ensureWorkflowNotificationChannel() {
+  if (!isNativeAndroidRuntime()) {
+    return;
+  }
+  await LocalNotifications.createChannel({
+    id: "yotowebmgr-workflow",
+    name: "Workflow",
+    description: "YotoWebMgr workflow notifications",
+    importance: 4,
+    visibility: 1,
+  });
+}
+
+function readyToLinkNotificationKey(itemId: number, playlistId: number): string {
+  return `${readyToLinkNotificationStorageKey}:${itemId}:${playlistId}`;
+}
+
+async function maybeNotifyReadyToLink(item: LibraryItem, playlist: YotoPlaylistDraft) {
+  if (!isNativeAndroidRuntime()) {
+    return;
+  }
+  const permission = await getNotificationPermissionState();
+  if (permission !== "granted") {
+    return;
+  }
+  const storageKey = readyToLinkNotificationKey(item.id, playlist.id);
+  if (window.localStorage.getItem(storageKey) === "sent") {
+    return;
+  }
+  await ensureWorkflowNotificationChannel();
+  await LocalNotifications.schedule({
+    notifications: [
+      {
+        id: Number(`${item.id}${playlist.id}`.slice(-8)),
+        title: "Ready to link to card",
+        body: `${item.title} finished processing and is ready for card handoff.`,
+        largeBody: `Yoto cloud content is ready for ${item.title}. Open the Create tab, choose a target card, then continue in Cards to write or clone the physical tag.`,
+        channelId: "yotowebmgr-workflow",
+        extra: {
+          itemId: item.id,
+          playlistId: playlist.id,
+          route: "/create",
+        },
+      },
+    ],
+  });
+  window.localStorage.setItem(storageKey, "sent");
 }
 
 function cardWorkflowSteps(card: PhysicalCard | null): WorkflowStep[] {
@@ -1723,6 +1792,13 @@ function CreateCardPage() {
       latestPlaylist &&
       (latestPlaylist.remote_playlist_id || latestPlaylist.remote_playlist_uri),
   );
+
+  useEffect(() => {
+    if (!detail || !latestPlaylist || !readyToLink) {
+      return;
+    }
+    void maybeNotifyReadyToLink(detail.item, latestPlaylist).catch(() => undefined);
+  }, [detail, latestPlaylist, readyToLink]);
 
   if (loading && !detail) {
     return (
@@ -4637,6 +4713,7 @@ function SettingsPage() {
   const [customDebugMethod, setCustomDebugMethod] = useState<"GET" | "POST" | "PUT" | "PATCH" | "DELETE">("GET");
   const [customDebugPath, setCustomDebugPath] = useState("/content/mine?showdeleted=false");
   const [customDebugBody, setCustomDebugBody] = useState("");
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermissionState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -4651,7 +4728,70 @@ function SettingsPage() {
       .catch((loadError) =>
         setError(loadError instanceof Error ? loadError.message : "Failed to load settings."),
       );
+    void getNotificationPermissionState().then(setNotificationPermission).catch(() => undefined);
   }, []);
+
+  async function handleRequestNotificationPermission() {
+    setSaving(true);
+    setError(null);
+    try {
+      await ensureWorkflowNotificationChannel();
+      setNotificationPermission(await requestNotificationPermissionState());
+    } catch (permissionError) {
+      setError(
+        permissionError instanceof Error
+          ? permissionError.message
+          : "Failed to request Android notification permission.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleRefreshNotificationPermission() {
+    setSaving(true);
+    setError(null);
+    try {
+      setNotificationPermission(await getNotificationPermissionState());
+    } catch (permissionError) {
+      setError(
+        permissionError instanceof Error
+          ? permissionError.message
+          : "Failed to check Android notification permission.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleSendTestNotification() {
+    setSaving(true);
+    setError(null);
+    try {
+      await ensureWorkflowNotificationChannel();
+      const permission = await getNotificationPermissionState();
+      setNotificationPermission(permission);
+      if (permission !== "granted") {
+        throw new Error("Android notification permission is not granted yet.");
+      }
+      await LocalNotifications.schedule({
+        notifications: [
+          {
+            id: 919001,
+            title: "YotoWebMgr test notification",
+            body: "Android notifications are configured on this device.",
+            channelId: "yotowebmgr-workflow",
+          },
+        ],
+      });
+    } catch (notificationError) {
+      setError(
+        notificationError instanceof Error ? notificationError.message : "Failed to send the test notification.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
 
   async function handleSave(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -5132,6 +5272,44 @@ function SettingsPage() {
               </div>
             </div>
           ) : null}
+        </div>
+        <div className="settings-connection-panel">
+          <div>
+            <h3 className="settings-section-title">Android notifications</h3>
+            <p className="settings-note">
+              When a library item reaches the ready-to-link stage, the Android app can show a native notification so
+              you do not need to keep checking the Create tab manually.
+            </p>
+            <p className="settings-note">
+              Permission: {notificationPermission ?? "Unavailable in this runtime"}
+            </p>
+          </div>
+          <div className="button-row">
+            <button
+              className="primary-button"
+              disabled={!isNativeAndroidRuntime() || saving}
+              onClick={() => void handleRequestNotificationPermission()}
+              type="button"
+            >
+              Request notification permission
+            </button>
+            <button
+              className="secondary-button"
+              disabled={!isNativeAndroidRuntime() || saving}
+              onClick={() => void handleRefreshNotificationPermission()}
+              type="button"
+            >
+              Refresh notification status
+            </button>
+            <button
+              className="secondary-button"
+              disabled={!isNativeAndroidRuntime() || saving}
+              onClick={() => void handleSendTestNotification()}
+              type="button"
+            >
+              Send test notification
+            </button>
+          </div>
         </div>
         <button className="primary-button" disabled={saving} type="submit">
           Save settings
