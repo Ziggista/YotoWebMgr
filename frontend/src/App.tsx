@@ -107,6 +107,8 @@ const yotoPkceStorageKey = "yotowebmgr.yoto.pkce";
 const yotoPkceExchangeKey = "yotowebmgr.yoto.pkce.exchange";
 const frontendBuildSha = import.meta.env.VITE_APP_BUILD_SHA ?? "dev";
 const stagedCardDumpStorageKey = "yotowebmgr.cards.stagedDump";
+const stagedWriteTargetStorageKey = "yotowebmgr.cards.stagedWriteTarget";
+const armedCardVerificationStorageKey = "yotowebmgr.cards.armedVerificationTarget";
 const readyToLinkNotificationStorageKey = "yotowebmgr.notifications.readyToLink";
 const yotoDebugPresets = [
   { label: "MYO content", method: "GET" as const, path: "/content/mine?showdeleted=false" },
@@ -187,6 +189,38 @@ type AndroidUpdateState =
       };
 
 type NotificationPermissionState = "prompt" | "prompt-with-rationale" | "granted" | "denied";
+
+type CardWriteTarget = {
+  source: "scan_dump" | "yoto_playlist" | "manual_form";
+  label: string;
+  detail: string;
+  itemId?: number | null;
+  playlistId?: number | null;
+  playlistUri?: string | null;
+  programmableId?: string | null;
+  payloadText?: string | null;
+  payloadHex?: string | null;
+  createdAt: string;
+};
+
+type CardVerificationResult = {
+  matched: boolean;
+  targetLabel: string;
+  detail: string;
+  comparedField: "payload_hex" | "payload_text" | "programmable_id" | "none";
+  observedPayloadText: string | null;
+  observedPayloadHex: string | null;
+  observedProgrammableId: string | null;
+  observedSerialNumber: string | null;
+  observedAt: string;
+};
+
+type CreateStageStatus = {
+  key: string;
+  label: string;
+  state: "done" | "active" | "blocked";
+  detail: string;
+};
 
 type NdefRecordWithData = {
   data?: ArrayBuffer | DataView | Uint8Array | null;
@@ -317,6 +351,192 @@ function generatedCardPayload(playlistUri: string): {
     programmableId: playlistId ? `yoto:playlist:${playlistId}` : trimmedUri,
     payloadText: trimmedUri,
     payloadHex: textToHex(trimmedUri),
+  };
+}
+
+function normaliseHexString(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  const normalized = value.replace(/[^0-9a-f]/gi, "").toLowerCase();
+  return normalized || null;
+}
+
+function normaliseTextValue(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  const normalized = value.trim();
+  return normalized || null;
+}
+
+function readStoredJson<T>(storageKey: string): T | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const raw = window.localStorage.getItem(storageKey);
+  if (!raw) {
+    return null;
+  }
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredJson(storageKey: string, value: unknown) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.setItem(storageKey, JSON.stringify(value));
+}
+
+function removeStoredJson(storageKey: string) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.removeItem(storageKey);
+}
+
+function readStagedWriteTarget(): CardWriteTarget | null {
+  return readStoredJson<CardWriteTarget>(stagedWriteTargetStorageKey);
+}
+
+function readArmedVerificationTarget(): CardWriteTarget | null {
+  return readStoredJson<CardWriteTarget>(armedCardVerificationStorageKey);
+}
+
+function createWriteTargetFromScanDump(entry: CardScanDumpEntry): CardWriteTarget {
+  return {
+    source: "scan_dump",
+    label: `Scan dump #${entry.id}`,
+    detail: entry.ndef_payload_text ?? entry.programmable_id ?? "Captured NFC payload",
+    programmableId: entry.programmable_id,
+    payloadText: entry.ndef_payload_text,
+    payloadHex: entry.ndef_payload_hex,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function createWriteTargetFromCurrentForm(form: {
+  programmable_id: string;
+  yoto_playlist_uri: string;
+  ndef_payload_text: string;
+  ndef_payload_hex: string;
+}): CardWriteTarget {
+  return {
+    source: "manual_form",
+    label: "Manual card form",
+    detail: form.yoto_playlist_uri || form.programmable_id || form.ndef_payload_text || "Prepared NFC payload",
+    playlistUri: normaliseTextValue(form.yoto_playlist_uri),
+    programmableId: normaliseTextValue(form.programmable_id),
+    payloadText: normaliseTextValue(form.ndef_payload_text),
+    payloadHex: normaliseHexString(form.ndef_payload_hex),
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function createWriteTargetFromPlaylist(detail: LibraryItemDetail, playlist: YotoPlaylistDraft): CardWriteTarget | null {
+  const playlistUri = playlist.remote_playlist_uri?.trim();
+  if (!playlistUri) {
+    return null;
+  }
+  const generated = generatedCardPayload(playlistUri);
+  return {
+    source: "yoto_playlist",
+    label: detail.item.title,
+    detail: playlistUri,
+    itemId: detail.item.id,
+    playlistId: playlist.id,
+    playlistUri,
+    programmableId: generated.programmableId,
+    payloadText: generated.payloadText,
+    payloadHex: generated.payloadHex,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function evaluateCardVerification(
+  target: CardWriteTarget | null,
+  observed: {
+    programmableId: string | null;
+    serialNumber: string | null;
+    payloadText: string | null;
+    payloadHex: string | null;
+  },
+): CardVerificationResult | null {
+  if (!target) {
+    return null;
+  }
+
+  const expectedHex = normaliseHexString(target.payloadHex);
+  const observedHex = normaliseHexString(observed.payloadHex);
+  if (expectedHex && observedHex) {
+    const matched = expectedHex === observedHex;
+    return {
+      matched,
+      targetLabel: target.label,
+      detail: matched
+        ? `Verification matched the written payload bytes for ${target.label}.`
+        : `Expected payload hex for ${target.label} did not match the scan result.`,
+      comparedField: "payload_hex",
+      observedPayloadText: observed.payloadText,
+      observedPayloadHex: observed.payloadHex,
+      observedProgrammableId: observed.programmableId,
+      observedSerialNumber: observed.serialNumber,
+      observedAt: new Date().toISOString(),
+    };
+  }
+
+  const expectedText = normaliseTextValue(target.payloadText);
+  const observedText = normaliseTextValue(observed.payloadText);
+  if (expectedText && observedText) {
+    const matched = expectedText === observedText;
+    return {
+      matched,
+      targetLabel: target.label,
+      detail: matched
+        ? `Verification matched the written payload text for ${target.label}.`
+        : `Expected payload text for ${target.label} did not match the scan result.`,
+      comparedField: "payload_text",
+      observedPayloadText: observed.payloadText,
+      observedPayloadHex: observed.payloadHex,
+      observedProgrammableId: observed.programmableId,
+      observedSerialNumber: observed.serialNumber,
+      observedAt: new Date().toISOString(),
+    };
+  }
+
+  const expectedProgrammableId = normaliseTextValue(target.programmableId);
+  const observedProgrammableId = normaliseTextValue(observed.programmableId);
+  if (expectedProgrammableId && observedProgrammableId) {
+    const matched = expectedProgrammableId === observedProgrammableId;
+    return {
+      matched,
+      targetLabel: target.label,
+      detail: matched
+        ? `Verification matched the programmable ID for ${target.label}.`
+        : `Expected programmable ID for ${target.label} did not match the scan result.`,
+      comparedField: "programmable_id",
+      observedPayloadText: observed.payloadText,
+      observedPayloadHex: observed.payloadHex,
+      observedProgrammableId: observed.programmableId,
+      observedSerialNumber: observed.serialNumber,
+      observedAt: new Date().toISOString(),
+    };
+  }
+
+  return {
+    matched: false,
+    targetLabel: target.label,
+    detail: `No comparable payload or programmable ID was available to verify ${target.label}.`,
+    comparedField: "none",
+    observedPayloadText: observed.payloadText,
+    observedPayloadHex: observed.payloadHex,
+    observedProgrammableId: observed.programmableId,
+    observedSerialNumber: observed.serialNumber,
+    observedAt: new Date().toISOString(),
   };
 }
 
@@ -548,6 +768,69 @@ function yotoPlaylistWorkflowSteps(
   ];
 }
 
+function createCardStageStatuses(
+  detail: LibraryItemDetail,
+  jobs: Job[],
+  playlists: YotoPlaylistDraft[],
+  selectedCard: PhysicalCard | null,
+): CreateStageStatus[] {
+  const processingJob = latestJobForItem(jobs, "transcode_audio");
+  const playlistJob = latestJobForItem(jobs, "create_yoto_playlist");
+  const playlist = latestYotoPlaylist(playlists);
+  const remotePlaylistUri = playlist?.remote_playlist_uri ?? null;
+  const remotePlaylistId = playlist?.remote_playlist_id ?? null;
+  const remoteReference = remotePlaylistUri ?? remotePlaylistId;
+  const selectedCardReady =
+    Boolean(selectedCard?.current_library_item_id === detail.item.id) ||
+    Boolean(remotePlaylistUri && selectedCard?.yoto_playlist_uri === remotePlaylistUri);
+
+  return [
+    {
+      key: "processing",
+      label: "Audio",
+      state: detail.processed_assets.length > 0 ? "done" : processingJob ? "active" : "blocked",
+      detail:
+        detail.processed_assets.length > 0
+          ? `${detail.processed_assets.length} processed asset(s) ready for Yoto.`
+          : processingJob
+            ? `${processingJob.status} at ${processingJob.progress_percent}%: ${processingJob.progress_message}`
+            : "Run Process audio before creating the Yoto playlist draft.",
+    },
+    {
+      key: "draft",
+      label: "Draft",
+      state: playlist ? "done" : playlistJob ? "active" : "blocked",
+      detail: playlist
+        ? `Draft #${playlist.id} is ${playlist.status} with ${yotoDraftChapterCount(playlist.payload)} chapter(s).`
+        : playlistJob
+          ? `${playlistJob.status} at ${playlistJob.progress_percent}%: ${playlistJob.progress_message}`
+          : "Queue the local Yoto draft next.",
+    },
+    {
+      key: "cloud",
+      label: "Cloud",
+      state: remoteReference ? "done" : playlist ? "active" : "blocked",
+      detail: remoteReference
+        ? `Remote Yoto reference recorded as ${remoteReference}.`
+        : playlist?.last_error
+          ? `Cloud create last failed: ${playlist.last_error}`
+          : playlist
+            ? "Create the live Yoto content, then wait for the remote playlist URI."
+            : "Cloud create remains blocked until the local draft exists.",
+    },
+    {
+      key: "card",
+      label: "Card",
+      state: selectedCardReady ? "done" : remotePlaylistUri ? "active" : "blocked",
+      detail: selectedCardReady
+        ? `${selectedCard?.display_name ?? "Selected card"} is already pointed at this workflow.`
+        : remotePlaylistUri
+          ? "Stage this playlist for a blank-card write or queue the handoff to the selected card."
+          : "Card programming stays blocked until a remote playlist URI exists.",
+    },
+  ];
+}
+
 function workflowStatusSummary(steps: WorkflowStep[]): { title: string; detail: string } {
   const nextStep = steps.find((step) => !step.done);
   if (!nextStep) {
@@ -717,6 +1000,23 @@ function WorkflowChecklist({ steps }: { steps: WorkflowStep[] }) {
 
 function CardWorkflowChecklist({ card }: { card: PhysicalCard | null }) {
   return <WorkflowChecklist steps={cardWorkflowSteps(card)} />;
+}
+
+function CreateStageOverview({ statuses }: { statuses: CreateStageStatus[] }) {
+  return (
+    <div className="compact-list">
+      {statuses.map((status) => (
+        <article className="stage-status-row" key={status.key}>
+          <span
+            className={`status-pill${status.state === "blocked" ? " status-pill-muted" : ""}${status.state === "done" ? " status-pill-ok" : ""}`}
+          >
+            {status.label} {status.state}
+          </span>
+          <p className="muted">{status.detail}</p>
+        </article>
+      ))}
+    </div>
+  );
 }
 
 function formatDuration(seconds: number | null): string {
@@ -1779,6 +2079,7 @@ function CreateCardPage() {
   const selectedCard = cards.find((card) => card.id === selectedCardId) ?? null;
   const latestPlaylist = latestYotoPlaylist(yotoPlaylists);
   const itemSteps = detail ? yotoPlaylistWorkflowSteps(detail, jobs, yotoPlaylists) : [];
+  const stageStatuses = detail ? createCardStageStatuses(detail, jobs, yotoPlaylists, selectedCard) : [];
   const itemSummary = itemSteps.length > 0 ? workflowStatusSummary(itemSteps) : null;
   const canCreateLive = Boolean(latestPlaylist && !latestPlaylist.remote_playlist_id && !latestPlaylist.remote_playlist_uri);
   const readyToLink = Boolean(
@@ -1792,6 +2093,7 @@ function CreateCardPage() {
       latestPlaylist &&
       (latestPlaylist.remote_playlist_id || latestPlaylist.remote_playlist_uri),
   );
+  const canStageBlankWrite = Boolean(detail && latestPlaylist?.remote_playlist_uri);
 
   useEffect(() => {
     if (!detail || !latestPlaylist || !readyToLink) {
@@ -1799,6 +2101,21 @@ function CreateCardPage() {
     }
     void maybeNotifyReadyToLink(detail.item, latestPlaylist).catch(() => undefined);
   }, [detail, latestPlaylist, readyToLink]);
+
+  function handleStageBlankWriteTarget() {
+    if (!detail || !latestPlaylist) {
+      setError("Select a library item with a Yoto playlist first.");
+      return;
+    }
+    const target = createWriteTargetFromPlaylist(detail, latestPlaylist);
+    if (!target) {
+      setError("A remote Yoto playlist URI is still missing. Save or create the remote URI before staging a blank-card write.");
+      return;
+    }
+    writeStoredJson(stagedWriteTargetStorageKey, target);
+    setError(null);
+    setMessage(`Staged ${detail.item.title} for blank-card writing in Cards.`);
+  }
 
   if (loading && !detail) {
     return (
@@ -1891,6 +2208,11 @@ function CreateCardPage() {
               </Link>
             </div>
           ) : null}
+          {latestPlaylist && !latestPlaylist.remote_playlist_uri && latestPlaylist.remote_playlist_id ? (
+            <p className="muted">
+              Blank-card write staging still prefers a remote playlist URI, not only a remote ID. Save the URI once it is visible from Yoto.
+            </p>
+          ) : null}
         </article>
 
         <article className="create-card-panel">
@@ -1904,6 +2226,7 @@ function CreateCardPage() {
             <EmptyState message="Choose a library item to see workflow state." />
           )}
           {itemSteps.length > 0 ? <WorkflowChecklist steps={itemSteps} /> : null}
+          {stageStatuses.length > 0 ? <CreateStageOverview statuses={stageStatuses} /> : null}
           <div className="button-row">
             <button
               className="primary-button"
@@ -1952,6 +2275,14 @@ function CreateCardPage() {
               type="button"
             >
               Create in Yoto cloud
+            </button>
+            <button
+              className="secondary-button"
+              disabled={!canStageBlankWrite}
+              onClick={() => handleStageBlankWriteTarget()}
+              type="button"
+            >
+              Stage for blank-card write
             </button>
           </div>
           {latestPlaylist ? (
@@ -3306,20 +3637,11 @@ function TagsPage() {
 function CardsPage() {
   const [cards, setCards] = useState<PhysicalCard[]>([]);
   const [scanDumps, setScanDumps] = useState<CardScanDumpEntry[]>([]);
-  const [stagedDump, setStagedDump] = useState<CardScanDumpEntry | null>(() => {
-    if (typeof window === "undefined") {
-      return null;
-    }
-    const stored = window.localStorage.getItem(stagedCardDumpStorageKey);
-    if (!stored) {
-      return null;
-    }
-    try {
-      return JSON.parse(stored) as CardScanDumpEntry;
-    } catch {
-      return null;
-    }
-  });
+  const [stagedDump, setStagedDump] = useState<CardScanDumpEntry | null>(() =>
+    readStoredJson<CardScanDumpEntry>(stagedCardDumpStorageKey),
+  );
+  const [stagedWriteTarget, setStagedWriteTarget] = useState<CardWriteTarget | null>(() => readStagedWriteTarget());
+  const [verificationResult, setVerificationResult] = useState<CardVerificationResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [scanMessage, setScanMessage] = useState<string | null>(null);
   const [helperMessage, setHelperMessage] = useState<string | null>(null);
@@ -3410,15 +3732,20 @@ function CardsPage() {
   }, []);
 
   useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
     if (stagedDump) {
-      window.localStorage.setItem(stagedCardDumpStorageKey, JSON.stringify(stagedDump));
+      writeStoredJson(stagedCardDumpStorageKey, stagedDump);
       return;
     }
-    window.localStorage.removeItem(stagedCardDumpStorageKey);
+    removeStoredJson(stagedCardDumpStorageKey);
   }, [stagedDump]);
+
+  useEffect(() => {
+    if (stagedWriteTarget) {
+      writeStoredJson(stagedWriteTargetStorageKey, stagedWriteTarget);
+      return;
+    }
+    removeStoredJson(stagedWriteTargetStorageKey);
+  }, [stagedWriteTarget]);
 
   useEffect(() => {
     if (!isNativeAndroidRuntime()) {
@@ -3473,6 +3800,12 @@ function CardsPage() {
       } else {
         setScanMessage("Card read succeeded, but no serial or payload was exposed.");
       }
+      recordVerificationFromScan({
+        programmableId: nextProgrammableId || null,
+        serialNumber: serialNumber || null,
+        payloadText: payloadText || null,
+        payloadHex: payloadHex || null,
+      });
       queueCardScanDump({
         scan_source: "native_nfc",
         programmable_id: nextProgrammableId || null,
@@ -3547,6 +3880,12 @@ function CardsPage() {
         current.notes ||
         `Generated manual programming payload from ${generated.programmableId ?? "playlist URI"}.`,
     }));
+    stageWriteTarget(createWriteTargetFromCurrentForm({
+      programmable_id: generated.programmableId ?? form.programmable_id,
+      yoto_playlist_uri: form.yoto_playlist_uri,
+      ndef_payload_text: generated.payloadText ?? "",
+      ndef_payload_hex: generated.payloadHex ?? "",
+    }));
     setHelperMessage(`Prepared payload for ${generated.programmableId ?? generated.payloadText}.`);
   }
 
@@ -3576,6 +3915,23 @@ function CardsPage() {
       });
   }
 
+  function recordVerificationFromScan(observed: {
+    programmableId: string | null;
+    serialNumber: string | null;
+    payloadText: string | null;
+    payloadHex: string | null;
+  }) {
+    const result = evaluateCardVerification(readArmedVerificationTarget(), observed);
+    if (result) {
+      setVerificationResult(result);
+    }
+  }
+
+  function stageWriteTarget(target: CardWriteTarget) {
+    setStagedWriteTarget(target);
+    setVerificationResult(null);
+  }
+
   function applyScanDumpToForm(entry: CardScanDumpEntry) {
     setForm((current) => ({
       ...current,
@@ -3593,6 +3949,7 @@ function CardsPage() {
 
   function stageScanDump(entry: CardScanDumpEntry) {
     setStagedDump(entry);
+    stageWriteTarget(createWriteTargetFromScanDump(entry));
     setHelperMessage(`Staged source card from scan dump #${entry.id}.`);
   }
 
@@ -3607,6 +3964,74 @@ function CardsPage() {
       return;
     }
     applyScanDumpToForm(stagedDump);
+  }
+
+  function applyStagedWriteTargetToForm() {
+    if (!stagedWriteTarget) {
+      setHelperMessage("No staged write target is loaded.");
+      return;
+    }
+    setForm((current) => ({
+      ...current,
+      programmable_id: stagedWriteTarget.programmableId ?? current.programmable_id,
+      yoto_playlist_uri: stagedWriteTarget.playlistUri ?? current.yoto_playlist_uri,
+      ndef_payload_text: stagedWriteTarget.payloadText ?? current.ndef_payload_text,
+      ndef_payload_hex: stagedWriteTarget.payloadHex ?? current.ndef_payload_hex,
+      scan_source: stagedWriteTarget.source === "scan_dump" ? "native_nfc" : current.scan_source,
+      notes: current.notes || `Applied staged write target from ${stagedWriteTarget.label}.`,
+    }));
+    setHelperMessage(`Applied staged write target from ${stagedWriteTarget.label} to the card form.`);
+  }
+
+  function clearStagedWriteTarget() {
+    setStagedWriteTarget(null);
+    setVerificationResult(null);
+    removeStoredJson(armedCardVerificationStorageKey);
+    setHelperMessage("Cleared the staged write target.");
+  }
+
+  async function writePreparedTargetToTag(target: CardWriteTarget, successLabel: string) {
+    if (!isNativeAndroidRuntime()) {
+      setHelperMessage("Direct tag writes are only available in the Android app.");
+      return;
+    }
+    if (!nativeNfcSupported) {
+      setHelperMessage("Native NFC is not available on this Android device.");
+      return;
+    }
+
+    const payloadBytes = target.payloadHex ? hexToBytes(target.payloadHex) : null;
+    if (target.payloadHex && !payloadBytes) {
+      setHelperMessage("The staged payload hex is invalid.");
+      return;
+    }
+    if (!payloadBytes && !target.payloadText) {
+      setHelperMessage("The staged write target does not include a payload yet.");
+      return;
+    }
+
+    writeStoredJson(armedCardVerificationStorageKey, target);
+    setVerificationResult(null);
+    setError(null);
+    setScanning(true);
+    setNativeWritePending(true);
+    setScanMessage(`Hold the card against the phone to write ${successLabel}.`);
+
+    try {
+      await NFC.writeNDEF({
+        rawMode: true,
+        records: [
+          {
+            type: "custom",
+            payload: payloadBytes ?? new TextEncoder().encode(target.payloadText ?? ""),
+          },
+        ],
+      });
+    } catch (writeError) {
+      setNativeWritePending(false);
+      setScanning(false);
+      setHelperMessage(writeError instanceof Error ? writeError.message : "Could not start the staged NFC write.");
+    }
   }
 
   async function writeScanDumpToTag(entry: CardScanDumpEntry) {
@@ -3640,6 +4065,8 @@ function CardsPage() {
     setScanning(true);
     setNativeWritePending(true);
     setScanMessage(`Hold the new card against the phone to write scan dump #${entry.id}.`);
+    writeStoredJson(armedCardVerificationStorageKey, createWriteTargetFromScanDump(entry));
+    setVerificationResult(null);
 
     try {
       await NFC.writeNDEF({
@@ -3659,6 +4086,14 @@ function CardsPage() {
       return;
     }
     await writeScanDumpToTag(stagedDump);
+  }
+
+  async function writeStagedWriteTargetToTag() {
+    if (!stagedWriteTarget) {
+      setHelperMessage("No staged write target is loaded.");
+      return;
+    }
+    await writePreparedTargetToTag(stagedWriteTarget, stagedWriteTarget.label);
   }
 
   async function handleNativeScanCard() {
@@ -3706,6 +4141,8 @@ function CardsPage() {
     setScanning(true);
     setNativeWritePending(true);
     setScanMessage("Hold the card against the phone to write the prepared payload.");
+    writeStoredJson(armedCardVerificationStorageKey, createWriteTargetFromCurrentForm(form));
+    setVerificationResult(null);
 
     try {
       await NFC.writeNDEF({
@@ -3778,6 +4215,12 @@ function CardsPage() {
             has_data: Boolean(record.data),
             payload_hex: record.data ? normaliseRecordData(record.data).reduce((all, byte) => all + byte.toString(16).padStart(2, "0"), "") : null,
           })),
+        });
+        recordVerificationFromScan({
+          programmableId: nextProgrammableId || null,
+          serialNumber: serialNumber || null,
+          payloadText: payloadText || null,
+          payloadHex: decodedPayload.hex || null,
         });
         setScanning(false);
       };
@@ -3909,6 +4352,14 @@ function CardsPage() {
             >
               {nativeWritePending ? "Writing tag" : "Write payload to tag"}
             </button>
+            <button
+              className="secondary-button"
+              disabled={scanning || (!form.ndef_payload_text && !form.ndef_payload_hex)}
+              onClick={() => stageWriteTarget(createWriteTargetFromCurrentForm(form))}
+              type="button"
+            >
+              Stage current payload
+            </button>
             <span className="status-pill status-pill-muted">
               {isNativeAndroidRuntime()
                 ? nativeNfcSupported
@@ -3937,6 +4388,90 @@ function CardsPage() {
           <CardWorkflowChecklist card={draftCard} />
         </article>
       </div>
+
+      <section className="card-console-panel">
+        <div className="section-header">
+          <div>
+            <p className="eyebrow">Staged Write</p>
+            <h3>Blank-card handoff target</h3>
+          </div>
+          <div className="button-row">
+            <button
+              className="secondary-button"
+              disabled={!stagedWriteTarget}
+              onClick={() => applyStagedWriteTargetToForm()}
+              type="button"
+            >
+              Apply staged target
+            </button>
+            <button
+              className="secondary-button"
+              disabled={!stagedWriteTarget || !isNativeAndroidRuntime() || scanning}
+              onClick={() => void writeStagedWriteTargetToTag()}
+              type="button"
+            >
+              {nativeWritePending ? "Writing staged target" : "Write staged target"}
+            </button>
+            <button
+              className="secondary-button"
+              disabled={!stagedWriteTarget}
+              onClick={() => clearStagedWriteTarget()}
+              type="button"
+            >
+              Clear staged target
+            </button>
+          </div>
+        </div>
+        {stagedWriteTarget ? (
+          <div className="compact-list">
+            <article className="stage-status-row">
+              <span className="status-pill">{stagedWriteTarget.source.replace("_", " ")}</span>
+              <p className="muted">
+                <strong>{stagedWriteTarget.label}</strong> Â· {stagedWriteTarget.detail}
+              </p>
+              <p className="muted">
+                Payload text: {stagedWriteTarget.payloadText ?? "Not staged"} Â· Payload hex:{" "}
+                {stagedWriteTarget.payloadHex ?? "Not staged"}
+              </p>
+            </article>
+          </div>
+        ) : (
+          <p className="muted">
+            Stage a source-card dump, a Create tab blank-card handoff, or the current prepared payload here before writing.
+          </p>
+        )}
+      </section>
+
+      <section className="card-console-panel">
+        <div className="section-header">
+          <div>
+            <p className="eyebrow">Verification</p>
+            <h3>Re-scan after writing</h3>
+          </div>
+          <span className={`status-pill${verificationResult?.matched ? " status-pill-ok" : " status-pill-muted"}`}>
+            {verificationResult ? (verificationResult.matched ? "Verified" : "Mismatch") : "Awaiting scan"}
+          </span>
+        </div>
+        {verificationResult ? (
+          <div className={`detail-note${verificationResult.matched ? " verification-note-ok" : ""}`}>
+            <p className="eyebrow">{verificationResult.targetLabel}</p>
+            <h3>{verificationResult.matched ? "Card payload matched" : "Card payload did not match"}</h3>
+            <p>{verificationResult.detail}</p>
+            <p>
+              Compared field: {verificationResult.comparedField} Â· Observed programmable ID:{" "}
+              {verificationResult.observedProgrammableId ?? "None"}
+            </p>
+            <p>
+              Observed payload text: {verificationResult.observedPayloadText ?? "None"} Â· Observed payload hex:{" "}
+              {verificationResult.observedPayloadHex ?? "None"}
+            </p>
+          </div>
+        ) : (
+          <p className="muted">
+            After a write, scan the card again. The app will compare the next scan against the armed write target automatically.
+          </p>
+        )}
+      </section>
 
       <section className="card-console-panel">
         <div className="section-header">

@@ -805,6 +805,12 @@ a {
   color: #ddd4c3;
 }
 
+.status-pill-ok {
+  background: rgba(122, 204, 164, 0.16);
+  color: #bde8cb;
+  border: 1px solid rgba(122, 204, 164, 0.24);
+}
+
 .oauth-strip {
   display: flex;
   align-items: center;
@@ -1026,6 +1032,19 @@ a {
   gap: 10px;
 }
 
+.stage-status-row {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border-radius: 8px;
+  background: rgba(6, 22, 26, 0.46);
+  border: 1px solid rgba(255, 240, 214, 0.12);
+}
+
+.stage-status-row p {
+  margin: 0;
+}
+
 .compact-table-row,
 .job-detail-row,
 .version-row {
@@ -1098,6 +1117,11 @@ a {
 .saved-plan-summary h3,
 .saved-plan-summary p {
   margin: 0;
+}
+
+.verification-note-ok {
+  background: rgba(122, 204, 164, 0.12);
+  border-color: rgba(122, 204, 164, 0.24);
 }
 
 .inline-link-panel {

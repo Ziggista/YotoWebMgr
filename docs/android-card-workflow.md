@@ -46,6 +46,15 @@ Capacitor Android wrapper using the same overall shape as Daymark.
 - The older backend `upload_yoto_asset` worker job is still a placeholder; the newer Yoto draft
   and live-create endpoints are the path under active development.
 
+## Immediate Next Work
+
+- Add a direct "stage for blank-card write" handoff from Create to Cards so an operator can create
+  Yoto cloud content and then program a blank NFC tag without copying values manually.
+- Make the write and verification loop explicit in the Android card console:
+  write a staged payload, re-scan, compare expected vs observed, then mark verified.
+- Tighten the Yoto progress model so the UI calls out whether an item is still processing locally,
+  waiting on Yoto upload/transcode, or fully ready for card programming.
+
 ## Git Checkpoints
 
 1. Commit this brief.
