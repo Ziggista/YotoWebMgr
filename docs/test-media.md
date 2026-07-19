@@ -1,7 +1,23 @@
 # Test Media
 
-Use small, clearly licensed media files for local and automated tests. Do not commit large media
-files to the repository.
+Use clearly licensed media files for local and automated tests. Do not commit large media files to
+the repository.
+
+## Seed Script
+
+The repo now includes a repeatable media seed helper:
+
+```bash
+scripts/media/seed-copyleft-test-media.sh
+```
+
+Run it from WSL to populate `local-media/imports/drop` with:
+
+- a full Project Gutenberg audiobook suitable for a young child
+- a full kid-friendly music album from Free Music Archive
+- an updated local `MANIFEST.md` with provenance and licensing notes
+
+The script is idempotent. Existing files are kept in place.
 
 ## Audiobook Candidate
 
@@ -10,9 +26,11 @@ that all LibriVox recordings are public domain in the United States.
 
 Suggested use:
 
-- Download one or two short MP3 chapters from a LibriVox children's book, such as chapters from
-  `Alice's Adventures in Wonderland`.
-- Keep it outside Git, then import it through `/var/lib/yotowebmgr/media/imports/drop` or browser upload.
+- For quick smoke tests, use one or two short MP3 chapters.
+- For full pipeline and playlist tests, use the seeded full-book fixture under
+  `copyleft/the-velveteen-rabbit/`.
+- Keep it outside Git, then import it through `/var/lib/yotowebmgr/media/imports/drop` or browser
+  upload.
 - Record the title, reader, source URL, and public-domain notice in any fixture manifest.
 
 Source:
@@ -46,27 +64,41 @@ and API both see the same source path for inspect/process/Yoto tests.
 The direct `/var/lib/yotowebmgr/media/imports/drop/...` path is only safe when you have reseeded
 the current `imports-pvc` after the latest namespace delete.
 
-## Copyleft Music Candidate
+## Full Audiobook Fixture
 
-Prefer Creative Commons Attribution-ShareAlike music for copyleft-style tests. CC BY-SA permits
-sharing and adaptation, including commercial use, if attribution is preserved and adaptations use
-the same license.
+The seed script downloads the full `The Velveteen Rabbit` Project Gutenberg audio edition into:
 
-Concrete candidate:
+```text
+local-media/imports/drop/copyleft/the-velveteen-rabbit/
+```
 
-- `Pulse of the Earth` by Hungry Lucy is listed as `CC BY-SA` in the major Creative
-  Commons-licensed works index.
-
-Other places to search:
-
-- Wikimedia Commons audio files with `CC BY-SA` licensing.
-- ccMixter tracks that explicitly show `CC BY-SA`; avoid `NonCommercial` tracks for reusable test
-  fixtures.
+This gives you a complete child-friendly audiobook from a source that is reachable without relying
+on the current Internet Archive mirrors.
 
 Source:
 
-- https://creativecommons.org/licenses/by-sa/4.0/
-- https://en.wikipedia.org/wiki/List_of_major_Creative_Commons%E2%80%93licensed_works
+- https://www.gutenberg.org/ebooks/26286
+- https://www.gutenberg.org/files/26286/26286-index.html
+
+## Copyleft Music Fixture
+
+The seed script downloads the full `Mr. Sloth Is Sleepy` album by `Holizna4KidsMusic` into:
+
+```text
+local-media/imports/drop/copyleft/mr-sloth-is-sleepy/
+```
+
+Why this one:
+
+- the album page is explicitly marked `CC BY`
+- it is tagged `Kid-Friendly`
+- it gives you six tracks, which is enough to exercise import, playlist ordering, and Yoto upload
+  flows with real media
+
+Source:
+
+- https://freemusicarchive.org/index.php/music/holizna4kidsmusic/mr-sloth-is-sleepy
+- https://freemusicarchive.org/music/holizna4kidsmusic/bio
 
 ## Frontend Player Dependency
 

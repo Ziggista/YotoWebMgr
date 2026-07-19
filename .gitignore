@@ -28,3 +28,5 @@ media/
 local-media/
 private-docs/
 !.gitkeep
+!scripts/media/
+!scripts/media/*.sh

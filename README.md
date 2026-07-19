@@ -111,6 +111,7 @@ k8s/scripts/deploy-dev.sh  # destructive Linux/WSL deploy entrypoint used by the
 k8s/scripts/open-dev.sh    # ensure the Kubernetes frontend is forwarded on http://127.0.0.1:5175/
 scripts/dev/status.sh      # pods, services, recent API logs
 scripts/dev/seed-radio.sh  # add the ABC Triple J test stream to the current dev API
+scripts/media/seed-copyleft-test-media.sh # seed local audiobook + kids album fixtures outside Git
 ```
 
 PowerShell wrappers are also available:
