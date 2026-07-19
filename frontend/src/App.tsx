@@ -112,9 +112,6 @@ const defaultNdefFormatCommand = "A2:03:E1:10:06:00,A2:04:03:04:D8:00,A2:05:00:0
 const yotoPkceStorageKey = "yotowebmgr.yoto.pkce";
 const yotoPkceExchangeKey = "yotowebmgr.yoto.pkce.exchange";
 const frontendBuildSha = import.meta.env.VITE_APP_BUILD_SHA ?? "dev";
-const stagedCardDumpStorageKey = "yotowebmgr.cards.stagedDump";
-const stagedWriteTargetStorageKey = "yotowebmgr.cards.stagedWriteTarget";
-const armedCardVerificationStorageKey = "yotowebmgr.cards.armedVerificationTarget";
 const readyToLinkNotificationStorageKey = "yotowebmgr.notifications.readyToLink";
 const yotoDebugPresets = [
   { label: "MYO content", method: "GET" as const, path: "/content/mine?showdeleted=false" },
@@ -408,14 +405,6 @@ function removeStoredJson(storageKey: string) {
     return;
   }
   window.localStorage.removeItem(storageKey);
-}
-
-function readStagedWriteTarget(): CardWriteTarget | null {
-  return readStoredJson<CardWriteTarget>(stagedWriteTargetStorageKey);
-}
-
-function readArmedVerificationTarget(): CardWriteTarget | null {
-  return readStoredJson<CardWriteTarget>(armedCardVerificationStorageKey);
 }
 
 function writeTargetFromProgrammingSession(session: CardProgrammingSession | null): CardWriteTarget | null {
@@ -2040,11 +2029,19 @@ function CreateCardPage() {
   const [message, setMessage] = useState<string | null>(null);
 
   async function loadSelections() {
-    const [nextItems, nextCards] = await Promise.all([fetchLibraryItems(), fetchCards()]);
+    const [nextItems, nextCards, session] = await Promise.all([
+      fetchLibraryItems(),
+      fetchCards(),
+      fetchCardProgrammingSession(),
+    ]);
     setItems(nextItems);
     setCards(nextCards);
-    setSelectedItemId((current) => current ?? preferredCreateItem(nextItems)?.id ?? nextItems[0]?.id ?? null);
-    setSelectedCardId((current) => current ?? preferredCreateCard(nextCards)?.id ?? nextCards[0]?.id ?? null);
+    setSelectedItemId(
+      (current) => current ?? session.library_item_id ?? preferredCreateItem(nextItems)?.id ?? nextItems[0]?.id ?? null,
+    );
+    setSelectedCardId(
+      (current) => current ?? session.active_card_id ?? preferredCreateCard(nextCards)?.id ?? nextCards[0]?.id ?? null,
+    );
   }
 
   async function refreshSelectedItem(itemId: number) {
@@ -3700,9 +3697,7 @@ function CardsPage() {
   const [scanDumps, setScanDumps] = useState<CardScanDumpEntry[]>([]);
   const [programmingEvents, setProgrammingEvents] = useState<CardProgrammingEvent[]>([]);
   const [programmingSession, setProgrammingSession] = useState<CardProgrammingSession | null>(null);
-  const [stagedDump, setStagedDump] = useState<CardScanDumpEntry | null>(() =>
-    readStoredJson<CardScanDumpEntry>(stagedCardDumpStorageKey),
-  );
+  const [stagedDump, setStagedDump] = useState<CardScanDumpEntry | null>(null);
   const [stagedWriteTarget, setStagedWriteTarget] = useState<CardWriteTarget | null>(null);
   const [verificationResult, setVerificationResult] = useState<CardVerificationResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -3805,30 +3800,13 @@ function CardsPage() {
   }, []);
 
   useEffect(() => {
-    if (stagedDump) {
-      writeStoredJson(stagedCardDumpStorageKey, stagedDump);
-      return;
-    }
-    removeStoredJson(stagedCardDumpStorageKey);
-  }, [stagedDump]);
-
-  useEffect(() => {
     if (!programmingSession?.source_scan_dump_id) {
+      setStagedDump(null);
       return;
     }
     const matchingDump = scanDumps.find((entry) => entry.id === programmingSession.source_scan_dump_id) ?? null;
-    if (matchingDump) {
-      setStagedDump(matchingDump);
-    }
+    setStagedDump(matchingDump);
   }, [programmingSession, scanDumps]);
-
-  useEffect(() => {
-    if (stagedWriteTarget) {
-      writeStoredJson(stagedWriteTargetStorageKey, stagedWriteTarget);
-      return;
-    }
-    removeStoredJson(stagedWriteTargetStorageKey);
-  }, [stagedWriteTarget]);
 
   useEffect(() => {
     if (!isNativeAndroidRuntime()) {
@@ -4008,10 +3986,7 @@ function CardsPage() {
     payloadText: string | null;
     payloadHex: string | null;
   }) {
-    const activeTarget =
-      programmingSession?.verification_armed && stagedWriteTarget
-        ? stagedWriteTarget
-        : readArmedVerificationTarget();
+    const activeTarget = stagedWriteTarget;
     const result = evaluateCardVerification(activeTarget, observed);
     if (result) {
       setVerificationResult(result);
@@ -4066,11 +4041,7 @@ function CardsPage() {
     payload: Partial<CardProgrammingEvent> & { event_type: string },
     targetOverride?: CardWriteTarget | null,
   ) {
-    const target =
-      targetOverride ??
-      (programmingSession?.verification_armed ? stagedWriteTarget : null) ??
-      stagedWriteTarget ??
-      readArmedVerificationTarget();
+    const target = targetOverride ?? stagedWriteTarget ?? null;
     const matchingCard = matchingCardForCurrentForm();
     const resolvedCardCode = payload.card_code ?? normalizedCardCode(matchingCard?.card_code ?? form.card_code);
     const resolvedProgrammableId =
@@ -4188,7 +4159,6 @@ function CardsPage() {
   function clearStagedWriteTarget() {
     setStagedWriteTarget(null);
     setVerificationResult(null);
-    removeStoredJson(armedCardVerificationStorageKey);
     void updateCardProgrammingSession({ session_key: "default", clear: true }).then(setProgrammingSession).catch(() => undefined);
     setHelperMessage("Cleared the staged write target.");
   }
@@ -4213,7 +4183,6 @@ function CardsPage() {
       return;
     }
 
-    writeStoredJson(armedCardVerificationStorageKey, target);
     void updateCardProgrammingSession({
       session_key: "default",
       source: target.source,
@@ -4290,7 +4259,6 @@ function CardsPage() {
     setNativeWritePending(true);
     setScanMessage(`Hold the new card against the phone to write scan dump #${entry.id}.`);
     const scanDumpTarget = createWriteTargetFromScanDump(entry);
-    writeStoredJson(armedCardVerificationStorageKey, scanDumpTarget);
     setVerificationResult(null);
     void persistProgrammingEvent(
       {
@@ -4374,7 +4342,6 @@ function CardsPage() {
     setNativeWritePending(true);
     setScanMessage("Hold the card against the phone to write the prepared payload.");
     const currentFormTarget = createWriteTargetFromCurrentForm(form);
-    writeStoredJson(armedCardVerificationStorageKey, currentFormTarget);
     setVerificationResult(null);
     void persistProgrammingEvent(
       {
@@ -4560,6 +4527,43 @@ function CardsPage() {
         </div>
         <span className="status-pill">{cards.length} cards</span>
       </div>
+
+      <section className="card-console-panel">
+        <div className="section-header">
+          <div>
+            <p className="eyebrow">Session</p>
+            <h3>Active programming session</h3>
+          </div>
+          <span className={`status-pill${programmingSession?.verification_armed ? "" : " status-pill-muted"}`}>
+            {programmingSession?.verification_armed ? "Verification armed" : "Not armed"}
+          </span>
+        </div>
+        {programmingSession && stagedWriteTarget ? (
+          <div className="compact-list">
+            <article className="stage-status-row">
+              <span className="status-pill">{programmingSession.source ?? "session"}</span>
+              <p className="muted">
+                <strong>{programmingSession.target_label ?? "Programming target"}</strong> Â·{" "}
+                {programmingSession.detail ?? "No detail"}
+              </p>
+              <p className="muted">
+                Active card:{" "}
+                {cards.find((card) => card.id === programmingSession.active_card_id)?.display_name ??
+                  (programmingSession.active_card_id ? `#${programmingSession.active_card_id}` : "None")}
+              </p>
+              <p className="muted">
+                Source dump:{" "}
+                {programmingSession.source_scan_dump_id ? `#${programmingSession.source_scan_dump_id}` : "None"} Â·
+                Playlist: {programmingSession.playlist_uri ?? "n/a"}
+              </p>
+            </article>
+          </div>
+        ) : (
+          <p className="muted">
+            No active server-backed programming session is staged yet. Stage a target from Create, a scan dump, or the current payload.
+          </p>
+        )}
+      </section>
 
       <div className="card-console-grid">
         <article className="card-console-panel">
