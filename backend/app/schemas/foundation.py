@@ -595,6 +595,9 @@ class CardProgrammingSessionUpdate(BaseModel):
     ndef_payload_hex: str | None = Field(default=None, max_length=4000)
     source_scan_dump_id: int | None = Field(default=None, gt=0)
     verification_armed: bool | None = None
+    write_state: str | None = Field(default=None, max_length=80)
+    written_at: datetime | None = None
+    verified_at: datetime | None = None
     last_verification_event_id: int | None = Field(default=None, gt=0)
     extra_json: dict[str, Any] | None = None
     clear: bool = False
@@ -615,6 +618,9 @@ class CardProgrammingSessionResponse(BaseModel):
     ndef_payload_hex: str | None
     source_scan_dump_id: int | None
     verification_armed: bool
+    write_state: str
+    written_at: datetime | None
+    verified_at: datetime | None
     last_verification_event_id: int | None
     extra_json: dict[str, Any] | None
     created_at: datetime

@@ -723,12 +723,14 @@ async def test_card_programming_event_endpoints_persist_write_and_verification(
 
     refreshed_card = db_session.get(PhysicalCard, card_id)
     assert refreshed_card is not None
-    assert refreshed_card.status == "ready_to_link"
+    assert refreshed_card.status == "verified"
     assert refreshed_card.ndef_prepared is True
+    assert refreshed_card.tested is True
     assert refreshed_card.yoto_playlist_uri == "https://my.yotoplay.com/playlist/playlist-123"
     assert refreshed_card.programmable_id == "yoto:playlist:playlist-123"
     assert refreshed_card.nfc_serial_number == "04A1B2C3D4"
     assert refreshed_card.last_scanned_at is not None
+    assert refreshed_card.last_tested_at is not None
 
 
 async def test_card_programming_session_can_stage_and_clear_target(
@@ -762,12 +764,14 @@ async def test_card_programming_session_can_stage_and_clear_target(
     assert updated.status_code == 200
     assert updated.json()["target_label"] == "Bedtime Mix"
     assert updated.json()["verification_armed"] is True
+    assert updated.json()["write_state"] == "idle"
     assert updated.json()["extra_json"]["route"] == "/create"
 
     assert cleared.status_code == 200
     assert cleared.json()["target_label"] is None
     assert cleared.json()["playlist_uri"] is None
     assert cleared.json()["verification_armed"] is False
+    assert cleared.json()["write_state"] == "idle"
 
 
 async def test_library_playlist_settings_tracks_icons_and_readiness(

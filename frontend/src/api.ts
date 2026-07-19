@@ -390,6 +390,9 @@ export interface CardProgrammingSession {
   ndef_payload_hex: string | null;
   source_scan_dump_id: number | null;
   verification_armed: boolean;
+  write_state: string;
+  written_at: string | null;
+  verified_at: string | null;
   last_verification_event_id: number | null;
   extra_json: Record<string, unknown> | null;
   created_at: string;

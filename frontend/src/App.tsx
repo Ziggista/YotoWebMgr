@@ -4534,8 +4534,24 @@ function CardsPage() {
             <p className="eyebrow">Session</p>
             <h3>Active programming session</h3>
           </div>
-          <span className={`status-pill${programmingSession?.verification_armed ? "" : " status-pill-muted"}`}>
-            {programmingSession?.verification_armed ? "Verification armed" : "Not armed"}
+          <span
+            className={`status-pill${
+              programmingSession?.write_state === "verified"
+                ? " status-pill-ok"
+                : programmingSession?.verification_armed
+                  ? ""
+                  : " status-pill-muted"
+            }`}
+          >
+            {programmingSession?.write_state === "verified"
+              ? "Verified"
+              : programmingSession?.write_state === "verification_failed"
+                ? "Verification failed"
+                : programmingSession?.write_state === "written"
+                  ? "Written"
+                  : programmingSession?.verification_armed
+                    ? "Verification armed"
+                    : "Not armed"}
           </span>
         </div>
         {programmingSession && stagedWriteTarget ? (
@@ -4555,6 +4571,10 @@ function CardsPage() {
                 Source dump:{" "}
                 {programmingSession.source_scan_dump_id ? `#${programmingSession.source_scan_dump_id}` : "None"} Â·
                 Playlist: {programmingSession.playlist_uri ?? "n/a"}
+              </p>
+              <p className="muted">
+                State: {programmingSession.write_state} Â· Written: {programmingSession.written_at ?? "n/a"} Â· Verified:{" "}
+                {programmingSession.verified_at ?? "n/a"}
               </p>
             </article>
           </div>

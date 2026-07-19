@@ -134,6 +134,9 @@ def _build_card_programming_session_response(session: CardProgrammingSession) ->
         ndef_payload_hex=session.ndef_payload_hex,
         source_scan_dump_id=session.source_scan_dump_id,
         verification_armed=session.verification_armed,
+        write_state=session.write_state,
+        written_at=session.written_at,
+        verified_at=session.verified_at,
         last_verification_event_id=session.last_verification_event_id,
         extra_json=session.extra_json,
         created_at=session.created_at,
@@ -209,6 +212,9 @@ async def update_card_programming_session(
         session.ndef_payload_hex = None
         session.source_scan_dump_id = None
         session.verification_armed = False
+        session.write_state = "idle"
+        session.written_at = None
+        session.verified_at = None
         session.last_verification_event_id = None
         session.extra_json = None
     else:
@@ -285,6 +291,7 @@ async def create_card_programming_event(
         extra_json=payload.extra_json,
     )
     db.add(event)
+    db.flush()
 
     if card is not None:
         now = datetime.now(UTC)
@@ -322,8 +329,11 @@ async def create_card_programming_event(
                 card.ndef_payload_hex = payload.observed_ndef_payload_hex
             if payload.event_type == "verification_succeeded":
                 card.ndef_prepared = True
-                if card.status == "available":
-                    card.status = "ready_to_link"
+                card.tested = True
+                card.last_tested_at = now
+                card.status = "verified"
+            elif card.status == "verified":
+                card.status = "needs_attention"
 
         db.add(card)
         db.add(
@@ -339,6 +349,31 @@ async def create_card_programming_event(
                 summary=f"Persisted programming event: {payload.event_type}",
             )
         )
+
+    session = db.scalar(select(CardProgrammingSession).where(CardProgrammingSession.session_key == "default"))
+    if session is not None:
+        session.last_verification_event_id = event.id
+        if payload.card_id is not None:
+            session.active_card_id = payload.card_id
+        if payload.event_type == "write_armed":
+            session.write_state = "write_armed"
+            session.verification_armed = False
+            session.written_at = None
+            session.verified_at = None
+        elif payload.event_type == "write_completed":
+            session.write_state = "written"
+            session.written_at = datetime.now(UTC)
+            session.verification_armed = True
+            session.verified_at = None
+        elif payload.event_type == "verification_succeeded":
+            session.write_state = "verified"
+            session.verification_armed = False
+            session.verified_at = datetime.now(UTC)
+        elif payload.event_type == "verification_failed":
+            session.write_state = "verification_failed"
+            session.verification_armed = False
+            session.verified_at = None
+        db.add(session)
 
     db.commit()
     db.refresh(event)

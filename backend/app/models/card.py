@@ -129,6 +129,9 @@ class CardProgrammingSession(Base):
     ndef_payload_hex: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_scan_dump_id: Mapped[int | None] = mapped_column(ForeignKey("card_scan_dumps.id"), nullable=True, index=True)
     verification_armed: Mapped[bool] = mapped_column(Boolean, default=False)
+    write_state: Mapped[str] = mapped_column(String(80), default="idle", index=True)
+    written_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_verification_event_id: Mapped[int | None] = mapped_column(
         ForeignKey("card_programming_events.id"), nullable=True, index=True
     )
