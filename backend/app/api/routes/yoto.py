@@ -52,6 +52,8 @@ from app.schemas.foundation import (
     YotoConfigResponse,
     YotoCredentialStatusResponse,
     YotoCredentialProbeResponse,
+    YotoRemoteCardResponse,
+    YotoRemoteLibraryResponse,
     YotoPlaylistDraftResponse,
     YotoPlaylistPreviewResponse,
     YotoPlaylistRemotePayloadResponse,
@@ -292,6 +294,108 @@ def _response_json(payload: Any) -> dict[str, object] | list[object] | None:
     if isinstance(payload, list):
         return payload
     return None
+
+
+def _safe_string(value: Any) -> str | None:
+    if isinstance(value, str):
+        trimmed = value.strip()
+        return trimmed or None
+    return None
+
+
+def _safe_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    return None
+
+
+def _safe_bool(value: Any) -> bool:
+    return bool(value) if isinstance(value, bool) else False
+
+
+def _safe_datetime(value: Any) -> datetime | None:
+    text = _safe_string(value)
+    if not text:
+        return None
+    normalized = text.replace("Z", "+00:00") if text.endswith("Z") else text
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _yoto_playlist_uri_for_card_id(card_id: str) -> str:
+    return f"https://my.yotoplay.com/playlist/{card_id}"
+
+
+def _extract_remote_yoto_cards(payload: Any) -> list[YotoRemoteCardResponse]:
+    if not isinstance(payload, dict):
+        return []
+
+    cards_payload = payload.get("cards")
+    if not isinstance(cards_payload, list):
+        return []
+
+    remote_cards: list[YotoRemoteCardResponse] = []
+    for raw_card in cards_payload:
+        if not isinstance(raw_card, dict):
+            continue
+
+        card_id = _safe_string(raw_card.get("cardId"))
+        if not card_id:
+            continue
+
+        metadata = raw_card.get("metadata")
+        metadata_dict = metadata if isinstance(metadata, dict) else {}
+        content = raw_card.get("content")
+        content_dict = content if isinstance(content, dict) else {}
+        cover = metadata_dict.get("cover")
+        cover_dict = cover if isinstance(cover, dict) else {}
+        sharing = raw_card.get("sharing")
+        sharing_dict = sharing if isinstance(sharing, dict) else {}
+        media = metadata_dict.get("media")
+        media_dict = media if isinstance(media, dict) else {}
+
+        title = (
+            _safe_string(raw_card.get("title"))
+            or _safe_string(metadata_dict.get("title"))
+            or _safe_string(content_dict.get("title"))
+            or f"Yoto card {card_id}"
+        )
+
+        remote_cards.append(
+            YotoRemoteCardResponse(
+                card_id=card_id,
+                title=title,
+                playlist_uri=_yoto_playlist_uri_for_card_id(card_id),
+                deleted=_safe_bool(raw_card.get("deleted")),
+                hidden=_safe_bool(raw_card.get("hidden")) or _safe_bool(metadata_dict.get("hidden")),
+                author=_safe_string(metadata_dict.get("author")),
+                description=_safe_string(metadata_dict.get("description")),
+                category=_safe_string(metadata_dict.get("category")),
+                cover_image_url=_safe_string(cover_dict.get("imageL")),
+                duration_seconds=_safe_int(media_dict.get("duration")),
+                file_size_bytes=_safe_int(media_dict.get("fileSize")),
+                updated_at=_safe_datetime(raw_card.get("updatedAt")),
+                created_at=_safe_datetime(raw_card.get("createdAt")),
+                share_link_url=_safe_string(sharing_dict.get("linkUrl")) or _safe_string(raw_card.get("shareLinkUrl")),
+                raw_card=raw_card,
+            )
+        )
+
+    remote_cards.sort(
+        key=lambda card: (
+            card.updated_at or card.created_at or datetime.min.replace(tzinfo=timezone.utc),
+            card.card_id,
+        ),
+        reverse=True,
+    )
+    return remote_cards
 
 
 async def _call_yoto_api(
@@ -1423,6 +1527,56 @@ async def debug_yoto_api_request(
         relative_url=relative_url,
         request_url=request_url,
         json_body=parsed_body,
+    )
+
+
+@router.get("/remote-content", response_model=YotoRemoteLibraryResponse)
+async def list_remote_yoto_content(
+    showdeleted: bool = False,
+    db: Annotated[Session, Depends(get_db_session)] = None,
+) -> YotoRemoteLibraryResponse:
+    credential = _latest_credential(db)
+    if credential is None or not credential.token_storage_ref:
+        raise HTTPException(status_code=409, detail="Connect a Yoto account before loading remote Yoto content.")
+
+    stored_tokens, token_refreshed = await _load_live_tokens(db=db, credential=credential)
+    relative_url = f"/content/mine?showdeleted={'true' if showdeleted else 'false'}"
+    http_status, payload, _stored_tokens, request_refreshed = await _call_authenticated_yoto_api(
+        db=db,
+        credential=credential,
+        stored_tokens=stored_tokens,
+        method="GET",
+        relative_url=relative_url,
+    )
+    token_refreshed = token_refreshed or request_refreshed
+
+    if not (200 <= http_status < 300):
+        credential.status = "connected_error"
+        credential.error_summary = f"Remote Yoto library request failed against {relative_url} with HTTP {http_status}."
+        db.add(credential)
+        db.commit()
+        raise HTTPException(
+            status_code=http_status or 502,
+            detail=_response_excerpt(payload) or "Failed to load remote Yoto content.",
+        )
+
+    cards = _extract_remote_yoto_cards(payload)
+    credential.status = "connected_tested"
+    credential.error_summary = (
+        f"Loaded {len(cards)} remote Yoto MYO cards from {relative_url} with HTTP {http_status}."
+    )
+    db.add(credential)
+    db.commit()
+    db.refresh(credential)
+
+    return YotoRemoteLibraryResponse(
+        credential=_credential_response(db, credential),
+        cards=cards,
+        http_status=http_status,
+        token_refreshed=token_refreshed,
+        response_excerpt=_response_excerpt(payload),
+        error_detail=None,
+        live_api_call=True,
     )
 
 

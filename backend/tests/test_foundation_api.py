@@ -2226,3 +2226,79 @@ async def test_create_live_yoto_playlist_allows_empty_request_body(
 
     assert response.status_code == 200
     assert response.json()["remote_card_id"] == "BODYOK1"
+
+
+async def test_list_remote_yoto_content_returns_linkable_cards(
+    api_client: AsyncClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credential = YotoCredentialState(
+        account_label="Household Yoto",
+        status="connected_tested",
+        token_storage_ref="k8s-secret:test-namespace:test-secret:yoto-credential-remote-library.json",
+        scopes="openid offline_access user:content:view",
+        expires_at=datetime.now(timezone.utc).replace(year=2027),
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    async def fake_load_tokens_from_secret(_: str) -> StoredYotoTokens:
+        return StoredYotoTokens(
+            access_token="test-access-token",
+            refresh_token="test-refresh-token",
+            token_type="Bearer",
+            scope="openid offline_access user:content:view",
+            expires_at=datetime.now(timezone.utc).replace(year=2027),
+        )
+
+    async def fake_call_yoto_api(
+        *,
+        method: str,
+        api_base_url: str,
+        relative_url: str,
+        access_token: str,
+        json_body: object | None = None,
+    ) -> tuple[int, object]:
+        assert method == "GET"
+        assert api_base_url == "https://api.yotoplay.com"
+        assert relative_url == "/content/mine?showdeleted=false"
+        assert access_token == "test-access-token"
+        assert json_body is None
+        return (
+            200,
+            {
+                "cards": [
+                    {
+                        "cardId": "31yYU",
+                        "title": "Bedtime Mix",
+                        "updatedAt": "2026-07-24T08:10:00.000Z",
+                        "metadata": {
+                            "author": "Ziggi",
+                            "category": "stories",
+                            "description": "Remote MYO bedtime card",
+                            "cover": {"imageL": "https://images.example.test/31yYU.png"},
+                            "media": {"duration": 3600, "fileSize": 1234567},
+                        },
+                        "sharing": {"linkUrl": "https://share.example.test/31yYU"},
+                    }
+                ]
+            },
+        )
+
+    monkeypatch.setattr(yoto_routes, "load_tokens_from_secret", fake_load_tokens_from_secret)
+    monkeypatch.setattr(yoto_routes, "_call_yoto_api", fake_call_yoto_api)
+
+    async with api_client as client:
+        response = await client.get("/api/v1/yoto/remote-content")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["http_status"] == 200
+    assert payload["credential"]["status"] == "connected_tested"
+    assert len(payload["cards"]) == 1
+    assert payload["cards"][0]["card_id"] == "31yYU"
+    assert payload["cards"][0]["playlist_uri"] == "https://my.yotoplay.com/playlist/31yYU"
+    assert payload["cards"][0]["title"] == "Bedtime Mix"
+    assert payload["cards"][0]["author"] == "Ziggi"
+    assert payload["cards"][0]["duration_seconds"] == 3600

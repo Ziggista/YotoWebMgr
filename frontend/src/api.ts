@@ -532,6 +532,34 @@ export interface YotoApiDebugResponse {
   live_api_call: boolean;
 }
 
+export interface YotoRemoteCard {
+  card_id: string;
+  title: string;
+  playlist_uri: string;
+  deleted: boolean;
+  hidden: boolean;
+  author: string | null;
+  description: string | null;
+  category: string | null;
+  cover_image_url: string | null;
+  duration_seconds: number | null;
+  file_size_bytes: number | null;
+  updated_at: string | null;
+  created_at: string | null;
+  share_link_url: string | null;
+  raw_card: Record<string, unknown> | null;
+}
+
+export interface YotoRemoteLibraryResponse {
+  credential: YotoCredentialStatus;
+  cards: YotoRemoteCard[];
+  http_status: number | null;
+  token_refreshed: boolean;
+  response_excerpt: string | null;
+  error_detail: string | null;
+  live_api_call: boolean;
+}
+
 async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   try {
     return await fetch(resolveApiUrl(path), init);
@@ -1070,6 +1098,14 @@ export async function probeYotoCredentials(): Promise<YotoCredentialProbeRespons
     throw new Error(await errorMessage(response, "Failed to run the Yoto API probe."));
   }
   return response.json() as Promise<YotoCredentialProbeResponse>;
+}
+
+export async function fetchYotoRemoteContent(showDeleted = false): Promise<YotoRemoteLibraryResponse> {
+  const response = await apiFetch(`/api/v1/yoto/remote-content?showdeleted=${showDeleted ? "true" : "false"}`);
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to load remote Yoto content."));
+  }
+  return response.json() as Promise<YotoRemoteLibraryResponse>;
 }
 
 export async function fetchBackendBuildInfo(): Promise<BuildInfo> {

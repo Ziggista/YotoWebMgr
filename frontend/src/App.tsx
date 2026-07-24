@@ -32,6 +32,7 @@ import {
   YotoCredentialStatus,
   YotoPlaylistDraft,
   YotoPlaylistRemotePayload,
+  YotoRemoteCard,
   YotoPlaylistVersion,
   applyTrackIcon,
   approveImportReview,
@@ -69,6 +70,7 @@ import {
   fetchYotoPlaylists,
   fetchYotoPlaylistRemotePayload,
   fetchYotoPlaylistVersions,
+  fetchYotoRemoteContent,
   hideImport,
   fetchAuthProviders,
   linkLibraryItemToCard,
@@ -195,7 +197,7 @@ type AndroidUpdateState =
 type NotificationPermissionState = "prompt" | "prompt-with-rationale" | "granted" | "denied";
 
 type CardWriteTarget = {
-  source: "scan_dump" | "yoto_playlist" | "manual_form";
+  source: "scan_dump" | "yoto_playlist" | "remote_yoto_card" | "manual_form";
   label: string;
   detail: string;
   itemId?: number | null;
@@ -468,6 +470,24 @@ function createWriteTargetFromPlaylist(detail: LibraryItemDetail, playlist: Yoto
     detail: playlistUri,
     itemId: detail.item.id,
     playlistId: playlist.id,
+    playlistUri,
+    programmableId: generated.programmableId,
+    payloadText: generated.payloadText,
+    payloadHex: generated.payloadHex,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function createWriteTargetFromRemoteCard(card: YotoRemoteCard): CardWriteTarget | null {
+  const playlistUri = card.playlist_uri?.trim();
+  if (!playlistUri) {
+    return null;
+  }
+  const generated = generatedCardPayload(playlistUri);
+  return {
+    source: "remote_yoto_card",
+    label: card.title,
+    detail: playlistUri,
     playlistUri,
     programmableId: generated.programmableId,
     payloadText: generated.payloadText,
@@ -4065,6 +4085,9 @@ function TagsPage() {
 
 function CardsPage() {
   const [cards, setCards] = useState<PhysicalCard[]>([]);
+  const [remoteYotoCards, setRemoteYotoCards] = useState<YotoRemoteCard[]>([]);
+  const [remoteYotoError, setRemoteYotoError] = useState<string | null>(null);
+  const [showDeletedRemoteYotoCards, setShowDeletedRemoteYotoCards] = useState(false);
   const [scanDumps, setScanDumps] = useState<CardScanDumpEntry[]>([]);
   const [programmingEvents, setProgrammingEvents] = useState<CardProgrammingEvent[]>([]);
   const [programmingSession, setProgrammingSession] = useState<CardProgrammingSession | null>(null);
@@ -4164,11 +4187,23 @@ function CardsPage() {
     setStagedWriteTarget(writeTargetFromProgrammingSession(session));
   }
 
+  async function refreshRemoteYotoCards(showDeleted = showDeletedRemoteYotoCards) {
+    const response = await fetchYotoRemoteContent(showDeleted);
+    setRemoteYotoCards(response.cards);
+    setRemoteYotoError(null);
+  }
+
   useEffect(() => {
     void Promise.all([refreshCards(), refreshScanDumps(), refreshProgrammingEvents(), refreshProgrammingSession()]).catch((loadError) =>
       setError(loadError instanceof Error ? loadError.message : "Failed to load cards."),
     );
   }, []);
+
+  useEffect(() => {
+    void refreshRemoteYotoCards(showDeletedRemoteYotoCards).catch((loadError) =>
+      setRemoteYotoError(loadError instanceof Error ? loadError.message : "Failed to load remote Yoto content."),
+    );
+  }, [showDeletedRemoteYotoCards]);
 
   useEffect(() => {
     if (!programmingSession?.source_scan_dump_id) {
@@ -4525,6 +4560,37 @@ function CardsPage() {
       notes: current.notes || `Applied staged write target from ${stagedWriteTarget.label}.`,
     }));
     setHelperMessage(`Applied staged write target from ${stagedWriteTarget.label} to the card form.`);
+  }
+
+  function applyRemoteYotoCardToForm(card: YotoRemoteCard) {
+    const target = createWriteTargetFromRemoteCard(card);
+    if (!target) {
+      setHelperMessage(`Could not derive a programmable payload from ${card.title}.`);
+      return;
+    }
+    setForm((current) => ({
+      ...current,
+      yoto_playlist_uri: target.playlistUri ?? current.yoto_playlist_uri,
+      programmable_id: target.programmableId ?? current.programmable_id,
+      ndef_payload_text: target.payloadText ?? current.ndef_payload_text,
+      ndef_payload_hex: target.payloadHex ?? current.ndef_payload_hex,
+      scan_source: current.scan_source === "manual" ? "nfc_tools" : current.scan_source,
+      ready_to_link_in_app: true,
+      status: current.status === "available" ? "ready_to_link" : current.status,
+      notes: current.notes || `Applied remote Yoto card ${card.card_id} (${card.title}).`,
+    }));
+    stageWriteTarget(target);
+    setHelperMessage(`Loaded remote Yoto card ${card.title} into the card form and staged it for writing.`);
+  }
+
+  function stageRemoteYotoCard(card: YotoRemoteCard) {
+    const target = createWriteTargetFromRemoteCard(card);
+    if (!target) {
+      setHelperMessage(`Could not stage remote Yoto card ${card.title}.`);
+      return;
+    }
+    stageWriteTarget(target);
+    setHelperMessage(`Staged remote Yoto card ${card.title} for blank-card writing.`);
   }
 
   function clearStagedWriteTarget() {
@@ -5105,6 +5171,82 @@ function CardsPage() {
           <p className="muted">
             After a write, scan the card again. The app will compare the next scan against the armed write target automatically.
           </p>
+        )}
+      </section>
+
+      <section className="card-console-panel">
+        <div className="section-header">
+          <div>
+            <p className="eyebrow">Remote Yoto</p>
+            <h3>Existing Yoto cloud uploads</h3>
+            <p className="muted">
+              Load MYO cards already in Yoto, then stage one for blank-card writing or apply it to the local card form.
+            </p>
+          </div>
+          <div className="button-row">
+            <label className="checkbox-row">
+              <input
+                checked={showDeletedRemoteYotoCards}
+                onChange={(event) => setShowDeletedRemoteYotoCards(event.target.checked)}
+                type="checkbox"
+              />
+              Show deleted
+            </label>
+            <button
+              className="secondary-button"
+              onClick={() => void refreshRemoteYotoCards(showDeletedRemoteYotoCards)}
+              type="button"
+            >
+              Refresh remote
+            </button>
+            <span className="status-pill status-pill-muted">{remoteYotoCards.length} remote cards</span>
+          </div>
+        </div>
+        {remoteYotoError ? <p className="auth-error">{remoteYotoError}</p> : null}
+        {remoteYotoCards.length === 0 ? (
+          <p className="muted">
+            {remoteYotoError
+              ? "Remote Yoto content could not be loaded."
+              : "No remote MYO content has been loaded yet, or the connected account has no uploaded cards."}
+          </p>
+        ) : (
+          <div className="compact-list">
+            {remoteYotoCards.map((remoteCard) => (
+              <article className="stage-status-row" key={remoteCard.card_id}>
+                <div className="workflow-fact-row">
+                  <span className="status-pill">#{remoteCard.card_id}</span>
+                  {remoteCard.deleted ? <span className="status-pill status-pill-muted">Deleted</span> : null}
+                  {remoteCard.hidden ? <span className="status-pill status-pill-muted">Hidden</span> : null}
+                  {remoteCard.category ? <span className="status-pill status-pill-muted">{remoteCard.category}</span> : null}
+                </div>
+                <p className="muted">
+                  <strong>{remoteCard.title}</strong>
+                  {remoteCard.author ? ` · ${remoteCard.author}` : ""}
+                  {remoteCard.duration_seconds ? ` · ${formatDuration(remoteCard.duration_seconds)}` : ""}
+                </p>
+                <p className="muted">{remoteCard.playlist_uri}</p>
+                {remoteCard.description ? <p className="muted">{remoteCard.description}</p> : null}
+                <div className="button-row">
+                  <button
+                    className="secondary-button"
+                    onClick={() => stageRemoteYotoCard(remoteCard)}
+                    type="button"
+                  >
+                    Stage for write
+                  </button>
+                  <button
+                    className="secondary-button"
+                    onClick={() => applyRemoteYotoCardToForm(remoteCard)}
+                    type="button"
+                  >
+                    Apply to form
+                  </button>
+                  <CopyValueButton label="playlist URI" value={remoteCard.playlist_uri} />
+                  <CopyValueButton label="card ID" value={remoteCard.card_id} />
+                </div>
+              </article>
+            ))}
+          </div>
         )}
       </section>
 

@@ -728,6 +728,34 @@ class YotoApiDebugResponse(BaseModel):
     live_api_call: bool = True
 
 
+class YotoRemoteCardResponse(BaseModel):
+    card_id: str
+    title: str
+    playlist_uri: str
+    deleted: bool = False
+    hidden: bool = False
+    author: str | None = None
+    description: str | None = None
+    category: str | None = None
+    cover_image_url: str | None = None
+    duration_seconds: int | None = None
+    file_size_bytes: int | None = None
+    updated_at: datetime | None = None
+    created_at: datetime | None = None
+    share_link_url: str | None = None
+    raw_card: dict[str, Any] | None = None
+
+
+class YotoRemoteLibraryResponse(BaseModel):
+    credential: YotoCredentialStatusResponse
+    cards: list[YotoRemoteCardResponse]
+    http_status: int | None = None
+    token_refreshed: bool = False
+    response_excerpt: str | None = None
+    error_detail: str | None = None
+    live_api_call: bool = True
+
+
 class BuildInfoResponse(BaseModel):
     service: str
     build_sha: str

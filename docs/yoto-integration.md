@@ -56,6 +56,9 @@ The API exposes local-only Yoto scaffolding endpoints:
   credential state as `revoked`. It does not make a live revoke call.
 - `POST /api/v1/yoto/credentials/probe` and `POST /api/v1/yoto/debug/request` use the stored token
   material to test live Yoto API calls, including token refresh if needed.
+- `GET /api/v1/yoto/remote-content` calls Yoto's `GET /content/mine` endpoint, returns the
+  connected account's existing MYO cards, and derives a linkable playlist URI from each returned
+  `cardId` so the Cards screen can stage or apply those uploads to blank-card programming.
 - `GET /api/v1/yoto/playlists/{playlist_id}/versions` lists immutable local payload snapshots for a
   queued Yoto playlist draft.
 - `POST /api/v1/yoto/playlists/{playlist_id}/versions/{version_id}/restore` restores a draft to a
@@ -89,6 +92,9 @@ As of July 19, 2026, the working repeatable live test path is:
 5. Optionally inspect `GET /api/v1/yoto/playlists/{playlist_id}/remote-payload`.
 6. Run `POST /api/v1/yoto/playlists/{playlist_id}/create-live` to upload the processed/source
    audio to Yoto, wait through Yoto transcode, and create live `/content`.
+7. Open the Cards screen and use the Remote Yoto section to load existing Yoto MYO uploads. From
+   there you can stage a remote card for blank-card writing or apply it directly to the local card
+   form.
 
 `create-live` can now be called with an empty JSON body or no body at all. When no explicit
 `request_payload` is supplied, the API builds the live Yoto `/content` payload from the stored
