@@ -53,10 +53,18 @@ Google Play upload artifact instead, build the signed release app bundle:
 k8s/scripts/deploy-dev.sh --android-bundle
 ```
 
+That now builds both the Play bundle and a signed release APK in one run.
+
 The Play Console bundle output path is:
 
 ```text
 frontend/android/app/build/outputs/bundle/release/app-release.aab
+```
+
+The signed release APK output path is:
+
+```text
+frontend/android/app/build/outputs/apk/release/app-release.apk
 ```
 
 `k8s/scripts/deploy-dev.sh` now defaults the frontend port-forward bind address to `0.0.0.0`.

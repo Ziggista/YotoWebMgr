@@ -422,20 +422,23 @@ echo "Recent frontend logs:"
 echo
 
 if [[ "${ANDROID_BUILD}" == "true" || "${ANDROID_BUNDLE}" == "true" ]]; then
-  android_gradle_task="assembleDebug"
-  android_output_path="${ANDROID_DIR}/app/build/outputs/apk/debug/app-debug.apk"
+  android_gradle_tasks=("assembleDebug")
+  android_output_paths=("${ANDROID_DIR}/app/build/outputs/apk/debug/app-debug.apk")
   android_build_label="debug APK"
   if [[ "${ANDROID_BUNDLE}" == "true" ]]; then
     if [[ ! -f "${ANDROID_KEYSTORE_PROPERTIES_FILE}" ]]; then
       echo "Android app bundle builds require ${ANDROID_KEYSTORE_PROPERTIES_FILE} so Gradle can sign the release bundle." >&2
       exit 1
     fi
-    android_gradle_task="bundleRelease"
-    android_output_path="${ANDROID_DIR}/app/build/outputs/bundle/release/app-release.aab"
-    android_build_label="signed release app bundle"
+    android_gradle_tasks=("bundleRelease" "assembleRelease")
+    android_output_paths=(
+      "${ANDROID_DIR}/app/build/outputs/bundle/release/app-release.aab"
+      "${ANDROID_DIR}/app/build/outputs/apk/release/app-release.apk"
+    )
+    android_build_label="signed release app bundle and APK"
   elif [[ -f "${ANDROID_KEYSTORE_PROPERTIES_FILE}" ]]; then
-    android_gradle_task="assembleRelease"
-    android_output_path="${ANDROID_DIR}/app/build/outputs/apk/release/app-release.apk"
+    android_gradle_tasks=("assembleRelease")
+    android_output_paths=("${ANDROID_DIR}/app/build/outputs/apk/release/app-release.apk")
     android_build_label="signed release APK"
   fi
 
@@ -465,11 +468,13 @@ if [[ "${ANDROID_BUILD}" == "true" || "${ANDROID_BUNDLE}" == "true" ]]; then
   fi
 
   pushd "${ANDROID_DIR}" >/dev/null
-  ./gradlew "${android_gradle_task}"
+  ./gradlew "${android_gradle_tasks[@]}"
   popd >/dev/null
 
   echo "Android ${android_build_label} built:"
-  echo "  ${android_output_path}"
+  for android_output_path in "${android_output_paths[@]}"; do
+    echo "  ${android_output_path}"
+  done
   echo
 fi
 
