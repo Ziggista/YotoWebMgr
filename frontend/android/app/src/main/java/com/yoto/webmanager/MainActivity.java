@@ -1,4 +1,4 @@
-package au.net.yotowebmgr.app;
+package com.yoto.webmanager;
 
 import com.getcapacitor.BridgeActivity;
 

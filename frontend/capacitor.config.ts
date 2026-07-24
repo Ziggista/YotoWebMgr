@@ -1,7 +1,7 @@
 import type { CapacitorConfig } from "@capacitor/cli";
 
 const config: CapacitorConfig = {
-  appId: "au.net.yotowebmgr.app",
+  appId: "com.yoto.webmanager",
   appName: "YotoWebMgr",
   webDir: "dist",
   plugins: {

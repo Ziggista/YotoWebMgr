@@ -40,6 +40,25 @@ Keep `RESET_DATABASE_ON_START=false` outside disposable dev deployments.
 k8s/scripts/deploy-dev.sh
 ```
 
+To build Android artifacts from the same script:
+
+```bash
+k8s/scripts/deploy-dev.sh --android-build
+```
+
+That produces an APK. If you have `frontend/android/keystore.properties` configured and need the
+Google Play upload artifact instead, build the signed release app bundle:
+
+```bash
+k8s/scripts/deploy-dev.sh --android-bundle
+```
+
+The Play Console bundle output path is:
+
+```text
+frontend/android/app/build/outputs/bundle/release/app-release.aab
+```
+
 `k8s/scripts/deploy-dev.sh` now defaults the frontend port-forward bind address to `0.0.0.0`.
 That makes the forwarded `5175` service reachable from remote Android/browser clients when the
 Windows host or Tailscale layer forwards the port onward.

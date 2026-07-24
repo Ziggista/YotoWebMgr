@@ -18,6 +18,7 @@ GIT_SHA="$(git -C "${ROOT_DIR}" rev-parse --short HEAD 2>/dev/null || echo "nogi
 LOG_FILE="${LOG_FILE:-${LOG_DIR}/deploy-dev-${RUN_TIMESTAMP}-${GIT_SHA}.log}"
 FORCE_DESTROY=false
 ANDROID_BUILD=false
+ANDROID_BUNDLE=false
 SECRET_BACKUP_FILE=""
 YOTO_STATE_BACKUP_FILE=""
 
@@ -37,6 +38,8 @@ Options:
   --force   Delete the namespace without preserving ${SECRET_NAME}.
   --android-build
             Rebuild the Android debug APK after the deploy completes.
+  --android-bundle
+            Build the signed Android release app bundle (.aab) for Google Play.
   --bind-address ADDRESS
             Bind the frontend port-forward to a specific address, such as 0.0.0.0.
 EOF
@@ -49,6 +52,9 @@ while (($# > 0)); do
       ;;
     --android-build)
       ANDROID_BUILD=true
+      ;;
+    --android-bundle)
+      ANDROID_BUNDLE=true
       ;;
     --bind-address)
       shift
@@ -354,6 +360,7 @@ echo "Git SHA: ${GIT_SHA}"
 echo "Log file: ${LOG_FILE}"
 echo "Force destroy: ${FORCE_DESTROY}"
 echo "Android build: ${ANDROID_BUILD}"
+echo "Android bundle: ${ANDROID_BUNDLE}"
 echo "Port-forward bind address: ${BIND_ADDRESS}"
 echo
 
@@ -414,11 +421,19 @@ echo "Recent frontend logs:"
 "${MICROK8S_BIN}" kubectl -n "${NAMESPACE}" logs deployment/frontend --tail=200 || true
 echo
 
-if [[ "${ANDROID_BUILD}" == "true" ]]; then
+if [[ "${ANDROID_BUILD}" == "true" || "${ANDROID_BUNDLE}" == "true" ]]; then
   android_gradle_task="assembleDebug"
   android_output_path="${ANDROID_DIR}/app/build/outputs/apk/debug/app-debug.apk"
   android_build_label="debug APK"
-  if [[ -f "${ANDROID_KEYSTORE_PROPERTIES_FILE}" ]]; then
+  if [[ "${ANDROID_BUNDLE}" == "true" ]]; then
+    if [[ ! -f "${ANDROID_KEYSTORE_PROPERTIES_FILE}" ]]; then
+      echo "Android app bundle builds require ${ANDROID_KEYSTORE_PROPERTIES_FILE} so Gradle can sign the release bundle." >&2
+      exit 1
+    fi
+    android_gradle_task="bundleRelease"
+    android_output_path="${ANDROID_DIR}/app/build/outputs/bundle/release/app-release.aab"
+    android_build_label="signed release app bundle"
+  elif [[ -f "${ANDROID_KEYSTORE_PROPERTIES_FILE}" ]]; then
     android_gradle_task="assembleRelease"
     android_output_path="${ANDROID_DIR}/app/build/outputs/apk/release/app-release.apk"
     android_build_label="signed release APK"

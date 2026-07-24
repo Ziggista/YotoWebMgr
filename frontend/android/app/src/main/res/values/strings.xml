@@ -2,6 +2,6 @@
 <resources>
     <string name="app_name">YotoWebMgr</string>
     <string name="title_activity_main">YotoWebMgr</string>
-    <string name="package_name">au.net.yotowebmgr.app</string>
-    <string name="custom_url_scheme">au.net.yotowebmgr.app</string>
+    <string name="package_name">com.yoto.webmanager</string>
+    <string name="custom_url_scheme">com.yoto.webmanager</string>
 </resources>
