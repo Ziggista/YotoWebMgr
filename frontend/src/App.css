@@ -864,6 +864,32 @@ a {
   margin-top: 16px;
 }
 
+.bulk-yoto-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(255, 191, 105, 0.08);
+  border: 1px solid rgba(255, 191, 105, 0.2);
+}
+
+.bulk-yoto-select,
+.library-row-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.library-row-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
 .list-row {
   display: flex;
   align-items: center;

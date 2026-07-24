@@ -1,8 +1,10 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
-import { Link, NavLink, Route, Routes, useParams } from "react-router-dom";
+import { Link, NavLink, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import AudioPlayer from "react-h5-audio-player";
 import "react-h5-audio-player/lib/styles.css";
 import { Capacitor } from "@capacitor/core";
+import { App as CapacitorApp } from "@capacitor/app";
+import { Browser } from "@capacitor/browser";
 import { LocalNotifications } from "@capacitor/local-notifications";
 import { CapacitorUpdater } from "@capgo/capacitor-updater";
 import { NFC, type NDEFMessagesTransformable } from "@exxili/capacitor-nfc";
@@ -48,6 +50,7 @@ import {
   completeYotoOAuth,
   debugYotoApiRequest,
   disconnectYotoCredentials,
+  deleteYotoRemoteContent,
   dumpCardScan,
   fetchBackendBuildInfo,
   fetchCard,
@@ -79,6 +82,7 @@ import {
   queueArtworkPixelise,
   queueLibraryItemProcessing,
   probeYotoCredentials,
+  queueBulkCreateLiveYoto,
   queueYotoPlaylist,
   restoreLibraryItemVersion,
   restoreYotoPlaylistVersion,
@@ -114,6 +118,8 @@ const contentTypes = [
 const defaultNdefFormatCommand = "A2:03:E1:10:06:00,A2:04:03:04:D8:00,A2:05:00:00:FE:00";
 const yotoPkceStorageKey = "yotowebmgr.yoto.pkce";
 const yotoPkceExchangeKey = "yotowebmgr.yoto.pkce.exchange";
+const yotoNativeRedirectUri = "com.yoto.webmanager://settings/yoto/callback";
+const yotoWebCallbackPath = "/settings/yoto/callback";
 const frontendBuildSha = import.meta.env.VITE_APP_BUILD_SHA ?? "dev";
 const readyToLinkNotificationStorageKey = "yotowebmgr.notifications.readyToLink";
 const yotoDebugPresets = [
@@ -374,6 +380,89 @@ function normaliseTextValue(value: string | null | undefined): string | null {
   }
   const normalized = value.trim();
   return normalized || null;
+}
+
+function storePkceState(payload: { verifier: string; state: string }) {
+  const serialised = JSON.stringify(payload);
+  window.sessionStorage.setItem(yotoPkceStorageKey, serialised);
+  window.localStorage.setItem(yotoPkceStorageKey, serialised);
+}
+
+function loadPkceState(): { verifier?: string; state?: string } | null {
+  const storedValue =
+    window.sessionStorage.getItem(yotoPkceStorageKey) ?? window.localStorage.getItem(yotoPkceStorageKey);
+  if (!storedValue) {
+    return null;
+  }
+  try {
+    return JSON.parse(storedValue) as { verifier?: string; state?: string };
+  } catch {
+    return null;
+  }
+}
+
+function clearPkceState() {
+  window.sessionStorage.removeItem(yotoPkceStorageKey);
+  window.localStorage.removeItem(yotoPkceStorageKey);
+}
+
+function loadPkceExchangeState(): string | null {
+  return window.sessionStorage.getItem(yotoPkceExchangeKey) ?? window.localStorage.getItem(yotoPkceExchangeKey);
+}
+
+function storePkceExchangeState(value: string) {
+  window.sessionStorage.setItem(yotoPkceExchangeKey, value);
+  window.localStorage.setItem(yotoPkceExchangeKey, value);
+}
+
+function clearPkceExchangeState() {
+  window.sessionStorage.removeItem(yotoPkceExchangeKey);
+  window.localStorage.removeItem(yotoPkceExchangeKey);
+}
+
+function usesNativeYotoRedirectUri(value: string | null | undefined): boolean {
+  return normaliseTextValue(value) === yotoNativeRedirectUri;
+}
+
+function shouldUseNativeYotoRedirectDefault(value: string | null | undefined): boolean {
+  const normalized = normaliseTextValue(value);
+  if (!normalized) {
+    return true;
+  }
+  if (normalized === yotoNativeRedirectUri) {
+    return false;
+  }
+  try {
+    return new URL(normalized).pathname === yotoWebCallbackPath;
+  } catch {
+    return false;
+  }
+}
+
+function normaliseSettingsForRuntime(settings: AppSettings): AppSettings {
+  if (!isNativeAndroidRuntime() || !shouldUseNativeYotoRedirectDefault(settings.yoto_redirect_uri)) {
+    return settings;
+  }
+  return {
+    ...settings,
+    yoto_redirect_uri: yotoNativeRedirectUri,
+  };
+}
+
+function normaliseYotoCallbackUrl(rawUrl: string): string | null {
+  try {
+    const parsed = new URL(rawUrl);
+    const callbackPath =
+      parsed.protocol === "com.yoto.webmanager:"
+        ? `/${parsed.hostname}${parsed.pathname}`.replace(/\/+/g, "/")
+        : parsed.pathname;
+    if (!callbackPath.startsWith("/settings/yoto/callback")) {
+      return null;
+    }
+    return `${callbackPath}${parsed.search}`;
+  } catch {
+    return null;
+  }
 }
 
 function normalizedCardCode(value: string | null | undefined): string | null {
@@ -858,6 +947,14 @@ function latestJobForItem(jobs: Job[], type: string): Job | null {
 
 function latestYotoPlaylist(playlists: YotoPlaylistDraft[]): YotoPlaylistDraft | null {
   return [...playlists].sort((left, right) => right.id - left.id)[0] ?? null;
+}
+
+function itemNeedsYotoCloudCreate(item: LibraryItem): boolean {
+  return !item.yoto.has_remote_playlist;
+}
+
+function itemBulkYotoActionLabel(item: LibraryItem): string {
+  return item.yoto.has_playlist_draft ? "Create in Yoto cloud" : "Queue and create in Yoto cloud";
 }
 
 function yotoPlaylistWorkflowSteps(
@@ -1423,6 +1520,9 @@ function LibraryPage() {
   const [error, setError] = useState<string | null>(null);
   const [linkMessage, setLinkMessage] = useState<string | null>(null);
   const [linking, setLinking] = useState(false);
+  const [bulkYotoItemIds, setBulkYotoItemIds] = useState<number[]>([]);
+  const [bulkYotoProcessing, setBulkYotoProcessing] = useState(false);
+  const bulkYotoProcessingRef = useRef(false);
 
   async function refreshLibraryList() {
     const nextItems = await fetchLibraryItems({
@@ -1440,6 +1540,16 @@ function LibraryPage() {
         setError(loadError instanceof Error ? loadError.message : "Failed to load library."),
       );
   }, [filters.search, filters.content_type, filters.tag_id]);
+
+  useEffect(() => {
+    setBulkYotoItemIds((current) =>
+      current.filter((itemId) => items.some((item) => item.id === itemId && itemNeedsYotoCloudCreate(item))),
+    );
+  }, [items]);
+
+  const yotoSelectableItems = items.filter(itemNeedsYotoCloudCreate);
+  const allYotoSelectableChecked =
+    yotoSelectableItems.length > 0 && yotoSelectableItems.every((item) => bulkYotoItemIds.includes(item.id));
 
   async function openLinkPanel(itemId: number) {
     setError(null);
@@ -1735,6 +1845,52 @@ function LibraryPage() {
     }
   }
 
+  function toggleBulkYotoItem(itemId: number, checked: boolean) {
+    setBulkYotoItemIds((current) =>
+      checked ? [...current, itemId].sort((left, right) => left - right) : current.filter((id) => id !== itemId),
+    );
+  }
+
+  function toggleAllBulkYotoItems(checked: boolean) {
+    setBulkYotoItemIds(checked ? yotoSelectableItems.map((item) => item.id) : []);
+  }
+
+  async function handleBulkProcessToYoto() {
+    if (bulkYotoProcessingRef.current) {
+      return;
+    }
+    const selectedItems = items.filter((item) => bulkYotoItemIds.includes(item.id) && itemNeedsYotoCloudCreate(item));
+    if (selectedItems.length === 0) {
+      setError("Choose one or more library items that still need Yoto cloud content.");
+      return;
+    }
+
+    bulkYotoProcessingRef.current = true;
+    setBulkYotoProcessing(true);
+    setError(null);
+    setLinkMessage(null);
+
+    try {
+      const result = await queueBulkCreateLiveYoto({
+        library_item_ids: selectedItems.map((item) => item.id),
+        mark_linked_cards_ready: false,
+      });
+      setLinkMessage(
+        `Queued backend Yoto create job #${result.job.id} for ${result.queued_item_ids.length} item(s)${
+          result.skipped_item_ids.length > 0 ? `, skipped ${result.skipped_item_ids.length}` : ""
+        }.`,
+      );
+    } finally {
+      await refreshLibraryList();
+      if (detail) {
+        await refreshDetail(detail.item.id).catch(() => undefined);
+      }
+      setBulkYotoItemIds([]);
+      setBulkYotoProcessing(false);
+      bulkYotoProcessingRef.current = false;
+    }
+  }
+
   return (
     <section className="panel">
       <div className="section-header">
@@ -1774,6 +1930,30 @@ function LibraryPage() {
           ))}
         </select>
       </div>
+      {yotoSelectableItems.length > 0 ? (
+        <div className="bulk-yoto-bar">
+          <label className="bulk-yoto-select">
+            <input
+              checked={allYotoSelectableChecked}
+              onChange={(event) => toggleAllBulkYotoItems(event.target.checked)}
+              type="checkbox"
+            />
+            <span>
+              {bulkYotoItemIds.length > 0
+                ? `${bulkYotoItemIds.length} item(s) selected for Yoto cloud`
+                : `${yotoSelectableItems.length} item(s) still need Yoto cloud content`}
+            </span>
+          </label>
+          <button
+            className="primary-button"
+            disabled={bulkYotoProcessing || bulkYotoItemIds.length === 0}
+            onClick={() => void handleBulkProcessToYoto()}
+            type="button"
+          >
+            {bulkYotoProcessing ? "Processing selected items" : "Process selected to Yoto"}
+          </button>
+        </div>
+      ) : null}
       {items.length === 0 ? (
         <EmptyState message="No library items yet. Create an import to seed the library." />
       ) : (
@@ -1781,11 +1961,34 @@ function LibraryPage() {
           {items.map((item) => (
             <article className="list-row" key={item.id}>
               <div>
-                <h3>{item.title}</h3>
+                <div className="library-row-heading">
+                  {itemNeedsYotoCloudCreate(item) ? (
+                    <label className="library-row-checkbox">
+                      <input
+                        checked={bulkYotoItemIds.includes(item.id)}
+                        onChange={(event) => toggleBulkYotoItem(item.id, event.target.checked)}
+                        type="checkbox"
+                      />
+                    </label>
+                  ) : null}
+                  <div>
+                    <h3>{item.title}</h3>
                 <p className="muted">
                   {item.content_type} · {item.status}
                   {item.stream_url ? " · Live stream" : ""}
                 </p>
+                  </div>
+                </div>
+                <div className="tag-chip-row">
+                  <span className={`status-pill${item.yoto.has_remote_playlist ? " status-pill-ok" : " status-pill-muted"}`}>
+                    {item.yoto.has_remote_playlist ? "Yoto cloud ready" : itemBulkYotoActionLabel(item)}
+                  </span>
+                  {item.yoto.has_playlist_draft ? (
+                    <span className="status-pill status-pill-muted">
+                      Draft {item.yoto.latest_playlist_status ?? `#${item.yoto.latest_playlist_id ?? "?"}`}
+                    </span>
+                  ) : null}
+                </div>
                 {item.tags.length > 0 ? (
                   <div className="tag-chip-row">
                     {item.tags.map((tag) => (
@@ -4088,6 +4291,9 @@ function CardsPage() {
   const [remoteYotoCards, setRemoteYotoCards] = useState<YotoRemoteCard[]>([]);
   const [remoteYotoError, setRemoteYotoError] = useState<string | null>(null);
   const [showDeletedRemoteYotoCards, setShowDeletedRemoteYotoCards] = useState(false);
+  const [pendingRemoteDeleteCardId, setPendingRemoteDeleteCardId] = useState<string | null>(null);
+  const [remoteDeleteConfirmed, setRemoteDeleteConfirmed] = useState(false);
+  const [remoteDeleteSubmittingCardId, setRemoteDeleteSubmittingCardId] = useState<string | null>(null);
   const [scanDumps, setScanDumps] = useState<CardScanDumpEntry[]>([]);
   const [programmingEvents, setProgrammingEvents] = useState<CardProgrammingEvent[]>([]);
   const [programmingSession, setProgrammingSession] = useState<CardProgrammingSession | null>(null);
@@ -4191,6 +4397,24 @@ function CardsPage() {
     const response = await fetchYotoRemoteContent(showDeleted);
     setRemoteYotoCards(response.cards);
     setRemoteYotoError(null);
+  }
+
+  async function handleDeleteRemoteYotoCard(cardId: string) {
+    setRemoteDeleteSubmittingCardId(cardId);
+    setRemoteYotoError(null);
+    try {
+      await deleteYotoRemoteContent(cardId);
+      setPendingRemoteDeleteCardId(null);
+      setRemoteDeleteConfirmed(false);
+      setHelperMessage(`Deleted remote Yoto card ${cardId}.`);
+      await refreshRemoteYotoCards(showDeletedRemoteYotoCards);
+    } catch (deleteError) {
+      setRemoteYotoError(
+        deleteError instanceof Error ? deleteError.message : `Failed to delete remote Yoto card ${cardId}.`,
+      );
+    } finally {
+      setRemoteDeleteSubmittingCardId(null);
+    }
   }
 
   useEffect(() => {
@@ -5241,9 +5465,43 @@ function CardsPage() {
                   >
                     Apply to form
                   </button>
+                  <button
+                    className="secondary-button"
+                    onClick={() => {
+                      setPendingRemoteDeleteCardId(
+                        pendingRemoteDeleteCardId === remoteCard.card_id ? null : remoteCard.card_id,
+                      );
+                      setRemoteDeleteConfirmed(false);
+                    }}
+                    type="button"
+                  >
+                    {pendingRemoteDeleteCardId === remoteCard.card_id ? "Cancel delete" : "Delete"}
+                  </button>
                   <CopyValueButton label="playlist URI" value={remoteCard.playlist_uri} />
                   <CopyValueButton label="card ID" value={remoteCard.card_id} />
                 </div>
+                {pendingRemoteDeleteCardId === remoteCard.card_id ? (
+                  <div className="detail-note">
+                    <label className="checkbox-row">
+                      <input
+                        checked={remoteDeleteConfirmed}
+                        onChange={(event) => setRemoteDeleteConfirmed(event.target.checked)}
+                        type="checkbox"
+                      />
+                      I understand this removes the MYO content from Yoto cloud.
+                    </label>
+                    <div className="button-row">
+                      <button
+                        className="secondary-button"
+                        disabled={!remoteDeleteConfirmed || remoteDeleteSubmittingCardId === remoteCard.card_id}
+                        onClick={() => void handleDeleteRemoteYotoCard(remoteCard.card_id)}
+                        type="button"
+                      >
+                        {remoteDeleteSubmittingCardId === remoteCard.card_id ? "Deleting..." : "Confirm delete"}
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
               </article>
             ))}
           </div>
@@ -6095,11 +6353,19 @@ function SettingsPage() {
 
   useEffect(() => {
     void Promise.all([fetchSettings(), fetchYotoCredentialStatus()])
-      .then(([nextSettings, nextCredential]) => {
-        setSettings(nextSettings);
+      .then(async ([nextSettings, nextCredential]) => {
+        const runtimeSettings = normaliseSettingsForRuntime(nextSettings);
+        setSettings(runtimeSettings);
         setYotoCredential(nextCredential);
         setYotoAccountLabel(nextCredential.account_label);
         setPreparedAuthUrl(nextCredential.authorization_url);
+
+        if (runtimeSettings.yoto_redirect_uri !== nextSettings.yoto_redirect_uri) {
+          const persistedSettings = await updateSettings({
+            yoto_redirect_uri: runtimeSettings.yoto_redirect_uri,
+          });
+          setSettings(normaliseSettingsForRuntime(persistedSettings));
+        }
       })
       .catch((loadError) =>
         setError(loadError instanceof Error ? loadError.message : "Failed to load settings."),
@@ -6191,15 +6457,26 @@ function SettingsPage() {
     setYotoProbe(null);
     setYotoDebugResult(null);
     try {
+      const currentSettings = settings;
+      if (!currentSettings) {
+        throw new Error("Settings are still loading.");
+      }
+      if (isNativeAndroidRuntime() && !usesNativeYotoRedirectUri(currentSettings.yoto_redirect_uri)) {
+        throw new Error(
+          `For Android app auth, set Redirect URI to ${yotoNativeRedirectUri} in both Yoto Developer Dashboard and this app before testing browser auth.`,
+        );
+      }
       const pkce = await createPkcePair();
       const result = await startYotoOAuth(yotoAccountLabel, pkce.challenge);
       setYotoCredential(result.credential);
       setPreparedAuthUrl(result.authorization_url);
-      window.sessionStorage.setItem(
-        yotoPkceStorageKey,
-        JSON.stringify({ verifier: pkce.verifier, state: result.oauth_state }),
-      );
-      window.location.href = result.authorization_url;
+      storePkceState({ verifier: pkce.verifier, state: result.oauth_state });
+      clearPkceExchangeState();
+      if (Capacitor.isNativePlatform()) {
+        await Browser.open({ url: result.authorization_url });
+      } else {
+        window.location.href = result.authorization_url;
+      }
     } catch (startError) {
       setError(startError instanceof Error ? startError.message : "Failed to prepare Yoto OAuth.");
     } finally {
@@ -6405,14 +6682,33 @@ function SettingsPage() {
         <label>
           Redirect URI
           <input
-            onChange={(event) =>
-              setSettings((current) =>
-                current ? { ...current, yoto_redirect_uri: event.target.value } : current,
-              )
+            onChange={
+              isNativeAndroidRuntime()
+                ? undefined
+                : (event) =>
+                    setSettings((current) =>
+                      current ? { ...current, yoto_redirect_uri: event.target.value } : current,
+                    )
             }
+            readOnly={isNativeAndroidRuntime()}
             value={settings.yoto_redirect_uri}
           />
         </label>
+        <p className="settings-note">
+          {isNativeAndroidRuntime()
+            ? (
+                <>
+                  Android locks this to <code>{yotoNativeRedirectUri}</code> so browser auth returns
+                  to the app correctly.
+                </>
+              )
+            : (
+                <>
+                  Browser auth from the deployed web UI should use the HTTP callback URL registered
+                  in the Yoto dashboard for that host.
+                </>
+              )}
+        </p>
         <label>
           OAuth scope
           <input
@@ -6700,26 +6996,20 @@ function YotoOAuthCallbackPage() {
   const [statusMessage, setStatusMessage] = useState("Completing Yoto browser auth...");
   const [error, setError] = useState<string | null>(null);
   const [credential, setCredential] = useState<YotoCredentialStatus | null>(null);
+  const navigate = useNavigate();
 
   useEffect(() => {
     async function finishAuth() {
       const params = new URLSearchParams(window.location.search);
       const code = params.get("code");
       const state = params.get("state");
-      const storedValue = window.sessionStorage.getItem(yotoPkceStorageKey);
       if (!code || !state) {
         setError("Yoto did not return both code and state.");
         return;
       }
-      if (!storedValue) {
+      const stored = loadPkceState();
+      if (!stored) {
         setError("The PKCE verifier is missing from this browser session.");
-        return;
-      }
-      let stored: { verifier?: string; state?: string };
-      try {
-        stored = JSON.parse(storedValue) as { verifier?: string; state?: string };
-      } catch {
-        setError("The stored PKCE verifier could not be read.");
         return;
       }
       if (!stored.verifier || stored.state !== state) {
@@ -6727,31 +7017,34 @@ function YotoOAuthCallbackPage() {
         return;
       }
       const exchangeKey = `${state}:${code}`;
-      const exchangeStatus = window.sessionStorage.getItem(yotoPkceExchangeKey);
+      const exchangeStatus = loadPkceExchangeState();
       if (exchangeStatus === `processing:${exchangeKey}` || exchangeStatus === `complete:${exchangeKey}`) {
         setStatusMessage("Yoto browser auth is already being completed for this callback.");
         return;
       }
-      window.sessionStorage.setItem(yotoPkceExchangeKey, `processing:${exchangeKey}`);
+      storePkceExchangeState(`processing:${exchangeKey}`);
       try {
         const result = await completeYotoOAuth({
           code,
           state,
           code_verifier: stored.verifier,
         });
-        window.sessionStorage.removeItem(yotoPkceStorageKey);
-        window.sessionStorage.setItem(yotoPkceExchangeKey, `complete:${exchangeKey}`);
+        clearPkceState();
+        storePkceExchangeState(`complete:${exchangeKey}`);
         window.history.replaceState({}, document.title, "/settings/yoto/callback");
         setCredential(result.credential);
         setStatusMessage("Yoto browser auth completed.");
+        if (Capacitor.isNativePlatform()) {
+          window.setTimeout(() => navigate("/settings", { replace: true }), 1200);
+        }
       } catch (callbackError) {
-        window.sessionStorage.removeItem(yotoPkceExchangeKey);
+        clearPkceExchangeState();
         setError(callbackError instanceof Error ? callbackError.message : "Failed to complete Yoto auth.");
       }
     }
 
     void finishAuth();
-  }, []);
+  }, [navigate]);
 
   return (
     <section className="panel">
@@ -6762,6 +7055,9 @@ function YotoOAuthCallbackPage() {
         <div className="settings-connection-panel">
           <p className="settings-note">Status: {credential.status}</p>
           <p className="settings-note">{credential.error_summary}</p>
+          {Capacitor.isNativePlatform() ? (
+            <p className="settings-note">Returning to Settings inside the app...</p>
+          ) : null}
           <Link className="secondary-button" to="/settings">
             Back to settings
           </Link>
@@ -7151,6 +7447,50 @@ function BuildStamp() {
   );
 }
 
+function NativeAppUrlListener() {
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) {
+      return;
+    }
+
+    let active = true;
+
+    const handleUrl = async (rawUrl: string) => {
+      const callbackUrl = normaliseYotoCallbackUrl(rawUrl);
+      if (!callbackUrl) {
+        return;
+      }
+      try {
+        await Browser.close();
+      } catch {
+        // Android custom tabs may already be closed or may not support explicit close.
+      }
+      if (active) {
+        navigate(callbackUrl, { replace: true });
+      }
+    };
+
+    const listener = CapacitorApp.addListener("appUrlOpen", (event) => {
+      void handleUrl(event.url);
+    });
+
+    void CapacitorApp.getLaunchUrl().then((launch) => {
+      if (launch?.url) {
+        void handleUrl(launch.url);
+      }
+    });
+
+    return () => {
+      active = false;
+      void listener.then((handle) => handle.remove());
+    };
+  }, [navigate]);
+
+  return null;
+}
+
 export default function App() {
   const [session, setSession] = useState<SessionResponse | null>(() => {
     const stored = window.localStorage.getItem(sessionStorageKey);
@@ -7196,6 +7536,7 @@ export default function App() {
       ) : null}
 
       <main>
+        <NativeAppUrlListener />
         <Routes>
           <Route
             path="/"

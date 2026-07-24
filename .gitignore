@@ -27,6 +27,7 @@ coverage/
 media/
 local-media/
 private-docs/
+private-tools/
 !.gitkeep
 !scripts/media/
 !scripts/media/*.sh

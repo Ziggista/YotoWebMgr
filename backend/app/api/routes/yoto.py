@@ -12,11 +12,11 @@ from urllib.parse import urlencode, urljoin
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import APIRouter, Body, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.db.session import get_db_session
+from app.db.session import SessionLocal, get_db_session
 from app.integrations.yoto.playlist import build_playlist_preview
 from app.models import (
     Job,
@@ -40,9 +40,12 @@ from app.services.yoto_tokens import (
 from app.schemas.foundation import (
     CompleteYotoOAuthRequest,
     CompleteYotoOAuthResponse,
+    BulkCreateLiveYotoRequest,
     CreateLiveYotoPlaylistRequest,
     CreateLiveYotoPlaylistResponse,
+    DeleteYotoRemoteContentResponse,
     JobResponse,
+    QueueBulkYotoCreateResponse,
     QueueYotoPlaylistResponse,
     StartYotoOAuthRequest,
     StartYotoOAuthResponse,
@@ -77,6 +80,39 @@ def _latest_credential(db: Session) -> YotoCredentialState | None:
             YotoCredentialState.id.desc(),
         )
     )
+
+
+def _latest_draft_for_item(db: Session, item_id: int) -> YotoPlaylistDraft | None:
+    return db.scalar(
+        select(YotoPlaylistDraft)
+        .where(YotoPlaylistDraft.library_item_id == item_id)
+        .order_by(YotoPlaylistDraft.id.desc())
+        .limit(1)
+    )
+
+
+def _update_job_progress(
+    db: Session,
+    job_id: int,
+    *,
+    status_text: str,
+    progress_percent: int,
+    progress_message: str,
+    error_summary: str | None = None,
+) -> None:
+    job = db.get(Job, job_id)
+    if job is None:
+        return
+    job.status = status_text
+    job.progress_percent = progress_percent
+    job.progress_message = progress_message
+    job.error_summary = error_summary
+    if status_text == "running" and job.started_at is None:
+        job.started_at = datetime.now(timezone.utc)
+    if status_text in {"succeeded", "failed"}:
+        job.finished_at = datetime.now(timezone.utc)
+    db.add(job)
+    db.commit()
 
 
 def _credential_response(db: Session, credential: YotoCredentialState | None) -> YotoCredentialStatusResponse:
@@ -1580,6 +1616,60 @@ async def list_remote_yoto_content(
     )
 
 
+@router.delete("/remote-content/{card_id}", response_model=DeleteYotoRemoteContentResponse)
+async def delete_remote_yoto_content(
+    card_id: str,
+    db: Annotated[Session, Depends(get_db_session)] = None,
+) -> DeleteYotoRemoteContentResponse:
+    credential = _latest_credential(db)
+    if credential is None or not credential.token_storage_ref:
+        raise HTTPException(status_code=409, detail="Connect a Yoto account before deleting remote Yoto content.")
+
+    stored_tokens, token_refreshed = await _load_live_tokens(db=db, credential=credential)
+    relative_url = f"/content/{card_id}"
+    http_status, payload, _stored_tokens, request_refreshed = await _call_authenticated_yoto_api(
+        db=db,
+        credential=credential,
+        stored_tokens=stored_tokens,
+        method="DELETE",
+        relative_url=relative_url,
+    )
+    token_refreshed = token_refreshed or request_refreshed
+
+    if not (200 <= http_status < 300):
+        credential.status = "connected_error"
+        credential.error_summary = f"Remote Yoto delete failed against {relative_url} with HTTP {http_status}."
+        db.add(credential)
+        db.commit()
+        raise HTTPException(
+            status_code=http_status or 502,
+            detail=_response_excerpt(payload) or f"Failed to delete remote Yoto content {card_id}.",
+        )
+
+    delete_status = "ok"
+    if isinstance(payload, dict):
+        payload_status = _safe_string(payload.get("status"))
+        if payload_status:
+            delete_status = payload_status
+
+    credential.status = "connected_tested"
+    credential.error_summary = f"Deleted remote Yoto MYO card {card_id} with HTTP {http_status}."
+    db.add(credential)
+    db.commit()
+    db.refresh(credential)
+
+    return DeleteYotoRemoteContentResponse(
+        credential=_credential_response(db, credential),
+        card_id=card_id,
+        status=delete_status,
+        http_status=http_status,
+        token_refreshed=token_refreshed,
+        response_excerpt=_response_excerpt(payload),
+        error_detail=None,
+        live_api_call=True,
+    )
+
+
 @router.get("/config", response_model=YotoConfigResponse)
 async def get_yoto_config(db: Annotated[Session, Depends(get_db_session)]) -> YotoConfigResponse:
     return YotoConfigResponse(
@@ -1682,8 +1772,33 @@ async def create_live_yoto_playlist(
     if credential is None or not credential.token_storage_ref:
         raise HTTPException(status_code=409, detail="Connect a Yoto account before creating a live playlist.")
 
-    stored_tokens, token_refreshed = await _load_live_tokens(db=db, credential=credential)
     request = payload or CreateLiveYotoPlaylistRequest()
+    if draft.status == "remote_create_in_progress":
+        raise HTTPException(
+            status_code=409,
+            detail="A live Yoto create is already in progress for this playlist draft.",
+        )
+    if (
+        not request.force
+        and (
+            draft.remote_playlist_id
+            or draft.remote_playlist_uri
+            or draft.status in {"remote_created", "remote_linked"}
+        )
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="This playlist draft already has remote Yoto content. Use force=true to create another remote copy.",
+        )
+
+    stored_tokens, token_refreshed = await _load_live_tokens(db=db, credential=credential)
+    previous_status = draft.status
+    draft.status = "remote_create_in_progress"
+    draft.last_error = None
+    db.add(draft)
+    db.commit()
+    db.refresh(draft)
+
     request_payload = request.request_payload
     if request_payload is None:
         request_payload, warnings, _can_create_live, stored_tokens, build_refreshed = await _build_live_payload_from_draft(
@@ -1694,12 +1809,20 @@ async def create_live_yoto_playlist(
         )
         token_refreshed = token_refreshed or build_refreshed
         if request_payload is None:
+            draft.status = previous_status
+            draft.last_error = "Draft is not ready for live Yoto playlist creation."
+            db.add(draft)
+            db.commit()
             raise HTTPException(
                 status_code=422,
                 detail=" ".join(warnings) if warnings else "This draft is not ready for live Yoto playlist creation.",
             )
 
     if not isinstance(request_payload, dict):
+        draft.status = previous_status
+        draft.last_error = "The live Yoto payload was not a JSON object."
+        db.add(draft)
+        db.commit()
         raise HTTPException(status_code=422, detail="The live Yoto payload must be a JSON object.")
 
     http_status, response_payload, stored_tokens, create_refreshed = await _call_authenticated_yoto_api(
@@ -1714,6 +1837,9 @@ async def create_live_yoto_playlist(
     if not (200 <= http_status < 300):
         credential.status = "connected_error"
         credential.error_summary = f"Live Yoto playlist creation failed against /content with HTTP {http_status}."
+        draft.status = previous_status
+        draft.last_error = _response_excerpt(response_payload) or "Yoto playlist creation failed."
+        db.add(draft)
         db.add(credential)
         db.commit()
         raise HTTPException(
@@ -1906,6 +2032,106 @@ async def list_yoto_playlists(
     return [_draft_response(draft) for draft in drafts]
 
 
+async def _run_bulk_create_live_yoto_job(
+    job_id: int,
+    item_ids: list[int],
+    request: CreateLiveYotoPlaylistRequest,
+) -> None:
+    processed_count = 0
+    failed_items: list[str] = []
+    total_items = len(item_ids)
+
+    with SessionLocal() as db:
+        _update_job_progress(
+            db,
+            job_id,
+            status_text="running",
+            progress_percent=5,
+            progress_message=f"Starting bulk Yoto create for {total_items} item(s)",
+        )
+
+    for index, item_id in enumerate(item_ids, start=1):
+        with SessionLocal() as db:
+            item = db.get(LibraryItem, item_id)
+            if item is None:
+                failed_items.append(f"item {item_id}: missing library item")
+                _update_job_progress(
+                    db,
+                    job_id,
+                    status_text="running",
+                    progress_percent=max(5, round(index / total_items * 100)),
+                    progress_message=f"Skipped missing library item {item_id}",
+                )
+                continue
+
+            draft = _latest_draft_for_item(db, item_id)
+            if draft is None:
+                try:
+                    queued = await queue_yoto_playlist(item_id=item_id, db=db)
+                    draft = db.get(YotoPlaylistDraft, queued.playlist.id)
+                except HTTPException as error:
+                    detail = error.detail if isinstance(error.detail, str) else json.dumps(error.detail)
+                    failed_items.append(f"{item.title}: {detail}")
+                    _update_job_progress(
+                        db,
+                        job_id,
+                        status_text="running",
+                        progress_percent=max(5, round(index / total_items * 100)),
+                        progress_message=f"Failed queueing {item.title}",
+                        error_summary=detail[:240],
+                    )
+                    continue
+
+            try:
+                await create_live_yoto_playlist(
+                    playlist_id=draft.id,
+                    db=db,
+                    payload=request,
+                )
+                processed_count += 1
+                _update_job_progress(
+                    db,
+                    job_id,
+                    status_text="running",
+                    progress_percent=max(5, round(index / total_items * 100)),
+                    progress_message=f"Created Yoto cloud content for {item.title} ({index}/{total_items})",
+                )
+            except HTTPException as error:
+                detail = error.detail if isinstance(error.detail, str) else json.dumps(error.detail)
+                failed_items.append(f"{item.title}: {detail}")
+                _update_job_progress(
+                    db,
+                    job_id,
+                    status_text="running",
+                    progress_percent=max(5, round(index / total_items * 100)),
+                    progress_message=f"Failed creating Yoto cloud content for {item.title}",
+                    error_summary=detail[:240],
+                )
+
+    with SessionLocal() as db:
+        if failed_items and processed_count == 0:
+            _update_job_progress(
+                db,
+                job_id,
+                status_text="failed",
+                progress_percent=100,
+                progress_message="Bulk Yoto create failed",
+                error_summary="; ".join(failed_items)[:240],
+            )
+        else:
+            summary = f"Created {processed_count} of {total_items} item(s) in Yoto cloud"
+            if failed_items:
+                summary = f"{summary}; {len(failed_items)} failed"
+            _update_job_progress(
+                db,
+                job_id,
+                status_text="succeeded",
+                progress_percent=100,
+                progress_message=summary,
+                error_summary="; ".join(failed_items)[:240] if failed_items else None,
+            )
+
+
 @router.post("/library/{item_id}/playlists", response_model=QueueYotoPlaylistResponse, status_code=202)
 async def queue_yoto_playlist(
     item_id: int,
@@ -1968,5 +2194,58 @@ async def queue_yoto_playlist(
     return QueueYotoPlaylistResponse(
         playlist=_draft_response(draft),
         job=JobResponse.model_validate(job, from_attributes=True),
+        live_api_call=False,
+    )
+
+
+@router.post("/library/bulk-create-live", response_model=QueueBulkYotoCreateResponse, status_code=202)
+async def queue_bulk_create_live_yoto(
+    payload: BulkCreateLiveYotoRequest,
+    background_tasks: BackgroundTasks,
+    db: Annotated[Session, Depends(get_db_session)],
+) -> QueueBulkYotoCreateResponse:
+    unique_item_ids: list[int] = []
+    seen_item_ids: set[int] = set()
+    skipped_item_ids: list[int] = []
+
+    for item_id in payload.library_item_ids:
+        if item_id in seen_item_ids:
+            skipped_item_ids.append(item_id)
+            continue
+        seen_item_ids.add(item_id)
+        item = db.get(LibraryItem, item_id)
+        if item is None:
+            skipped_item_ids.append(item_id)
+            continue
+        unique_item_ids.append(item_id)
+
+    if not unique_item_ids:
+        raise HTTPException(status_code=422, detail="No valid library items were supplied for bulk Yoto create.")
+
+    job = Job(
+        type="bulk_create_live_yoto",
+        status="queued",
+        progress_percent=0,
+        progress_message=f"Queued bulk Yoto create for {len(unique_item_ids)} item(s)",
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    background_tasks.add_task(
+        _run_bulk_create_live_yoto_job,
+        job.id,
+        unique_item_ids,
+        CreateLiveYotoPlaylistRequest(
+            request_payload=None,
+            mark_linked_cards_ready=payload.mark_linked_cards_ready,
+            force=payload.force,
+        ),
+    )
+
+    return QueueBulkYotoCreateResponse(
+        job=JobResponse.model_validate(job, from_attributes=True),
+        queued_item_ids=unique_item_ids,
+        skipped_item_ids=skipped_item_ids,
         live_api_call=False,
     )

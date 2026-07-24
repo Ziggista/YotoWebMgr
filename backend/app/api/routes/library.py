@@ -45,6 +45,7 @@ from app.schemas.foundation import (
     LibraryItemDetailResponse,
     LibraryItemCreate,
     LibraryItemResponse,
+    LibraryItemYotoSummary,
     LibraryItemSettingsUpdate,
     LinkCardRequest,
     LinkCardResponse,
@@ -149,6 +150,12 @@ def _tag_responses_for_entity(db: Session, entity_type: str, entity_id: int) -> 
 
 
 def _build_library_item_response(db: Session, item: LibraryItem) -> LibraryItemResponse:
+    latest_yoto_draft = db.scalar(
+        select(YotoPlaylistDraft)
+        .where(YotoPlaylistDraft.library_item_id == item.id)
+        .order_by(YotoPlaylistDraft.id.desc())
+        .limit(1)
+    )
     return LibraryItemResponse(
         id=item.id,
         title=item.title,
@@ -164,6 +171,17 @@ def _build_library_item_response(db: Session, item: LibraryItem) -> LibraryItemR
         created_at=item.created_at,
         media_url=_media_url_for_item(db, item),
         stream_url=_stream_url_for_item(db, item),
+        yoto=LibraryItemYotoSummary(
+            has_playlist_draft=latest_yoto_draft is not None,
+            has_remote_playlist=bool(
+                latest_yoto_draft
+                and (latest_yoto_draft.remote_playlist_uri or latest_yoto_draft.remote_playlist_id)
+            ),
+            latest_playlist_id=latest_yoto_draft.id if latest_yoto_draft else None,
+            latest_playlist_status=latest_yoto_draft.status if latest_yoto_draft else None,
+            remote_playlist_id=latest_yoto_draft.remote_playlist_id if latest_yoto_draft else None,
+            remote_playlist_uri=latest_yoto_draft.remote_playlist_uri if latest_yoto_draft else None,
+        ),
         tags=_tag_responses_for_entity(db, "library_item", item.id),
     )
 

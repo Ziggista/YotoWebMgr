@@ -41,6 +41,9 @@ Capacitor Android wrapper using the same overall shape as Daymark.
 
 - Native NFC read/write works through the Capacitor plugin, but Android device permission and
   launch-via-NFC behaviour can still vary by handset.
+- Native Yoto OAuth should use the custom URI callback
+  `com.yoto.webmanager://settings/yoto/callback` so Android can hand the auth result back into the
+  app after the external browser completes sign-in.
 - Yoto OAuth from the remote Tailscale HTTP host uses a PKCE hashing fallback because some
   browsers do not expose `SubtleCrypto` on that non-HTTPS origin.
 - The older backend `upload_yoto_asset` worker job is still a placeholder; the newer Yoto draft

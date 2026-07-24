@@ -69,7 +69,17 @@ export interface LibraryItem {
   created_at: string;
   media_url: string | null;
   stream_url: string | null;
+  yoto: LibraryItemYotoSummary;
   tags: Tag[];
+}
+
+export interface LibraryItemYotoSummary {
+  has_playlist_draft: boolean;
+  has_remote_playlist: boolean;
+  latest_playlist_id: number | null;
+  latest_playlist_status: string | null;
+  remote_playlist_id: string | null;
+  remote_playlist_uri: string | null;
 }
 
 export interface Tag {
@@ -459,6 +469,13 @@ export interface CreateLiveYotoPlaylistResponse {
   live_api_call: boolean;
 }
 
+export interface QueueBulkYotoCreateResponse {
+  job: Job;
+  queued_item_ids: number[];
+  skipped_item_ids: number[];
+  live_api_call: boolean;
+}
+
 export interface YotoCredentialStatus {
   id: number | null;
   account_label: string;
@@ -553,6 +570,17 @@ export interface YotoRemoteCard {
 export interface YotoRemoteLibraryResponse {
   credential: YotoCredentialStatus;
   cards: YotoRemoteCard[];
+  http_status: number | null;
+  token_refreshed: boolean;
+  response_excerpt: string | null;
+  error_detail: string | null;
+  live_api_call: boolean;
+}
+
+export interface DeleteYotoRemoteContentResponse {
+  credential: YotoCredentialStatus;
+  card_id: string;
+  status: string;
   http_status: number | null;
   token_refreshed: boolean;
   response_excerpt: string | null;
@@ -1028,6 +1056,7 @@ export async function createLiveYotoPlaylist(
   payload?: {
     request_payload?: Record<string, unknown> | null;
     mark_linked_cards_ready?: boolean;
+    force?: boolean;
   },
 ): Promise<CreateLiveYotoPlaylistResponse> {
   const response = await apiFetch(`/api/v1/yoto/playlists/${playlistId}/create-live`, {
@@ -1039,6 +1068,22 @@ export async function createLiveYotoPlaylist(
     throw new Error(await errorMessage(response, "Failed to create live Yoto content."));
   }
   return response.json() as Promise<CreateLiveYotoPlaylistResponse>;
+}
+
+export async function queueBulkCreateLiveYoto(payload: {
+  library_item_ids: number[];
+  mark_linked_cards_ready?: boolean;
+  force?: boolean;
+}): Promise<QueueBulkYotoCreateResponse> {
+  const response = await apiFetch("/api/v1/yoto/library/bulk-create-live", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to queue bulk Yoto create."));
+  }
+  return response.json() as Promise<QueueBulkYotoCreateResponse>;
 }
 
 export async function fetchYotoCredentialStatus(): Promise<YotoCredentialStatus> {
@@ -1106,6 +1151,16 @@ export async function fetchYotoRemoteContent(showDeleted = false): Promise<YotoR
     throw new Error(await errorMessage(response, "Failed to load remote Yoto content."));
   }
   return response.json() as Promise<YotoRemoteLibraryResponse>;
+}
+
+export async function deleteYotoRemoteContent(cardId: string): Promise<DeleteYotoRemoteContentResponse> {
+  const response = await apiFetch(`/api/v1/yoto/remote-content/${encodeURIComponent(cardId)}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, `Failed to delete remote Yoto content ${cardId}.`));
+  }
+  return response.json() as Promise<DeleteYotoRemoteContentResponse>;
 }
 
 export async function fetchBackendBuildInfo(): Promise<BuildInfo> {

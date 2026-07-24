@@ -1,5 +1,6 @@
 from collections.abc import AsyncGenerator, Generator
 import base64
+from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -270,6 +271,41 @@ async def test_upload_import_stages_file(
     assert Path(payload["source_path"]).exists()
     assert library_response.status_code == 200
     assert library_response.json()[0]["media_url"] == "/api/v1/library/1/media"
+
+
+async def test_library_list_exposes_yoto_summary(
+    api_client: AsyncClient,
+    db_session: Session,
+) -> None:
+    library_item = LibraryItem(
+        title="Queued for Yoto",
+        content_type="Audiobook",
+        status="inspected",
+        readiness_status="needs_card_plan",
+    )
+    db_session.add(library_item)
+    db_session.flush()
+    db_session.add(
+        YotoPlaylistDraft(
+            library_item_id=library_item.id,
+            title="Queued for Yoto",
+            status="remote_created",
+            payload_json=json.dumps({"title": "Queued for Yoto"}),
+            remote_playlist_id="remote-123",
+            remote_playlist_uri="yoto:playlist:remote-123",
+        )
+    )
+    db_session.commit()
+
+    async with api_client as client:
+      response = await client.get("/api/v1/library")
+
+    assert response.status_code == 200
+    payload = response.json()[0]["yoto"]
+    assert payload["has_playlist_draft"] is True
+    assert payload["has_remote_playlist"] is True
+    assert payload["remote_playlist_id"] == "remote-123"
+    assert payload["remote_playlist_uri"] == "yoto:playlist:remote-123"
 
 
 async def test_tags_can_be_created_assigned_and_used_for_library_filtering(
@@ -2011,6 +2047,105 @@ async def test_create_live_yoto_playlist_updates_draft_and_linked_cards(
     assert event is not None
 
 
+async def test_create_live_yoto_playlist_rejects_duplicate_remote_create(
+    api_client: AsyncClient,
+    db_session: Session,
+) -> None:
+    item = LibraryItem(
+        title="Already Live Draft",
+        content_type="Custom Playlist",
+        status="yoto_remote_created",
+        readiness_status="yoto_remote_created",
+    )
+    draft = YotoPlaylistDraft(
+        library_item_id=1,
+        title="Already Live Draft",
+        status="remote_created",
+        payload_json=json.dumps({"title": "Already Live Draft", "chapters": []}),
+        remote_playlist_id="dup-123",
+    )
+    credential = YotoCredentialState(
+        account_label="Household Yoto",
+        status="connected_tested",
+        token_storage_ref="k8s-secret:test-namespace:test-secret:yoto-credential-duplicate.json",
+        scopes="openid offline_access user:content:manage",
+        expires_at=datetime.now(timezone.utc).replace(year=2027),
+    )
+    db_session.add_all([item, credential])
+    db_session.flush()
+    draft.library_item_id = item.id
+    db_session.add(draft)
+    db_session.commit()
+
+    async with api_client as client:
+        response = await client.post(f"/api/v1/yoto/playlists/{draft.id}/create-live", json={})
+
+    assert response.status_code == 409
+    assert "already has remote Yoto content" in response.text
+
+
+async def test_bulk_create_live_yoto_queues_backend_job(
+    api_client: AsyncClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    item = LibraryItem(
+        title="Bulk Live Draft",
+        content_type="Custom Playlist",
+        status="awaiting_remote_mapping",
+        readiness_status="awaiting_remote_mapping",
+    )
+    draft = YotoPlaylistDraft(
+        library_item_id=1,
+        title="Bulk Live Draft",
+        status="awaiting_remote_mapping",
+        payload_json=json.dumps({"title": "Bulk Live Draft", "chapters": []}),
+    )
+    db_session.add(item)
+    db_session.flush()
+    draft.library_item_id = item.id
+    db_session.add(draft)
+    db_session.commit()
+
+    async def fake_create_live_yoto_playlist(
+        *,
+        playlist_id: int,
+        db: Session,
+        payload: object | None = None,
+    ) -> object:
+        refreshed_draft = db.get(YotoPlaylistDraft, playlist_id)
+        assert refreshed_draft is not None
+        refreshed_draft.status = "remote_created"
+        refreshed_draft.remote_playlist_id = "bulk-123"
+        db.add(refreshed_draft)
+        db.commit()
+        return object()
+
+    monkeypatch.setattr(yoto_routes, "create_live_yoto_playlist", fake_create_live_yoto_playlist)
+
+    @contextmanager
+    def fake_session_local() -> Generator[Session, None, None]:
+        yield db_session
+
+    monkeypatch.setattr(yoto_routes, "SessionLocal", fake_session_local)
+
+    async with api_client as client:
+        response = await client.post(
+            "/api/v1/yoto/library/bulk-create-live",
+            json={"library_item_ids": [item.id], "mark_linked_cards_ready": False},
+        )
+        jobs_response = await client.get("/api/v1/jobs")
+
+    assert response.status_code == 202
+    payload = response.json()
+    assert payload["queued_item_ids"] == [item.id]
+    assert payload["job"]["type"] == "bulk_create_live_yoto"
+    assert jobs_response.status_code == 200
+    batch_job = jobs_response.json()[0]
+    assert batch_job["type"] == "bulk_create_live_yoto"
+    assert batch_job["status"] == "succeeded"
+
+
 async def test_create_live_yoto_playlist_uploads_local_audio_assets(
     api_client: AsyncClient,
     db_session: Session,
@@ -2302,3 +2437,57 @@ async def test_list_remote_yoto_content_returns_linkable_cards(
     assert payload["cards"][0]["title"] == "Bedtime Mix"
     assert payload["cards"][0]["author"] == "Ziggi"
     assert payload["cards"][0]["duration_seconds"] == 3600
+
+
+@pytest.mark.asyncio
+async def test_delete_remote_yoto_content_calls_yoto_delete(
+    api_client: AsyncClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credential = YotoCredentialState(
+        account_label="Household Yoto",
+        status="connected_tested",
+        token_storage_ref="k8s-secret:test-namespace:test-secret:yoto-credential-remote-library.json",
+        scopes="openid offline_access user:content:manage",
+        expires_at=datetime.now(timezone.utc).replace(year=2027),
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    async def fake_load_tokens_from_secret(_: str) -> StoredYotoTokens:
+        return StoredYotoTokens(
+            access_token="test-access-token",
+            refresh_token="test-refresh-token",
+            token_type="Bearer",
+            scope="openid offline_access user:content:manage",
+            expires_at=datetime.now(timezone.utc).replace(year=2027),
+        )
+
+    async def fake_call_yoto_api(
+        *,
+        method: str,
+        api_base_url: str,
+        relative_url: str,
+        access_token: str,
+        json_body: object | None = None,
+    ) -> tuple[int, object]:
+        assert method == "DELETE"
+        assert api_base_url == "https://api.yotoplay.com"
+        assert relative_url == "/content/31yYU"
+        assert access_token == "test-access-token"
+        assert json_body is None
+        return 200, {"status": "ok"}
+
+    monkeypatch.setattr(yoto_routes, "load_tokens_from_secret", fake_load_tokens_from_secret)
+    monkeypatch.setattr(yoto_routes, "_call_yoto_api", fake_call_yoto_api)
+
+    async with api_client as client:
+        response = await client.delete("/api/v1/yoto/remote-content/31yYU")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["card_id"] == "31yYU"
+    assert payload["status"] == "ok"
+    assert payload["http_status"] == 200
+    assert payload["credential"]["status"] == "connected_tested"

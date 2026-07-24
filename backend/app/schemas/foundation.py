@@ -71,6 +71,15 @@ class TagAssignmentUpdate(BaseModel):
     tag_ids: list[int] = []
 
 
+class LibraryItemYotoSummary(BaseModel):
+    has_playlist_draft: bool = False
+    has_remote_playlist: bool = False
+    latest_playlist_id: int | None = None
+    latest_playlist_status: str | None = None
+    remote_playlist_id: str | None = None
+    remote_playlist_uri: str | None = None
+
+
 class LibraryItemResponse(BaseModel):
     id: int
     title: str
@@ -86,6 +95,7 @@ class LibraryItemResponse(BaseModel):
     created_at: datetime
     media_url: str | None = None
     stream_url: str | None = None
+    yoto: LibraryItemYotoSummary = LibraryItemYotoSummary()
     tags: list[TagResponse] = []
 
 
@@ -756,6 +766,17 @@ class YotoRemoteLibraryResponse(BaseModel):
     live_api_call: bool = True
 
 
+class DeleteYotoRemoteContentResponse(BaseModel):
+    credential: YotoCredentialStatusResponse
+    card_id: str
+    status: str
+    http_status: int | None = None
+    token_refreshed: bool = False
+    response_excerpt: str | None = None
+    error_detail: str | None = None
+    live_api_call: bool = True
+
+
 class BuildInfoResponse(BaseModel):
     service: str
     build_sha: str
@@ -805,6 +826,13 @@ class YotoPlaylistRemotePayloadResponse(BaseModel):
 class CreateLiveYotoPlaylistRequest(BaseModel):
     request_payload: dict[str, object] | None = None
     mark_linked_cards_ready: bool = True
+    force: bool = False
+
+
+class BulkCreateLiveYotoRequest(BaseModel):
+    library_item_ids: list[int] = Field(min_length=1)
+    mark_linked_cards_ready: bool = False
+    force: bool = False
 
 
 class CreateLiveYotoPlaylistResponse(BaseModel):
@@ -828,4 +856,11 @@ class UpdateYotoPlaylistRemoteLinkRequest(BaseModel):
 class QueueYotoPlaylistResponse(BaseModel):
     playlist: YotoPlaylistDraftResponse
     job: JobResponse
+    live_api_call: bool = False
+
+
+class QueueBulkYotoCreateResponse(BaseModel):
+    job: JobResponse
+    queued_item_ids: list[int]
+    skipped_item_ids: list[int] = []
     live_api_call: bool = False

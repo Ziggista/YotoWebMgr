@@ -110,6 +110,13 @@ For local browser testing, set the redirect URI to the frontend callback route, 
 `http://127.0.0.1:5175/settings/yoto/callback`, and register the same URI with the Yoto developer
 application.
 
+For the Capacitor Android app, register the native callback URI instead:
+
+`com.yoto.webmanager://settings/yoto/callback`
+
+That URI is handled by the Android wrapper and routed back into the Settings callback screen after
+the external browser finishes Yoto sign-in.
+
 For remote Tailscale-host testing, the current deployed redirect URI is:
 
 `http://ziggi-pc-1.tailaf3d4b.ts.net:5175/settings/yoto/callback`
