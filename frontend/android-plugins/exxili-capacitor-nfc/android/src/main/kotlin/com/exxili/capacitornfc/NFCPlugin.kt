@@ -38,6 +38,7 @@ import java.io.IOException
 import java.io.UnsupportedEncodingException
 import java.nio.charset.Charset
 import java.util.Base64
+import kotlin.math.min
 
 @CapacitorPlugin(name = "NFC")
 class NFCPlugin : Plugin() {
@@ -235,43 +236,55 @@ class NFCPlugin : Plugin() {
                 val tag = intent.getParcelableExtra(NfcAdapter.EXTRA_TAG, Tag::class.java)
                 var ndef = Ndef.get(tag)
                 val tagSummary = describeTag(tag)
+                val messageSize = ndefMessage.toByteArray().size
 
                 if (ndef == null) {
                     val formatable = NdefFormatable.get(tag)
                     if (formatable != null) {
+                        var primaryFormatError: Throwable? = null
                         try {
-                            Log.d("NFC", "Formatting blank NFC tag before write. ${tagSummary}")
+                            Log.d("NFC", "Formatting blank NFC tag before write. ${tagSummary}; messageSize=${messageSize}")
                             formatable.connect()
                             formatable.format(ndefMessage)
                             Log.d("NFC", "NDEF message successfully formatted and written to blank tag.")
                             notifyListeners("nfcWriteSuccess", JSObject().put("success", true))
                             return
                         } catch (e: IOException) {
-                            Log.e("NFC", "Error formatting NDEF-formatable tag. ${tagSummary}", e)
-                            notifyListeners(
-                                "nfcError",
-                                JSObject().put(
-                                    "error",
-                                    "Failed to format and write blank NFC tag (${e.javaClass.simpleName}): ${e.message ?: "no message"}. ${tagSummary}"
-                                )
-                            )
-                            return
+                            primaryFormatError = e
+                            Log.e("NFC", "Error formatting NDEF-formatable tag. ${tagSummary}; messageSize=${messageSize}", e)
                         } catch (e: Exception) {
-                            Log.e("NFC", "Error during NDEF formatting. ${tagSummary}", e)
-                            notifyListeners(
-                                "nfcError",
-                                JSObject().put(
-                                    "error",
-                                    "Failed to format blank NFC tag (${e.javaClass.simpleName}): ${e.message ?: "no message"}. ${tagSummary}"
-                                )
-                            )
-                            return
+                            primaryFormatError = e
+                            Log.e("NFC", "Error during NDEF formatting. ${tagSummary}; messageSize=${messageSize}", e)
                         } finally {
                             try {
                                 formatable.close()
                             } catch (e: IOException) {
                                 Log.w("NFC", "Error closing NdefFormatable connection: ${e.message}")
                             }
+                        }
+
+                        try {
+                            Log.w("NFC", "Falling back to manual Type 2 formatting. ${tagSummary}; messageSize=${messageSize}")
+                            writeType2TagFallback(tag, ndefMessage)
+                            Log.d("NFC", "Manual Type 2 formatting fallback succeeded.")
+                            notifyListeners("nfcWriteSuccess", JSObject().put("success", true).put("fallback", "type2_manual"))
+                            return
+                        } catch (fallbackError: Exception) {
+                            Log.e("NFC", "Manual Type 2 formatting fallback failed. ${tagSummary}; messageSize=${messageSize}", fallbackError)
+                            val primarySummary =
+                                if (primaryFormatError == null) {
+                                    "primary=none"
+                                } else {
+                                    "primary=${primaryFormatError.javaClass.simpleName}:${primaryFormatError.message ?: "no message"}"
+                                }
+                            notifyListeners(
+                                "nfcError",
+                                JSObject().put(
+                                    "error",
+                                    "Failed to format and write blank NFC tag (${fallbackError.javaClass.simpleName}): ${fallbackError.message ?: "no message"}. ${primarySummary}; ${tagSummary}; messageSize=${messageSize}"
+                                )
+                            )
+                            return
                         }
                     } else {
                         notifyListeners(
@@ -286,7 +299,7 @@ class NFCPlugin : Plugin() {
                 }
 
                 ndef.use { connectedNdef ->
-                    Log.d("NFC", "Writing NDEF message to existing formatted tag. ${tagSummary}")
+                    Log.d("NFC", "Writing NDEF message to existing formatted tag. ${tagSummary}; messageSize=${messageSize}")
                     connectedNdef.connect()
                     if (!connectedNdef.isWritable) {
                         notifyListeners(
@@ -446,6 +459,122 @@ class NFCPlugin : Plugin() {
         }
         
         return tagInfo
+    }
+
+    private fun writeType2TagFallback(tag: Tag?, ndefMessage: NdefMessage) {
+        if (tag == null) {
+            throw IOException("Tag was null during Type 2 fallback")
+        }
+
+        val mifare = MifareUltralight.get(tag)
+            ?: throw IOException("MifareUltralight technology not available for Type 2 fallback")
+        val nfca = NfcA.get(tag)
+            ?: throw IOException("NfcA technology not available for Type 2 fallback")
+
+        val tagType = mifare.type
+        val sizeField = when (tagType) {
+            MifareUltralight.TYPE_ULTRALIGHT_C -> 0x12
+            else -> 0x06
+        }
+        val capacityBytes = sizeField * 8
+        val messageBytes = ndefMessage.toByteArray()
+        val tlvBytes = buildType2NdefTlv(messageBytes)
+        if (tlvBytes.size > capacityBytes) {
+            throw IOException("NDEF TLV is ${tlvBytes.size} bytes but blank tag capacity is ${capacityBytes} bytes")
+        }
+
+        Log.d(
+            "NFC",
+            "Type 2 fallback starting. uid=${byteArrayToHexString(tag.id)}; mifareType=${describeUltralightType(tagType)}; " +
+                "capacityBytes=${capacityBytes}; ndefBytes=${messageBytes.size}; tlvBytes=${tlvBytes.size}"
+        )
+
+        nfca.connect()
+        try {
+            writeType2Page(nfca, 3, byteArrayOf(0xE1.toByte(), 0x10, sizeField.toByte(), 0x00))
+
+            // Initialize an empty NDEF TLV first. Some devices/tags reject a direct full-message format.
+            writeType2Page(nfca, 4, byteArrayOf(0x03, 0x00, 0xFE.toByte(), 0x00))
+
+            var page = 4
+            var offset = 0
+            while (offset < tlvBytes.size) {
+                val chunk = ByteArray(4)
+                val length = min(4, tlvBytes.size - offset)
+                System.arraycopy(tlvBytes, offset, chunk, 0, length)
+                writeType2Page(nfca, page, chunk)
+                page += 1
+                offset += 4
+            }
+
+            Log.d("NFC", "Type 2 fallback page writes completed. ${readType2Preview(nfca)}")
+        } finally {
+            try {
+                nfca.close()
+            } catch (_: Exception) {}
+        }
+
+        // The Tag object reflects technologies at discovery time. After manual Type 2 initialization
+        // a re-scan may be required before Android exposes Ndef on a freshly formatted blank tag.
+        Log.d(
+            "NFC",
+            "Type 2 fallback completed without immediate NDEF rebind. A fresh scan should now expose the tag as NDEF."
+        )
+    }
+
+    private fun buildType2NdefTlv(messageBytes: ByteArray): ByteArray {
+        val tlv = ArrayList<Byte>()
+        tlv.add(0x03)
+        if (messageBytes.size < 0xFF) {
+            tlv.add(messageBytes.size.toByte())
+        } else {
+            tlv.add(0xFF.toByte())
+            tlv.add(((messageBytes.size shr 8) and 0xFF).toByte())
+            tlv.add((messageBytes.size and 0xFF).toByte())
+        }
+        for (value in messageBytes) {
+            tlv.add(value)
+        }
+        tlv.add(0xFE.toByte())
+        while (tlv.size % 4 != 0) {
+            tlv.add(0x00)
+        }
+        return tlv.toByteArray()
+    }
+
+    private fun writeType2Page(nfca: NfcA, page: Int, data: ByteArray) {
+        if (data.size != 4) {
+            throw IOException("Type 2 page writes require exactly 4 bytes, got ${data.size}")
+        }
+        Log.d("NFC", "Type 2 write page=${page} data=${byteArrayToHexString(data)}")
+        nfca.transceive(
+            byteArrayOf(
+                0xA2.toByte(),
+                (page and 0xFF).toByte(),
+                data[0],
+                data[1],
+                data[2],
+                data[3]
+            )
+        )
+    }
+
+    private fun readType2Preview(nfca: NfcA): String {
+        return try {
+            val preview = nfca.transceive(byteArrayOf(0x30, 0x03))
+            "previewPages3to6=${byteArrayToHexString(preview)}"
+        } catch (e: Exception) {
+            "previewReadFailed=${e.javaClass.simpleName}:${e.message ?: "no message"}"
+        }
+    }
+
+    private fun describeUltralightType(tagType: Int): String {
+        return when (tagType) {
+            MifareUltralight.TYPE_ULTRALIGHT -> "ultralight"
+            MifareUltralight.TYPE_ULTRALIGHT_C -> "ultralight_c"
+            MifareUltralight.TYPE_UNKNOWN -> "unknown"
+            else -> "other(${tagType})"
+        }
     }
 
     private fun describeTag(tag: Tag?): String {

@@ -637,25 +637,6 @@ function evaluateCardVerification(
     return null;
   }
 
-  const expectedHex = normaliseHexString(target.payloadHex);
-  const observedHex = normaliseHexString(observed.payloadHex);
-  if (expectedHex && observedHex) {
-    const matched = expectedHex === observedHex;
-    return {
-      matched,
-      targetLabel: target.label,
-      detail: matched
-        ? `Verification matched the written payload bytes for ${target.label}.`
-        : `Expected payload hex for ${target.label} did not match the scan result.`,
-      comparedField: "payload_hex",
-      observedPayloadText: observed.payloadText,
-      observedPayloadHex: observed.payloadHex,
-      observedProgrammableId: observed.programmableId,
-      observedSerialNumber: observed.serialNumber,
-      observedAt: new Date().toISOString(),
-    };
-  }
-
   const expectedText = normaliseTextValue(target.payloadText);
   const observedText = normaliseTextValue(observed.payloadText);
   if (expectedText && observedText) {
@@ -667,6 +648,25 @@ function evaluateCardVerification(
         ? `Verification matched the written payload text for ${target.label}.`
         : `Expected payload text for ${target.label} did not match the scan result.`,
       comparedField: "payload_text",
+      observedPayloadText: observed.payloadText,
+      observedPayloadHex: observed.payloadHex,
+      observedProgrammableId: observed.programmableId,
+      observedSerialNumber: observed.serialNumber,
+      observedAt: new Date().toISOString(),
+    };
+  }
+
+  const expectedHex = normaliseHexString(target.payloadHex);
+  const observedHex = normaliseHexString(observed.payloadHex);
+  if (expectedHex && observedHex) {
+    const matched = expectedHex === observedHex;
+    return {
+      matched,
+      targetLabel: target.label,
+      detail: matched
+        ? `Verification matched the written payload bytes for ${target.label}.`
+        : `Expected payload hex for ${target.label} did not match the scan result.`,
+      comparedField: "payload_hex",
       observedPayloadText: observed.payloadText,
       observedPayloadHex: observed.payloadHex,
       observedProgrammableId: observed.programmableId,
@@ -5459,8 +5459,12 @@ function CardsPage() {
       <section className="card-console-panel">
         <div className="section-header">
           <div>
-            <p className="eyebrow">Staged Write</p>
-            <h3>Blank-card handoff target</h3>
+            <p className="eyebrow">Step 2</p>
+            <h3>Write the staged playlist to a blank card</h3>
+            <p className="muted">
+              Press <strong>Stage for write</strong> on a Yoto upload below, then return here and tap{" "}
+              <strong>Write staged target</strong>.
+            </p>
           </div>
           <div className="button-row">
             <button
@@ -5503,9 +5507,14 @@ function CardsPage() {
             </article>
           </div>
         ) : (
-          <p className="muted">
-            Stage a source-card dump, a Create tab blank-card handoff, or the current prepared payload here before writing.
-          </p>
+          <div className="detail-note">
+            <p className="eyebrow">No staged playlist yet</p>
+            <h3>Choose a Yoto upload below first</h3>
+            <p>
+              The write button stays disabled until you press <strong>Stage for write</strong> on one of the remote Yoto
+              cards in the list below.
+            </p>
+          </div>
         )}
       </section>
       ) : null}
@@ -5547,10 +5556,10 @@ function CardsPage() {
       <section className="card-console-panel">
         <div className="section-header">
           <div>
-            <p className="eyebrow">Remote Yoto</p>
-            <h3>Existing Yoto cloud uploads</h3>
+            <p className="eyebrow">Step 1</p>
+            <h3>Choose the Yoto upload you want to put on the card</h3>
             <p className="muted">
-              Load MYO cards already in Yoto, then stage one for blank-card writing or apply it to the local card form.
+              Press <strong>Stage for write</strong> on the item you want, then use the write panel above.
             </p>
           </div>
           <div className="button-row">
