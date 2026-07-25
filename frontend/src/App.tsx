@@ -4287,6 +4287,7 @@ function TagsPage() {
 }
 
 function CardsPage() {
+  const [cardConsoleTab, setCardConsoleTab] = useState<"link_playlist" | "duplicate_card" | "debug">("link_playlist");
   const [cards, setCards] = useState<PhysicalCard[]>([]);
   const [remoteYotoCards, setRemoteYotoCards] = useState<YotoRemoteCard[]>([]);
   const [remoteYotoError, setRemoteYotoError] = useState<string | null>(null);
@@ -5189,6 +5190,30 @@ function CardsPage() {
         <span className="status-pill">{cards.length} cards</span>
       </div>
 
+      <div className="segmented-control card-console-tabs" aria-label="Card workflow tabs">
+        <button
+          className={cardConsoleTab === "link_playlist" ? "segment-active" : ""}
+          onClick={() => setCardConsoleTab("link_playlist")}
+          type="button"
+        >
+          Link playlist
+        </button>
+        <button
+          className={cardConsoleTab === "duplicate_card" ? "segment-active" : ""}
+          onClick={() => setCardConsoleTab("duplicate_card")}
+          type="button"
+        >
+          Duplicate card
+        </button>
+        <button
+          className={cardConsoleTab === "debug" ? "segment-active" : ""}
+          onClick={() => setCardConsoleTab("debug")}
+          type="button"
+        >
+          Debug
+        </button>
+      </div>
+
       <section className="card-console-panel">
         <div className="section-header">
           <div>
@@ -5246,15 +5271,16 @@ function CardsPage() {
         )}
       </section>
 
+      {cardConsoleTab !== "link_playlist" ? (
       <div className="card-console-grid">
         <article className="card-console-panel">
           <div>
-            <p className="eyebrow">Step 1</p>
-            <h3>Read or prepare a card</h3>
+            <p className="eyebrow">{cardConsoleTab === "duplicate_card" ? "Duplicate card" : "Debug capture"}</p>
+            <h3>{cardConsoleTab === "duplicate_card" ? "Read the source card" : "Read or prepare a card"}</h3>
             <p className="muted">
-              Use native NFC inside the Android app when available. Keep the manual NFC Tools path
-              visible so tags can still be captured or reprogrammed when device NFC behaves
-              differently.
+              {cardConsoleTab === "duplicate_card"
+                ? "Scan the original card, then stage or write that captured payload to a prepared blank card."
+                : "Use native NFC inside the Android app when available. Keep the manual NFC Tools path visible so tags can still be captured or reprogrammed when device NFC behaves differently."}
             </p>
           </div>
           <div className="card-console-actions">
@@ -5313,7 +5339,9 @@ function CardsPage() {
           <CardWorkflowChecklist card={draftCard} />
         </article>
       </div>
+      ) : null}
 
+      {cardConsoleTab === "link_playlist" ? (
       <section className="card-console-panel">
         <div className="section-header">
           <div>
@@ -5366,7 +5394,9 @@ function CardsPage() {
           </p>
         )}
       </section>
+      ) : null}
 
+      {cardConsoleTab !== "debug" ? (
       <section className="card-console-panel">
         <div className="section-header">
           <div>
@@ -5397,7 +5427,9 @@ function CardsPage() {
           </p>
         )}
       </section>
+      ) : null}
 
+      {cardConsoleTab === "link_playlist" ? (
       <section className="card-console-panel">
         <div className="section-header">
           <div>
@@ -5507,7 +5539,9 @@ function CardsPage() {
           </div>
         )}
       </section>
+      ) : null}
 
+      {cardConsoleTab === "debug" ? (
       <section className="card-console-panel">
         <div className="section-header">
           <div>
@@ -5543,12 +5577,14 @@ function CardsPage() {
           </div>
         )}
       </section>
+      ) : null}
 
+      {cardConsoleTab !== "link_playlist" ? (
       <section className="card-console-panel">
         <div className="section-header">
           <div>
-            <p className="eyebrow">Scan Dumps</p>
-            <h3>Recent captured tags</h3>
+            <p className="eyebrow">{cardConsoleTab === "duplicate_card" ? "Source captures" : "Scan Dumps"}</p>
+            <h3>{cardConsoleTab === "duplicate_card" ? "Recent source-card captures" : "Recent captured tags"}</h3>
           </div>
           <div className="button-row">
             <button className="secondary-button" onClick={() => void refreshScanDumps()} type="button">
@@ -5578,35 +5614,39 @@ function CardsPage() {
                     onClick={() => stageScanDump(entry)}
                     type="button"
                   >
-                    Stage source card
+                    {cardConsoleTab === "duplicate_card" ? "Stage for duplicate" : "Stage source card"}
                   </button>
-                  <button
-                    className="secondary-button"
-                    onClick={() => applyScanDumpToForm(entry)}
-                    type="button"
-                  >
-                    Apply to form
-                  </button>
-                  <button
-                    className="secondary-button"
-                    disabled={!entry.ndef_payload_text}
-                    onClick={() =>
-                      void handleCopyProgrammingValue(entry.ndef_payload_text ?? "", "captured payload text")
-                    }
-                    type="button"
-                  >
-                    Copy text
-                  </button>
-                  <button
-                    className="secondary-button"
-                    disabled={!entry.ndef_payload_hex}
-                    onClick={() =>
-                      void handleCopyProgrammingValue(entry.ndef_payload_hex ?? "", "captured payload hex")
-                    }
-                    type="button"
-                  >
-                    Copy hex
-                  </button>
+                  {cardConsoleTab === "debug" ? (
+                    <>
+                      <button
+                        className="secondary-button"
+                        onClick={() => applyScanDumpToForm(entry)}
+                        type="button"
+                      >
+                        Apply to form
+                      </button>
+                      <button
+                        className="secondary-button"
+                        disabled={!entry.ndef_payload_text}
+                        onClick={() =>
+                          void handleCopyProgrammingValue(entry.ndef_payload_text ?? "", "captured payload text")
+                        }
+                        type="button"
+                      >
+                        Copy text
+                      </button>
+                      <button
+                        className="secondary-button"
+                        disabled={!entry.ndef_payload_hex}
+                        onClick={() =>
+                          void handleCopyProgrammingValue(entry.ndef_payload_hex ?? "", "captured payload hex")
+                        }
+                        type="button"
+                      >
+                        Copy hex
+                      </button>
+                    </>
+                  ) : null}
                   <button
                     className="secondary-button"
                     disabled={!isNativeAndroidRuntime() || scanning}
@@ -5621,7 +5661,9 @@ function CardsPage() {
           </div>
         )}
       </section>
+      ) : null}
 
+      {cardConsoleTab === "duplicate_card" ? (
       <section className="card-console-panel">
         <div className="section-header">
           <div>
@@ -5673,7 +5715,9 @@ function CardsPage() {
           </p>
         )}
       </section>
+      ) : null}
 
+      {cardConsoleTab === "debug" ? (
       <form className="import-form" onSubmit={(event) => void handleSubmit(event)}>
         <div className="import-grid import-grid-wide">
           <label>
@@ -6008,8 +6052,10 @@ function CardsPage() {
           </button>
         </div>
       </form>
+      ) : null}
       {error ? <p className="auth-error">{error}</p> : null}
 
+      {cardConsoleTab === "debug" ? (
       <div className="item-list">
         {cards.length === 0 ? (
           <EmptyState message="No cards yet." />
@@ -6042,6 +6088,7 @@ function CardsPage() {
           ))
         )}
       </div>
+      ) : null}
     </section>
   );
 }
