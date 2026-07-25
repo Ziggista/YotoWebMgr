@@ -230,6 +230,8 @@ async def test_import_sources_exposes_mounted_paths(
     assert payload["filesystem_drop_path"] == import_storage_paths["drop"]
     assert payload["browser_upload_path"] == import_storage_paths["uploads"]
     assert ".m4b" in payload["allowed_extensions"]
+    assert ".mov" in payload["allowed_extensions"]
+    assert ".mkv" in payload["allowed_extensions"]
 
 
 async def test_filesystem_import_rejects_paths_outside_drop_area(
@@ -271,6 +273,28 @@ async def test_upload_import_stages_file(
     assert Path(payload["source_path"]).exists()
     assert library_response.status_code == 200
     assert library_response.json()[0]["media_url"] == "/api/v1/library/1/media"
+
+
+async def test_upload_import_stages_video_file_for_audio_stripping(
+    api_client: AsyncClient,
+) -> None:
+    async with api_client as client:
+        response = await client.post(
+            "/api/v1/imports/uploads",
+            data={
+                "title": "Uploaded Video Story",
+                "content_type": "Audiobook",
+                "requested_by_user_slug": "dale",
+            },
+            files={"media_file": ("uploaded story.mov", b"fake mov bytes", "video/quicktime")},
+        )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["source_type"] == "browser_upload"
+    assert payload["source_path"].endswith(".mov")
+    assert payload["related_job_id"] is not None
+    assert Path(payload["source_path"]).exists()
 
 
 async def test_library_list_exposes_yoto_summary(
@@ -373,6 +397,36 @@ async def test_zip_upload_extracts_album_tracks(
     assert [track["title"] for track in detail.json()["tracks"]] == ["first", "second"]
     tracks = db_session.scalars(select(PlaylistTrack).order_by(PlaylistTrack.track_number)).all()
     assert [track.track_number for track in tracks] == [1, 2]
+
+
+async def test_zip_upload_extracts_supported_video_tracks_too(
+    api_client: AsyncClient,
+    db_session: Session,
+    tmp_path: Path,
+) -> None:
+    zip_path = tmp_path / "video-album.zip"
+    with zipfile.ZipFile(zip_path, "w") as archive:
+        archive.writestr("02 second.mov", b"track two")
+        archive.writestr("01 first.mp4", b"track one")
+        archive.writestr("cover.txt", b"ignored")
+
+    async with api_client as client:
+        with zip_path.open("rb") as upload_file:
+            response = await client.post(
+                "/api/v1/imports/uploads",
+                data={"title": "ZIP Video Album", "content_type": "Story Collection"},
+                files={"media_file": ("video-album.zip", upload_file, "application/zip")},
+            )
+        detail = await client.get(f"/api/v1/library/{response.json()['related_library_item_id']}")
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["source_path"].endswith("-extracted")
+    assert payload["related_job_id"] is not None
+    assert detail.status_code == 200
+    assert [track["title"] for track in detail.json()["tracks"]] == ["first", "second"]
+    tracks = db_session.scalars(select(PlaylistTrack).order_by(PlaylistTrack.track_number)).all()
+    assert [track.source_path.rsplit(".", 1)[-1] for track in tracks] == ["mp4", "mov"]
 
 
 async def test_library_item_can_be_linked_to_card(api_client: AsyncClient) -> None:

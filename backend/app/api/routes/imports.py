@@ -16,18 +16,25 @@ from app.schemas.foundation import ImportCreate, ImportResponse, ImportReviewApp
 
 
 router = APIRouter()
-allowed_audio_extensions = [
+allowed_media_extensions = [
     ".aac",
+    ".avi",
     ".flac",
+    ".mkv",
     ".m4a",
     ".m4b",
+    ".m4v",
+    ".mov",
     ".mp3",
     ".mp4",
+    ".mpeg",
+    ".mpg",
     ".ogg",
     ".opus",
     ".wav",
+    ".webm",
 ]
-allowed_import_extensions = [*allowed_audio_extensions, ".zip"]
+allowed_import_extensions = [*allowed_media_extensions, ".zip"]
 
 
 def _normalise_filesystem_source(source_path: str | None) -> str:
@@ -84,7 +91,7 @@ def _extract_zip_upload(zip_path: Path, upload_root: Path) -> list[Path]:
             member_path = Path(member.filename)
             if member_path.is_absolute() or ".." in member_path.parts:
                 raise HTTPException(status_code=422, detail="ZIP import contains an unsafe path.")
-            if member_path.suffix.lower() not in allowed_audio_extensions:
+            if member_path.suffix.lower() not in allowed_media_extensions:
                 continue
             destination = (extract_root / member_path).resolve(strict=False)
             if extract_root.resolve(strict=False) not in destination.parents:
@@ -96,7 +103,7 @@ def _extract_zip_upload(zip_path: Path, upload_root: Path) -> list[Path]:
             audio_files.append(destination)
 
     if not audio_files:
-        raise HTTPException(status_code=422, detail="ZIP import did not contain supported audio files.")
+        raise HTTPException(status_code=422, detail="ZIP import did not contain supported media files.")
     return sorted(audio_files, key=lambda path: str(path.relative_to(extract_root)).lower())
 
 
