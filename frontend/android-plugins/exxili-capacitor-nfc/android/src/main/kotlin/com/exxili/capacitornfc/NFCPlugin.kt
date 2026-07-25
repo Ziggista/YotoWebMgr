@@ -234,33 +234,35 @@ class NFCPlugin : Plugin() {
                 val ndefMessage = NdefMessage(ndefRecords.toTypedArray())
                 val tag = intent.getParcelableExtra(NfcAdapter.EXTRA_TAG, Tag::class.java)
                 var ndef = Ndef.get(tag)
+                val tagSummary = describeTag(tag)
 
                 if (ndef == null) {
                     val formatable = NdefFormatable.get(tag)
                     if (formatable != null) {
                         try {
+                            Log.d("NFC", "Formatting blank NFC tag before write. ${tagSummary}")
                             formatable.connect()
                             formatable.format(ndefMessage)
                             Log.d("NFC", "NDEF message successfully formatted and written to blank tag.")
                             notifyListeners("nfcWriteSuccess", JSObject().put("success", true))
                             return
                         } catch (e: IOException) {
-                            Log.e("NFC", "Error formatting NDEF-formatable tag: ${e.message}", e)
+                            Log.e("NFC", "Error formatting NDEF-formatable tag. ${tagSummary}", e)
                             notifyListeners(
                                 "nfcError",
                                 JSObject().put(
                                     "error",
-                                    "Failed to format and write blank NFC tag: ${e.message}"
+                                    "Failed to format and write blank NFC tag (${e.javaClass.simpleName}): ${e.message ?: "no message"}. ${tagSummary}"
                                 )
                             )
                             return
                         } catch (e: Exception) {
-                            Log.e("NFC", "Error during NDEF formatting: ${e.message}", e)
+                            Log.e("NFC", "Error during NDEF formatting. ${tagSummary}", e)
                             notifyListeners(
                                 "nfcError",
                                 JSObject().put(
                                     "error",
-                                    "Failed to format blank NFC tag: ${e.message}"
+                                    "Failed to format blank NFC tag (${e.javaClass.simpleName}): ${e.message ?: "no message"}. ${tagSummary}"
                                 )
                             )
                             return
@@ -284,13 +286,14 @@ class NFCPlugin : Plugin() {
                 }
 
                 ndef.use { connectedNdef ->
+                    Log.d("NFC", "Writing NDEF message to existing formatted tag. ${tagSummary}")
                     connectedNdef.connect()
                     if (!connectedNdef.isWritable) {
                         notifyListeners(
                             "nfcError",
                             JSObject().put(
                                 "error",
-                                "NFC tag is not writable"
+                                "NFC tag is not writable. ${tagSummary}"
                             )
                         )
                         return
@@ -300,7 +303,7 @@ class NFCPlugin : Plugin() {
                             "nfcError",
                             JSObject().put(
                                 "error",
-                                "Message too large for this NFC Tag (max ${connectedNdef.maxSize} bytes)."
+                                "Message too large for this NFC Tag (max ${connectedNdef.maxSize} bytes). ${tagSummary}"
                             )
                         )
                         return
@@ -318,7 +321,7 @@ class NFCPlugin : Plugin() {
                     "nfcError",
                     JSObject().put(
                         "error",
-                        "Encoding error: ${e.message}"
+                        "Encoding error (${e.javaClass.simpleName}): ${e.message ?: "no message"}"
                     )
                 )
             }
@@ -328,7 +331,7 @@ class NFCPlugin : Plugin() {
                     "nfcError",
                     JSObject().put(
                         "error",
-                        "NFC I/O error: ${e.message}"
+                        "NFC I/O error (${e.javaClass.simpleName}): ${e.message ?: "no message"}"
                     )
                 )
             }
@@ -338,7 +341,7 @@ class NFCPlugin : Plugin() {
                     "nfcError",
                     JSObject().put(
                         "error",
-                        "Failed to write NDEF message: ${e.message}"
+                        "Failed to write NDEF message (${e.javaClass.simpleName}): ${e.message ?: "no message"}"
                     )
                 )
             }
@@ -443,6 +446,31 @@ class NFCPlugin : Plugin() {
         }
         
         return tagInfo
+    }
+
+    private fun describeTag(tag: Tag?): String {
+        if (tag == null) {
+            return "tag=null"
+        }
+
+        val uid = byteArrayToHexString(tag.id)
+        val techList = tag.techList.joinToString(",")
+        val ndef = Ndef.get(tag)
+        if (ndef != null) {
+            return try {
+                ndef.connect()
+                "uid=${uid}; techs=[${techList}]; ndefType=${ndef.type}; maxSize=${ndef.maxSize}; writable=${ndef.isWritable}"
+            } catch (e: Exception) {
+                "uid=${uid}; techs=[${techList}]; ndefInfoError=${e.javaClass.simpleName}:${e.message ?: "no message"}"
+            } finally {
+                try {
+                    ndef.close()
+                } catch (_: Exception) {}
+            }
+        }
+
+        val formatable = NdefFormatable.get(tag)
+        return "uid=${uid}; techs=[${techList}]; formatable=${formatable != null}"
     }
 
     private fun ndefMessageToJS(message: NdefMessage): JSObject {
