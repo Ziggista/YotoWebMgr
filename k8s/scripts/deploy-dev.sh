@@ -316,6 +316,14 @@ copy_web_dist_into_android_assets() {
   cp -R "${FRONTEND_DIR}/dist/." "${ANDROID_ASSETS_DIR}/"
 }
 
+override_android_plugin_settings() {
+  if [[ -f "${FRONTEND_DIR}/scripts/override-capacitor-settings.mjs" ]]; then
+    pushd "${FRONTEND_DIR}" >/dev/null
+    node scripts/override-capacitor-settings.mjs
+    popd >/dev/null
+  fi
+}
+
 detect_android_sdk_dir() {
   local candidate
   for candidate in \
@@ -455,10 +463,12 @@ if [[ "${ANDROID_BUILD}" == "true" || "${ANDROID_BUNDLE}" == "true" ]]; then
   VITE_APP_BUILD_SHA="${GIT_SHA}" npm run build:ota-bundle
   if [[ "$(node_major_version)" =~ ^[0-9]+$ ]] && (( $(node_major_version) >= 22 )); then
     npx cap sync android
+    override_android_plugin_settings
   else
     echo "Node $(node -v) is below Capacitor CLI's required Node 22 runtime; skipping 'cap sync' and using asset-copy fallback"
     echo "Fallback assumption: the existing Android wrapper is already checked in and no native Capacitor plugin set changed."
     copy_web_dist_into_android_assets
+    override_android_plugin_settings
   fi
   popd >/dev/null
 
