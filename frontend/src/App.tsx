@@ -362,8 +362,25 @@ function generatedCardPayload(playlistUri: string): {
   return {
     programmableId: playlistId ? `yoto:playlist:${playlistId}` : trimmedUri,
     payloadText: trimmedUri,
-    payloadHex: textToHex(trimmedUri),
+    payloadHex: encodeUriRecordPayloadHex(trimmedUri),
   };
+}
+
+function encodeUriRecordPayloadHex(value: string): string {
+  const prefixes: Array<{ prefix: string; code: number }> = [
+    { prefix: "http://www.", code: 0x01 },
+    { prefix: "https://www.", code: 0x02 },
+    { prefix: "http://", code: 0x03 },
+    { prefix: "https://", code: 0x04 },
+  ];
+
+  for (const candidate of prefixes) {
+    if (value.startsWith(candidate.prefix)) {
+      return `${candidate.code.toString(16).padStart(2, "0")}${textToHex(value.slice(candidate.prefix.length))}`;
+    }
+  }
+
+  return `00${textToHex(value)}`;
 }
 
 function looksLikeUriPayload(value: string | null | undefined): boolean {
@@ -378,17 +395,19 @@ function buildWriteRequestFromTarget(target: CardWriteTarget): {
   records: Array<{ type: string; payload: string | Uint8Array }>;
 } | null {
   if (target.playlistUri) {
+    const payloadBytes = target.payloadHex ? hexToBytes(target.payloadHex) : null;
     return {
-      records: [{ type: "U", payload: target.playlistUri }],
+      records: [{ type: "U", payload: payloadBytes ?? target.playlistUri }],
     };
   }
 
   if (target.payloadText) {
+    const payloadBytes = looksLikeUriPayload(target.payloadText) && target.payloadHex ? hexToBytes(target.payloadHex) : null;
     return {
       records: [
         {
           type: looksLikeUriPayload(target.payloadText) ? "U" : "T",
-          payload: target.payloadText,
+          payload: payloadBytes ?? target.payloadText,
         },
       ],
     };
@@ -587,18 +606,22 @@ function createWriteTargetFromCurrentForm(form: {
 }
 
 function createWriteTargetFromPlaylist(detail: LibraryItemDetail, playlist: YotoPlaylistDraft): CardWriteTarget | null {
-  const playlistUri = playlist.remote_playlist_uri?.trim();
-  if (!playlistUri) {
+  const playlistUri = playlist.remote_playlist_uri?.trim() || null;
+  const directCardLink =
+    playlist.remote_share_link_url?.trim() ||
+    (playlistUri?.startsWith("https://yoto.io/") ? playlistUri : null) ||
+    (playlist.remote_playlist_id ? `https://yoto.io/${playlist.remote_playlist_id}` : null);
+  if (!directCardLink) {
     return null;
   }
-  const generated = generatedCardPayload(playlistUri);
+  const generated = generatedCardPayload(directCardLink);
   return {
     source: "yoto_playlist",
     label: detail.item.title,
-    detail: playlistUri,
+    detail: directCardLink,
     itemId: detail.item.id,
     playlistId: playlist.id,
-    playlistUri,
+    playlistUri: playlistUri || directCardLink,
     programmableId: generated.programmableId,
     payloadText: generated.payloadText,
     payloadHex: generated.payloadHex,
@@ -607,16 +630,20 @@ function createWriteTargetFromPlaylist(detail: LibraryItemDetail, playlist: Yoto
 }
 
 function createWriteTargetFromRemoteCard(card: YotoRemoteCard): CardWriteTarget | null {
-  const playlistUri = card.playlist_uri?.trim();
-  if (!playlistUri) {
+  const playlistUri = card.playlist_uri?.trim() || null;
+  const directCardLink =
+    card.share_link_url?.trim() ||
+    (playlistUri?.startsWith("https://yoto.io/") ? playlistUri : null) ||
+    `https://yoto.io/${card.card_id}`;
+  if (!directCardLink) {
     return null;
   }
-  const generated = generatedCardPayload(playlistUri);
+  const generated = generatedCardPayload(directCardLink);
   return {
     source: "remote_yoto_card",
     label: card.title,
-    detail: playlistUri,
-    playlistUri,
+    detail: directCardLink,
+    playlistUri: playlistUri || directCardLink,
     programmableId: generated.programmableId,
     payloadText: generated.payloadText,
     payloadHex: generated.payloadHex,
@@ -2616,7 +2643,7 @@ function CreateCardPage() {
       latestPlaylist &&
       (latestPlaylist.remote_playlist_id || latestPlaylist.remote_playlist_uri),
   );
-  const canStageBlankWrite = Boolean(detail && latestPlaylist?.remote_playlist_uri);
+  const canStageBlankWrite = Boolean(detail && (latestPlaylist?.remote_share_link_url || latestPlaylist?.remote_playlist_id));
   const workflowSnapshotRef = useRef<string | null>(null);
   const recoveredWorkflow = readCreateWorkflowSnapshot(programmingSession);
 
@@ -2673,7 +2700,9 @@ function CreateCardPage() {
     }
     const target = createWriteTargetFromPlaylist(detail, latestPlaylist);
     if (!target) {
-      setError("A remote Yoto playlist URI is still missing. Save or create the remote URI before staging a blank-card write.");
+      setError(
+        "A remote Yoto card ID is still missing. Create the live Yoto card first before staging a blank-card write.",
+      );
       return;
     }
     setWorking(true);
@@ -2760,6 +2789,7 @@ function CreateCardPage() {
           <div className="button-row">
             <CopyValueButton label="card ID" value={latestPlaylist?.remote_playlist_id ?? null} />
             <CopyValueButton label="playlist URI" value={latestPlaylist?.remote_playlist_uri ?? null} />
+            <CopyValueButton label="share link" value={latestPlaylist?.remote_share_link_url ?? null} />
           </div>
         </div>
       ) : null}
@@ -2809,9 +2839,10 @@ function CreateCardPage() {
               </Link>
             </div>
           ) : null}
-          {latestPlaylist && !latestPlaylist.remote_playlist_uri && latestPlaylist.remote_playlist_id ? (
+          {latestPlaylist && !latestPlaylist.remote_share_link_url && latestPlaylist.remote_playlist_id ? (
             <p className="muted">
-              Blank-card write staging still prefers a remote playlist URI, not only a remote ID. Save the URI once it is visible from Yoto.
+              Cloud content exists, but Yoto has not exposed a direct share link yet. Blank-card staging will fall back
+              to the experimental <code>https://yoto.io/{latestPlaylist.remote_playlist_id}</code> form.
             </p>
           ) : null}
         </article>
@@ -2899,6 +2930,7 @@ function CreateCardPage() {
                 <CopyValueButton label="draft ID" value={String(latestPlaylist.id)} />
                 <CopyValueButton label="remote ID" value={latestPlaylist.remote_playlist_id ?? null} />
                 <CopyValueButton label="remote URI" value={latestPlaylist.remote_playlist_uri ?? null} />
+                <CopyValueButton label="share link" value={latestPlaylist.remote_share_link_url ?? null} />
               </div>
             </div>
           ) : null}
@@ -3706,7 +3738,7 @@ function LibraryDetailPage() {
                             },
                           }))
                         }
-                        placeholder="https://my.yotoplay.com/playlist/playlist-123"
+                        placeholder="https://yoto.io/31yYU"
                         value={yotoRemoteLinks[playlist.id]?.remotePlaylistUri ?? ""}
                       />
                     </label>
@@ -4852,21 +4884,23 @@ function CardsPage() {
 
   function applyRemoteYotoCardToForm(card: YotoRemoteCard) {
     const target = createWriteTargetFromRemoteCard(card);
-    if (!target) {
-      setHelperMessage(`Could not derive a programmable payload from ${card.title}.`);
-      return;
-    }
     setForm((current) => ({
       ...current,
-      yoto_playlist_uri: target.playlistUri ?? current.yoto_playlist_uri,
-      programmable_id: target.programmableId ?? current.programmable_id,
-      ndef_payload_text: target.payloadText ?? current.ndef_payload_text,
-      ndef_payload_hex: target.payloadHex ?? current.ndef_payload_hex,
+      yoto_playlist_uri: card.playlist_uri ?? current.yoto_playlist_uri,
+      programmable_id: target?.programmableId ?? current.programmable_id,
+      ndef_payload_text: target?.payloadText ?? current.ndef_payload_text,
+      ndef_payload_hex: target?.payloadHex ?? current.ndef_payload_hex,
       scan_source: current.scan_source === "manual" ? "nfc_tools" : current.scan_source,
       ready_to_link_in_app: true,
       status: current.status === "available" ? "ready_to_link" : current.status,
       notes: current.notes || `Applied remote Yoto card ${card.card_id} (${card.title}).`,
     }));
+    if (!target) {
+      setHelperMessage(
+        `Loaded ${card.title}, but Yoto did not expose a full share link. The app can still try the experimental https://yoto.io/${card.card_id} form for this card.`,
+      );
+      return;
+    }
     stageWriteTarget(target);
     setHelperMessage(`Loaded remote Yoto card ${card.title} into the card form and staged it for writing.`);
   }
@@ -4874,11 +4908,17 @@ function CardsPage() {
   function stageRemoteYotoCard(card: YotoRemoteCard) {
     const target = createWriteTargetFromRemoteCard(card);
     if (!target) {
-      setHelperMessage(`Could not stage remote Yoto card ${card.title}.`);
+      setHelperMessage(
+        `Cannot stage ${card.title} because the remote card ID is missing.`,
+      );
       return;
     }
     stageWriteTarget(target);
-    setHelperMessage(`Staged remote Yoto card ${card.title} for blank-card writing.`);
+    setHelperMessage(
+      card.share_link_url
+        ? `Staged remote Yoto card ${card.title} for blank-card writing.`
+        : `Staged ${card.title} using the experimental https://yoto.io/${card.card_id} fallback.`,
+    );
   }
 
   function clearStagedWriteTarget() {
@@ -5561,6 +5601,11 @@ function CardsPage() {
             <p className="muted">
               Press <strong>Stage for write</strong> on the item you want, then use the write panel above.
             </p>
+            <p className="muted">
+              If Yoto only returns a <code>my.yotoplay.com/playlist/...</code> URI here, do not write that directly to a
+              blank card. Link an official MYO card in Yoto first, scan that card in <strong>Duplicate card</strong>,
+              then clone the captured <code>https://yoto.io/...</code> payload to the blank card.
+            </p>
           </div>
           <div className="button-row">
             <label className="checkbox-row">
@@ -5604,6 +5649,12 @@ function CardsPage() {
                   {remoteCard.duration_seconds ? ` · ${formatDuration(remoteCard.duration_seconds)}` : ""}
                 </p>
                 <p className="muted">{remoteCard.playlist_uri}</p>
+                {!remoteCard.share_link_url ? (
+                  <p className="muted">
+                    Direct card link not exposed by Yoto API yet. The app will fall back to the experimental{" "}
+                    <code>https://yoto.io/{remoteCard.card_id}</code> form for this title.
+                  </p>
+                ) : null}
                 {remoteCard.description ? <p className="muted">{remoteCard.description}</p> : null}
                 <div className="button-row">
                   <button
@@ -5611,7 +5662,7 @@ function CardsPage() {
                     onClick={() => stageRemoteYotoCard(remoteCard)}
                     type="button"
                   >
-                    Stage for write
+                    {remoteCard.share_link_url ? "Stage for write" : "Stage fallback write"}
                   </button>
                   <button
                     className="secondary-button"

@@ -366,7 +366,7 @@ def _safe_datetime(value: Any) -> datetime | None:
 
 
 def _yoto_playlist_uri_for_card_id(card_id: str) -> str:
-    return f"https://my.yotoplay.com/playlist/{card_id}"
+    return f"https://yoto.io/{card_id}"
 
 
 def _extract_remote_yoto_cards(payload: Any) -> list[YotoRemoteCardResponse]:
@@ -432,6 +432,18 @@ def _extract_remote_yoto_cards(payload: Any) -> list[YotoRemoteCardResponse]:
         reverse=True,
     )
     return remote_cards
+
+
+def _extract_share_link_url(payload: Any) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+
+    card_payload = payload.get("card")
+    card_dict = card_payload if isinstance(card_payload, dict) else payload
+    sharing = card_dict.get("sharing")
+    sharing_dict = sharing if isinstance(sharing, dict) else {}
+
+    return _safe_string(sharing_dict.get("linkUrl")) or _safe_string(card_dict.get("shareLinkUrl"))
 
 
 async def _call_yoto_api(
@@ -670,6 +682,7 @@ def _draft_response(draft: YotoPlaylistDraft) -> YotoPlaylistDraftResponse:
         payload=payload if isinstance(payload, dict) else {"payload": payload},
         remote_playlist_id=draft.remote_playlist_id,
         remote_playlist_uri=draft.remote_playlist_uri,
+        remote_share_link_url=draft.remote_share_link_url,
         last_error=draft.last_error,
         created_at=draft.created_at,
     )
@@ -1858,14 +1871,52 @@ async def create_live_yoto_playlist(
             if isinstance(remote_card_id_value, str) and remote_card_id_value.strip():
                 remote_card_id = remote_card_id_value.strip()
 
+    remote_playlist_uri = _yoto_playlist_uri_for_card_id(remote_card_id) if remote_card_id else None
+    remote_share_link_url = _extract_share_link_url(response_payload)
+    fetched_remote_content_payload: dict[str, Any] | list[Any] | None = None
+
+    if remote_card_id:
+        details_http_status, details_payload, stored_tokens, details_refreshed = await _call_authenticated_yoto_api(
+            db=db,
+            credential=credential,
+            stored_tokens=stored_tokens,
+            method="GET",
+            relative_url=f"/content/{remote_card_id}",
+        )
+        token_refreshed = token_refreshed or details_refreshed
+        if 200 <= details_http_status < 300:
+            fetched_remote_content_payload = _response_json(details_payload)
+            fetched_share_link_url = _extract_share_link_url(details_payload)
+            if fetched_share_link_url:
+                remote_share_link_url = fetched_share_link_url
+            credential.error_summary = (
+                f"Live Yoto playlist creation succeeded against /content with HTTP {http_status}; "
+                f"fetched /content/{remote_card_id} with HTTP {details_http_status}."
+            )
+        else:
+            logger.warning(
+                "Yoto live-create follow-up fetch failed for card %s with HTTP %s: %s",
+                remote_card_id,
+                details_http_status,
+                _response_excerpt(details_payload),
+            )
+            credential.error_summary = (
+                f"Live Yoto playlist creation succeeded against /content with HTTP {http_status}; "
+                f"follow-up fetch /content/{remote_card_id} failed with HTTP {details_http_status}."
+            )
+
     draft.payload_json = json.dumps(request_payload, sort_keys=True)
     draft.status = "remote_created"
     draft.remote_playlist_id = remote_card_id
+    draft.remote_playlist_uri = remote_playlist_uri
+    draft.remote_share_link_url = remote_share_link_url
     draft.last_error = None
     item.status = "yoto_remote_created"
     item.readiness_status = "yoto_remote_created"
     item.readiness_detail = (
-        f"Created live Yoto content with card ID {remote_card_id}. Use the direct blank-card write flow from this app to program linked cards."
+        f"Created live Yoto content with card ID {remote_card_id}. Direct share link captured."
+        if remote_card_id and remote_share_link_url
+        else f"Created live Yoto content with card ID {remote_card_id}. Use an official MYO scan if the direct share link is still unavailable."
         if remote_card_id
         else "Created live Yoto content. Use the direct blank-card write flow from this app to program linked cards."
     )
@@ -1876,6 +1927,8 @@ async def create_live_yoto_playlist(
             card.ready_to_link_in_app = True
             if card.status in {"upload_queued", "planning", "available", "ready_to_link"}:
                 card.status = "ready_to_link"
+            if remote_playlist_uri:
+                card.yoto_playlist_uri = remote_playlist_uri
             if remote_card_id:
                 existing_notes = card.notes.strip() if card.notes else ""
                 note_line = f"Linked live Yoto card ID: {remote_card_id}"
@@ -1900,6 +1953,8 @@ async def create_live_yoto_playlist(
                 {
                     "playlist_draft_id": draft.id,
                     "remote_card_id": remote_card_id,
+                    "remote_playlist_uri": remote_playlist_uri,
+                    "remote_share_link_url": remote_share_link_url,
                     "mark_linked_cards_ready": request.mark_linked_cards_ready,
                 },
                 sort_keys=True,
@@ -1918,10 +1973,11 @@ async def create_live_yoto_playlist(
         playlist=_draft_response(draft),
         credential=_credential_response(db, credential),
         remote_card_id=remote_card_id,
-        remote_content_response=_response_json(response_payload),
+        remote_share_link_url=remote_share_link_url,
+        remote_content_response=fetched_remote_content_payload or _response_json(response_payload),
         http_status=http_status,
         token_refreshed=token_refreshed,
-        response_excerpt=_response_excerpt(response_payload),
+        response_excerpt=_response_excerpt(fetched_remote_content_payload or response_payload),
         error_detail=None,
         live_api_call=True,
     )

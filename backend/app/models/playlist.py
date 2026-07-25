@@ -123,6 +123,7 @@ class YotoPlaylistDraft(Base):
     payload_json: Mapped[str] = mapped_column(Text)
     remote_playlist_id: Mapped[str | None] = mapped_column(String(240), nullable=True)
     remote_playlist_uri: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    remote_share_link_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

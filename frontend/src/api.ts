@@ -426,6 +426,7 @@ export interface YotoPlaylistDraft {
   payload: Record<string, unknown>;
   remote_playlist_id: string | null;
   remote_playlist_uri: string | null;
+  remote_share_link_url: string | null;
   last_error: string | null;
   created_at: string;
 }
@@ -461,6 +462,7 @@ export interface CreateLiveYotoPlaylistResponse {
   playlist: YotoPlaylistDraft;
   credential: YotoCredentialStatus;
   remote_card_id: string | null;
+  remote_share_link_url: string | null;
   remote_content_response: Record<string, unknown> | unknown[] | null;
   http_status: number | null;
   token_refreshed: boolean;

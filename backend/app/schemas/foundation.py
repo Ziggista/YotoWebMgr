@@ -798,6 +798,7 @@ class YotoPlaylistDraftResponse(BaseModel):
     payload: dict[str, object]
     remote_playlist_id: str | None
     remote_playlist_uri: str | None
+    remote_share_link_url: str | None = None
     last_error: str | None
     created_at: datetime
 
@@ -839,6 +840,7 @@ class CreateLiveYotoPlaylistResponse(BaseModel):
     playlist: YotoPlaylistDraftResponse
     credential: YotoCredentialStatusResponse
     remote_card_id: str | None = None
+    remote_share_link_url: str | None = None
     remote_content_response: dict[str, object] | list[object] | None = None
     http_status: int | None = None
     token_refreshed: bool = False

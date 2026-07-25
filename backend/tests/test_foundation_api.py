@@ -484,7 +484,7 @@ async def test_library_item_link_is_immediate_when_remote_yoto_content_exists(
             status="remote_created",
             payload_json=json.dumps({"title": "Already In Yoto", "content": {"chapters": []}}),
             remote_playlist_id="31yYU",
-            remote_playlist_uri="https://my.yotoplay.com/playlist/31yYU",
+            remote_playlist_uri="https://yoto.io/31yYU",
         )
         db_session.add(draft)
         db_session.commit()
@@ -504,7 +504,7 @@ async def test_library_item_link_is_immediate_when_remote_yoto_content_exists(
     assert payload["card"]["pending_job_id"] is None
     assert payload["card"]["status"] == "ready_to_link"
     assert payload["card"]["ready_to_link_in_app"] is True
-    assert payload["card"]["yoto_playlist_uri"] == "https://my.yotoplay.com/playlist/31yYU"
+    assert payload["card"]["yoto_playlist_uri"] == "https://yoto.io/31yYU"
     assert history.status_code == 200
     assert history.json()[0]["event_type"] == "link_prepared"
     assert history.json()[0]["job_id"] == payload["job"]["id"]
@@ -613,7 +613,7 @@ async def test_card_inventory_accepts_nfc_workflow_fields(
                 "card_code": "CARD01",
                 "programmable_id": "yoto:playlist:abc123",
                 "nfc_serial_number": "04A1B2C3D4",
-                "ndef_payload_text": "https://my.yotoplay.com/playlist/abc123",
+                "ndef_payload_text": "https://yoto.io/abc123",
                 "ndef_payload_hex": "68747470733A2F2F6D792E796F746F706C61792E636F6D2F706C61796C6973742F616263313233",
                 "scan_source": "nfc_tools",
                 "display_name": "Card 01",
@@ -631,7 +631,7 @@ async def test_card_inventory_accepts_nfc_workflow_fields(
                 "overwrite_ok": True,
                 "downloaded_to_player_confirmed": True,
                 "needs_player_download": False,
-                "yoto_playlist_uri": "https://my.yotoplay.com/playlist/abc123",
+                "yoto_playlist_uri": "https://yoto.io/abc123",
                 "status": "ready_to_link",
                 "tested": True,
             },
@@ -648,7 +648,7 @@ async def test_card_inventory_accepts_nfc_workflow_fields(
     assert payload["card_code"] == "CARD01"
     assert payload["programmable_id"] == "yoto:playlist:abc123"
     assert payload["nfc_serial_number"] == "04A1B2C3D4"
-    assert payload["ndef_payload_text"] == "https://my.yotoplay.com/playlist/abc123"
+    assert payload["ndef_payload_text"] == "https://yoto.io/abc123"
     assert payload["scan_source"] == "nfc_tools"
     assert payload["chip_type"] == "MIFARE Ultralight EV1"
     assert payload["memory_size_bytes"] == 48
@@ -701,7 +701,7 @@ async def test_card_workflow_can_be_updated_after_scan(api_client: AsyncClient) 
                 "needs_player_download": True,
                 "tested": True,
                 "status": "linked",
-                "yoto_playlist_uri": "https://my.yotoplay.com/playlist/abc123",
+                "yoto_playlist_uri": "https://yoto.io/abc123",
                 "notes": "Scanned and tested from Android.",
             },
         )
@@ -738,10 +738,10 @@ async def test_card_scan_dump_endpoint_accepts_debug_payload(api_client: AsyncCl
                 "scan_source": "native_nfc",
                 "programmable_id": "04A1B2C3D4",
                 "nfc_serial_number": "04A1B2C3D4",
-                "ndef_payload_text": "https://my.yotoplay.com/playlist/abc123",
+                "ndef_payload_text": "https://yoto.io/abc123",
                 "ndef_payload_hex": "68747470733a2f2f6d792e796f746f706c61792e636f6d2f706c61796c6973742f616263313233",
                 "tag_info": {"uid": "04A1B2C3D4", "type": "MifareUltralight"},
-                "records": [{"type": "U", "payload": "https://my.yotoplay.com/playlist/abc123"}],
+                "records": [{"type": "U", "payload": "https://yoto.io/abc123"}],
                 "runtime": "capacitor_android",
             },
         )
@@ -782,13 +782,13 @@ async def test_card_programming_event_endpoints_persist_write_and_verification(
                 "detail": "Verification matched the written payload bytes.",
                 "compared_field": "payload_hex",
                 "matched": True,
-                "playlist_uri": "https://my.yotoplay.com/playlist/playlist-123",
+                "playlist_uri": "https://yoto.io/playlist-123",
                 "programmable_id": "yoto:playlist:playlist-123",
-                "ndef_payload_text": "https://my.yotoplay.com/playlist/playlist-123",
+                "ndef_payload_text": "https://yoto.io/playlist-123",
                 "ndef_payload_hex": "68747470733a2f2f6d792e796f746f706c61792e636f6d2f706c61796c6973742f706c61796c6973742d313233",
                 "observed_programmable_id": "yoto:playlist:playlist-123",
                 "observed_nfc_serial_number": "04A1B2C3D4",
-                "observed_ndef_payload_text": "https://my.yotoplay.com/playlist/playlist-123",
+                "observed_ndef_payload_text": "https://yoto.io/playlist-123",
                 "observed_ndef_payload_hex": "68747470733a2f2f6d792e796f746f706c61792e636f6d2f706c61796c6973742f706c61796c6973742d313233",
                 "extra_json": {"route": "/create"},
             },
@@ -817,7 +817,7 @@ async def test_card_programming_event_endpoints_persist_write_and_verification(
     assert refreshed_card.status == "verified"
     assert refreshed_card.ndef_prepared is True
     assert refreshed_card.tested is True
-    assert refreshed_card.yoto_playlist_uri == "https://my.yotoplay.com/playlist/playlist-123"
+    assert refreshed_card.yoto_playlist_uri == "https://yoto.io/playlist-123"
     assert refreshed_card.programmable_id == "yoto:playlist:playlist-123"
     assert refreshed_card.nfc_serial_number == "04A1B2C3D4"
     assert refreshed_card.last_scanned_at is not None
@@ -835,10 +835,10 @@ async def test_card_programming_session_can_stage_and_clear_target(
                 "session_key": "default",
                 "source": "yoto_playlist",
                 "target_label": "Bedtime Mix",
-                "detail": "https://my.yotoplay.com/playlist/playlist-123",
-                "playlist_uri": "https://my.yotoplay.com/playlist/playlist-123",
+                "detail": "https://yoto.io/playlist-123",
+                "playlist_uri": "https://yoto.io/playlist-123",
                 "programmable_id": "yoto:playlist:playlist-123",
-                "ndef_payload_text": "https://my.yotoplay.com/playlist/playlist-123",
+                "ndef_payload_text": "https://yoto.io/playlist-123",
                 "ndef_payload_hex": "68747470",
                 "verification_armed": True,
                 "extra_json": {"route": "/create"},
@@ -1902,7 +1902,7 @@ async def test_yoto_remote_playlist_mapping_updates_draft_and_linked_cards(
             f"/api/v1/yoto/playlists/{playlist_id}/remote-link",
             json={
                 "remote_playlist_id": "playlist-123",
-                "remote_playlist_uri": "https://my.yotoplay.com/playlist/playlist-123",
+                "remote_playlist_uri": "https://yoto.io/playlist-123",
                 "mark_linked_manually": True,
             },
         )
@@ -1911,7 +1911,7 @@ async def test_yoto_remote_playlist_mapping_updates_draft_and_linked_cards(
     payload = saved.json()
     assert payload["status"] == "remote_linked"
     assert payload["remote_playlist_id"] == "playlist-123"
-    assert payload["remote_playlist_uri"] == "https://my.yotoplay.com/playlist/playlist-123"
+    assert payload["remote_playlist_uri"] == "https://yoto.io/playlist-123"
 
     draft = db_session.get(YotoPlaylistDraft, playlist_id)
     item = db_session.get(LibraryItem, item_id)
@@ -1933,7 +1933,7 @@ async def test_yoto_remote_playlist_mapping_updates_draft_and_linked_cards(
     assert item.status == "yoto_remote_linked"
     assert item.readiness_status == "yoto_remote_linked"
     assert card is not None
-    assert card.yoto_playlist_uri == "https://my.yotoplay.com/playlist/playlist-123"
+    assert card.yoto_playlist_uri == "https://yoto.io/playlist-123"
     assert card.ready_to_link_in_app is True
     assert card.linked_manually is True
     assert version is not None
@@ -2487,7 +2487,7 @@ async def test_list_remote_yoto_content_returns_linkable_cards(
     assert payload["credential"]["status"] == "connected_tested"
     assert len(payload["cards"]) == 1
     assert payload["cards"][0]["card_id"] == "31yYU"
-    assert payload["cards"][0]["playlist_uri"] == "https://my.yotoplay.com/playlist/31yYU"
+    assert payload["cards"][0]["playlist_uri"] == "https://yoto.io/31yYU"
     assert payload["cards"][0]["title"] == "Bedtime Mix"
     assert payload["cards"][0]["author"] == "Ziggi"
     assert payload["cards"][0]["duration_seconds"] == 3600
