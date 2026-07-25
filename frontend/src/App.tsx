@@ -366,6 +366,45 @@ function generatedCardPayload(playlistUri: string): {
   };
 }
 
+function looksLikeUriPayload(value: string | null | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(value.trim());
+}
+
+function buildWriteRequestFromTarget(target: CardWriteTarget): {
+  rawMode?: boolean;
+  records: Array<{ type: string; payload: string | Uint8Array }>;
+} | null {
+  if (target.playlistUri) {
+    return {
+      records: [{ type: "U", payload: target.playlistUri }],
+    };
+  }
+
+  if (target.payloadText) {
+    return {
+      records: [
+        {
+          type: looksLikeUriPayload(target.payloadText) ? "U" : "T",
+          payload: target.payloadText,
+        },
+      ],
+    };
+  }
+
+  const payloadBytes = target.payloadHex ? hexToBytes(target.payloadHex) : null;
+  if (payloadBytes) {
+    return {
+      rawMode: true,
+      records: [{ type: "custom", payload: payloadBytes }],
+    };
+  }
+
+  return null;
+}
+
 function normaliseHexString(value: string | null | undefined): string | null {
   if (!value) {
     return null;
@@ -4308,6 +4347,7 @@ function CardsPage() {
   const [nativeNfcSupported, setNativeNfcSupported] = useState(false);
   const [nativeWritePending, setNativeWritePending] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const nativeWriteTimeoutRef = useRef<number | null>(null);
   const [form, setForm] = useState({
     card_code: "",
     programmable_id: "",
@@ -4474,7 +4514,11 @@ function CardsPage() {
             .join("")
         : "";
       const serialNumber = decodedPayload.tagInfo?.uid ?? "";
-      const nextProgrammableId = serialNumber || payloadText;
+      const nextProgrammableId = payloadText || serialNumber;
+      if (nativeWriteTimeoutRef.current !== null) {
+        window.clearTimeout(nativeWriteTimeoutRef.current);
+        nativeWriteTimeoutRef.current = null;
+      }
 
       if (nextProgrammableId) {
         setForm((current) => ({
@@ -4530,12 +4574,27 @@ function CardsPage() {
     });
 
     const removeErrorListener = NFC.onError((nfcError) => {
+      if (nativeWriteTimeoutRef.current !== null) {
+        window.clearTimeout(nativeWriteTimeoutRef.current);
+        nativeWriteTimeoutRef.current = null;
+      }
       setScanMessage(nfcError.error || "Native NFC operation failed.");
+      if (nativeWritePending) {
+        void persistProgrammingEvent({
+          event_type: "write_failed",
+          detail: nfcError.error || "Native NFC operation failed.",
+          extra_json: { reason: "native_error" },
+        });
+      }
       setScanning(false);
       setNativeWritePending(false);
     });
 
     const removeWriteListener = NFC.onWrite(() => {
+      if (nativeWriteTimeoutRef.current !== null) {
+        window.clearTimeout(nativeWriteTimeoutRef.current);
+        nativeWriteTimeoutRef.current = null;
+      }
       setForm((current) => ({
         ...current,
         ndef_prepared: true,
@@ -4553,11 +4612,15 @@ function CardsPage() {
 
     return () => {
       cancelled = true;
+      if (nativeWriteTimeoutRef.current !== null) {
+        window.clearTimeout(nativeWriteTimeoutRef.current);
+        nativeWriteTimeoutRef.current = null;
+      }
       removeReadListener();
       removeErrorListener();
       removeWriteListener();
     };
-  }, []);
+  }, [nativeWritePending, stagedWriteTarget]);
 
   function handleGenerateFromPlaylist() {
     setError(null);
@@ -4835,12 +4898,8 @@ function CardsPage() {
       return;
     }
 
-    const payloadBytes = target.payloadHex ? hexToBytes(target.payloadHex) : null;
-    if (target.payloadHex && !payloadBytes) {
-      setHelperMessage("The staged payload hex is invalid.");
-      return;
-    }
-    if (!payloadBytes && !target.payloadText) {
+    const writeRequest = buildWriteRequestFromTarget(target);
+    if (!writeRequest) {
       setHelperMessage("The staged write target does not include a payload yet.");
       return;
     }
@@ -4873,18 +4932,31 @@ function CardsPage() {
     );
 
     try {
-      await NFC.writeNDEF({
-        rawMode: true,
-        records: [
-          {
-            type: "custom",
-            payload: payloadBytes ?? new TextEncoder().encode(target.payloadText ?? ""),
-          },
-        ],
-      });
+      nativeWriteTimeoutRef.current = window.setTimeout(() => {
+        nativeWriteTimeoutRef.current = null;
+        setNativeWritePending(false);
+        setScanning(false);
+        void NFC.cancelWriteAndroid().catch(() => undefined);
+        setHelperMessage(`Timed out waiting for Android NFC to confirm writing ${successLabel}.`);
+        void persistProgrammingEvent({
+          event_type: "write_failed",
+          detail: `Timed out waiting for native NFC write confirmation for ${successLabel}.`,
+          extra_json: { reason: "timeout" },
+        });
+      }, 15000);
+      await NFC.writeNDEF(writeRequest);
     } catch (writeError) {
+      if (nativeWriteTimeoutRef.current !== null) {
+        window.clearTimeout(nativeWriteTimeoutRef.current);
+        nativeWriteTimeoutRef.current = null;
+      }
       setNativeWritePending(false);
       setScanning(false);
+      void persistProgrammingEvent({
+        event_type: "write_failed",
+        detail: writeError instanceof Error ? writeError.message : "Could not start the staged NFC write.",
+        extra_json: { reason: "start_error" },
+      });
       setHelperMessage(writeError instanceof Error ? writeError.message : "Could not start the staged NFC write.");
     }
   }
@@ -4931,13 +5003,40 @@ function CardsPage() {
     );
 
     try {
+      nativeWriteTimeoutRef.current = window.setTimeout(() => {
+        nativeWriteTimeoutRef.current = null;
+        setNativeWritePending(false);
+        setScanning(false);
+        void NFC.cancelWriteAndroid().catch(() => undefined);
+        setHelperMessage(`Timed out waiting for Android NFC to confirm writing scan dump #${entry.id}.`);
+        void persistProgrammingEvent(
+          {
+            event_type: "write_failed",
+            detail: `Timed out waiting for native NFC write confirmation for scan dump #${entry.id}.`,
+            extra_json: { reason: "timeout" },
+          },
+          scanDumpTarget,
+        );
+      }, 15000);
       await NFC.writeNDEF({
         rawMode: true,
         records: dumpRecords,
       });
     } catch (writeError) {
+      if (nativeWriteTimeoutRef.current !== null) {
+        window.clearTimeout(nativeWriteTimeoutRef.current);
+        nativeWriteTimeoutRef.current = null;
+      }
       setNativeWritePending(false);
       setScanning(false);
+      void persistProgrammingEvent(
+        {
+          event_type: "write_failed",
+          detail: writeError instanceof Error ? writeError.message : "Could not write stored scan dump.",
+          extra_json: { reason: "start_error" },
+        },
+        scanDumpTarget,
+      );
       setHelperMessage(writeError instanceof Error ? writeError.message : "Could not write stored scan dump.");
     }
   }
@@ -4990,12 +5089,9 @@ function CardsPage() {
       return;
     }
 
-    const payloadBytes = form.ndef_payload_hex ? hexToBytes(form.ndef_payload_hex) : null;
-    if (form.ndef_payload_hex && !payloadBytes) {
-      setHelperMessage("NDEF payload hex is invalid. Use an even number of hex characters.");
-      return;
-    }
-    if (!payloadBytes && !form.ndef_payload_text) {
+    const currentFormTarget = createWriteTargetFromCurrentForm(form);
+    const writeRequest = buildWriteRequestFromTarget(currentFormTarget);
+    if (!writeRequest) {
       setHelperMessage("Prepare an NDEF payload first.");
       return;
     }
@@ -5003,7 +5099,6 @@ function CardsPage() {
     setScanning(true);
     setNativeWritePending(true);
     setScanMessage("Hold the card against the phone to write the prepared payload.");
-    const currentFormTarget = createWriteTargetFromCurrentForm(form);
     setVerificationResult(null);
     void persistProgrammingEvent(
       {
@@ -5014,18 +5109,37 @@ function CardsPage() {
     );
 
     try {
-      await NFC.writeNDEF({
-        rawMode: true,
-        records: [
+      nativeWriteTimeoutRef.current = window.setTimeout(() => {
+        nativeWriteTimeoutRef.current = null;
+        setNativeWritePending(false);
+        setScanning(false);
+        void NFC.cancelWriteAndroid().catch(() => undefined);
+        setHelperMessage("Timed out waiting for Android NFC to confirm writing the prepared payload.");
+        void persistProgrammingEvent(
           {
-            type: "custom",
-            payload: payloadBytes ?? new TextEncoder().encode(form.ndef_payload_text),
+            event_type: "write_failed",
+            detail: "Timed out waiting for native NFC write confirmation for the prepared payload.",
+            extra_json: { reason: "timeout" },
           },
-        ],
-      });
+          currentFormTarget,
+        );
+      }, 15000);
+      await NFC.writeNDEF(writeRequest);
     } catch (writeError) {
+      if (nativeWriteTimeoutRef.current !== null) {
+        window.clearTimeout(nativeWriteTimeoutRef.current);
+        nativeWriteTimeoutRef.current = null;
+      }
       setNativeWritePending(false);
       setScanning(false);
+      void persistProgrammingEvent(
+        {
+          event_type: "write_failed",
+          detail: writeError instanceof Error ? writeError.message : "Could not start native NFC write.",
+          extra_json: { reason: "start_error" },
+        },
+        currentFormTarget,
+      );
       setHelperMessage(writeError instanceof Error ? writeError.message : "Could not start native NFC write.");
     }
   }
