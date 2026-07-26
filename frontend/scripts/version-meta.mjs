@@ -9,6 +9,7 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const frontendDir = resolve(scriptDir, "..");
 const repoDir = resolve(frontendDir, "..");
 const packageJsonPath = resolve(frontendDir, "package.json");
+const versionSeriesPath = resolve(frontendDir, "version-series.json");
 
 function gitOutput(args, fallback) {
   try {
@@ -27,14 +28,46 @@ function padBuildNumber(buildNumber) {
   return String(buildNumber).padStart(4, "0");
 }
 
+function loadVersionSeriesConfig() {
+  try {
+    const config = JSON.parse(readFileSync(versionSeriesPath, "utf8"));
+    const buildSeriesStartRef = String(config.buildSeriesStartRef ?? "").trim();
+    const buildSeriesStartNumber = parseBuildNumber(config.buildSeriesStartNumber) ?? 1;
+    const marketingVersion = String(config.marketingVersion ?? "").trim();
+    return {
+      buildSeriesStartRef,
+      buildSeriesStartNumber,
+      marketingVersion,
+    };
+  } catch {
+    return {
+      buildSeriesStartRef: "",
+      buildSeriesStartNumber: 1,
+      marketingVersion: "",
+    };
+  }
+}
+
+function buildNumberFromSeries(config) {
+  if (!config.buildSeriesStartRef) {
+    return null;
+  }
+  const commitsSinceSeriesStart = parseBuildNumber(
+    gitOutput(["rev-list", "--count", `${config.buildSeriesStartRef}..HEAD`], "0"),
+  );
+  return (commitsSinceSeriesStart ?? 0) + config.buildSeriesStartNumber;
+}
+
 function loadVersionMeta() {
   const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"));
+  const versionSeries = loadVersionSeriesConfig();
   const baseVersion = String(packageJson.version ?? "0.1.0");
-  const [major = "0", minor = "1"] = baseVersion.split(".");
+  const marketingVersion = versionSeries.marketingVersion || baseVersion.split(".").slice(0, 2).join(".");
+  const [major = "0", minor = "1"] = marketingVersion.split(".");
   const requestedBuildNumber =
     parseBuildNumber(process.env.APP_BUILD_NUMBER) ??
     parseBuildNumber(process.env.VITE_APP_BUILD_NUMBER) ??
-    parseBuildNumber(gitOutput(["rev-list", "--count", "HEAD"], "1")) ??
+    buildNumberFromSeries(versionSeries) ??
     1;
   const buildSha = (
     process.env.VITE_APP_BUILD_SHA ??

@@ -19,6 +19,7 @@ build/
 frontend/android/local.properties
 frontend/android/keystore.properties
 frontend/public/live-updates/
+frontend/public/downloads/
 *.egg-info/
 node_modules/
 .vite/
