@@ -2428,7 +2428,91 @@ async def test_create_live_yoto_playlist_rejects_raw_amr_without_processed_asset
         response = await client.post(f"/api/v1/yoto/playlists/{draft.id}/create-live", json={})
 
     assert response.status_code == 409
-    assert "must be processed locally before Yoto live creation" in response.json()["detail"]
+    assert "Audio processing is incomplete for this item" in response.json()["detail"]
+
+
+async def test_create_live_yoto_playlist_rejects_while_processing_is_still_running(
+    api_client: AsyncClient,
+    db_session: Session,
+) -> None:
+    item = LibraryItem(
+        title="Half Processed Album",
+        content_type="Music Album",
+        status="processing_queued",
+        readiness_status="needs_yoto_upload",
+    )
+    db_session.add(item)
+    db_session.flush()
+
+    first_track = PlaylistTrack(
+        library_item_id=item.id,
+        title="Track 1",
+        source_path="/tmp/track-1.mp3",
+        track_number=1,
+        duration_seconds=120,
+        is_stream=False,
+    )
+    second_track = PlaylistTrack(
+        library_item_id=item.id,
+        title="Track 2",
+        source_path="/tmp/track-2.mp3",
+        track_number=2,
+        duration_seconds=120,
+        is_stream=False,
+    )
+    db_session.add_all([first_track, second_track])
+    db_session.flush()
+
+    processed = ProcessedAsset(
+        library_item_id=item.id,
+        playlist_track_id=first_track.id,
+        source_path=first_track.source_path or "/tmp/track-1.mp3",
+        output_path="/tmp/track-1-processed.mp3",
+        codec="mp3",
+        bitrate_kbps=128,
+        channels=2,
+        duration_seconds=120,
+        size_bytes=1024,
+        checksum_sha256="c" * 64,
+        profile="music",
+        settings_json='{"profile":"music"}',
+    )
+    running_job = Job(
+        type="transcode_audio",
+        status="running",
+        progress_percent=61,
+        progress_message="Encoding track 2 of 2",
+        related_library_item_id=item.id,
+    )
+    credential = YotoCredentialState(
+        account_label="Household Yoto",
+        status="connected_tested",
+        token_storage_ref="k8s-secret:test-namespace:test-secret:yoto-credential-local.json",
+        scopes="openid offline_access user:content:manage",
+        expires_at=datetime.now(timezone.utc).replace(year=2027),
+    )
+    draft = YotoPlaylistDraft(
+        library_item_id=item.id,
+        title=item.title,
+        status="queued",
+        payload_json=json.dumps(
+            {
+                "title": item.title,
+                "chapters": [
+                    {"title": "Track 1", "type": "audio", "source_path": first_track.source_path, "display_number": 1},
+                    {"title": "Track 2", "type": "audio", "source_path": second_track.source_path, "display_number": 2},
+                ],
+            }
+        ),
+    )
+    db_session.add_all([processed, running_job, credential, draft])
+    db_session.commit()
+
+    async with api_client as client:
+        response = await client.post(f"/api/v1/yoto/playlists/{draft.id}/create-live", json={})
+
+    assert response.status_code == 409
+    assert "Audio processing is still in progress" in response.json()["detail"]
 
 
 async def test_create_live_yoto_playlist_allows_empty_request_body(

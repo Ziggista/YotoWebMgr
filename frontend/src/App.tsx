@@ -1015,6 +1015,42 @@ function latestYotoPlaylist(playlists: YotoPlaylistDraft[]): YotoPlaylistDraft |
   return [...playlists].sort((left, right) => right.id - left.id)[0] ?? null;
 }
 
+function sourceBackedTrackCount(detail: LibraryItemDetail): number {
+  return detail.tracks.filter((track) => !track.is_stream).length;
+}
+
+function processedTrackCoverage(detail: LibraryItemDetail): { processed: number; total: number } {
+  return {
+    processed: detail.processed_assets.length,
+    total: sourceBackedTrackCount(detail),
+  };
+}
+
+function processingJobForItem(jobs: Job[]): Job | null {
+  return latestJobForItem(jobs, "transcode_audio");
+}
+
+function isProcessingIncomplete(detail: LibraryItemDetail, jobs: Job[]): boolean {
+  const coverage = processedTrackCoverage(detail);
+  const processingJob = processingJobForItem(jobs);
+  if (isJobActive(processingJob)) {
+    return true;
+  }
+  return coverage.total > 0 && coverage.processed < coverage.total;
+}
+
+function processingNotice(detail: LibraryItemDetail, jobs: Job[]): string | null {
+  const coverage = processedTrackCoverage(detail);
+  const processingJob = processingJobForItem(jobs);
+  if (isJobActive(processingJob)) {
+    return `Audio encoding is still running: ${coverage.processed}/${coverage.total} tracks ready, ${processingJob?.progress_percent ?? 0}% complete.`;
+  }
+  if (coverage.total > 0 && coverage.processed < coverage.total) {
+    return `Audio encoding is incomplete: ${coverage.processed}/${coverage.total} tracks are Yoto-ready.`;
+  }
+  return null;
+}
+
 function itemNeedsYotoCloudCreate(item: LibraryItem): boolean {
   return !item.yoto.has_remote_playlist;
 }
@@ -1028,10 +1064,11 @@ function yotoPlaylistWorkflowSteps(
   jobs: Job[],
   playlists: YotoPlaylistDraft[],
 ): WorkflowStep[] {
-  const processingJob = latestJobForItem(jobs, "transcode_audio");
+  const processingJob = processingJobForItem(jobs);
   const playlistJob = latestJobForItem(jobs, "create_yoto_playlist");
   const playlist = latestYotoPlaylist(playlists);
-  const processed = detail.processed_assets.length > 0;
+  const coverage = processedTrackCoverage(detail);
+  const processed = coverage.total > 0 && coverage.processed >= coverage.total;
   const localDraftReady = Boolean(playlist);
   const remoteCreated = Boolean(
     playlist &&
@@ -1048,7 +1085,7 @@ function yotoPlaylistWorkflowSteps(
       label: "Audio processed",
       done: processed,
       detail: processed
-        ? `Generated ${detail.processed_assets.length} Yoto-ready asset(s).`
+        ? `Generated ${coverage.processed}/${coverage.total} Yoto-ready asset(s).`
         : processingJob
           ? `${processingJob.status} · ${processingJob.progress_percent}% · ${processingJob.progress_message}`
           : "Run Process audio to create Yoto-ready files first.",
@@ -1094,9 +1131,10 @@ function createCardStageStatuses(
   playlists: YotoPlaylistDraft[],
   selectedCard: PhysicalCard | null,
 ): CreateStageStatus[] {
-  const processingJob = latestJobForItem(jobs, "transcode_audio");
+  const processingJob = processingJobForItem(jobs);
   const playlistJob = latestJobForItem(jobs, "create_yoto_playlist");
   const playlist = latestYotoPlaylist(playlists);
+  const coverage = processedTrackCoverage(detail);
   const remotePlaylistUri = playlist?.remote_playlist_uri ?? null;
   const remotePlaylistId = playlist?.remote_playlist_id ?? null;
   const remoteReference = remotePlaylistUri ?? remotePlaylistId;
@@ -1108,12 +1146,17 @@ function createCardStageStatuses(
     {
       key: "processing",
       label: "Audio",
-      state: detail.processed_assets.length > 0 ? "done" : processingJob ? "active" : "blocked",
-      detail:
-        detail.processed_assets.length > 0
-          ? `${detail.processed_assets.length} processed asset(s) ready for Yoto.`
+      state:
+        coverage.total > 0 && coverage.processed >= coverage.total
+          ? "done"
           : processingJob
-            ? `${processingJob.status} at ${processingJob.progress_percent}%: ${processingJob.progress_message}`
+            ? "active"
+            : "blocked",
+      detail:
+        coverage.total > 0 && coverage.processed >= coverage.total
+          ? `${coverage.processed}/${coverage.total} processed asset(s) ready for Yoto.`
+          : processingJob
+            ? `${processingJob.status} at ${processingJob.progress_percent}%: ${processingJob.progress_message} (${coverage.processed}/${coverage.total} tracks ready)`
             : "Run Process audio before creating the Yoto playlist draft.",
     },
     {
@@ -1566,6 +1609,7 @@ async function createPkcePair(): Promise<{ verifier: string; challenge: string }
 
 function LibraryPage() {
   const [items, setItems] = useState<LibraryItem[]>([]);
+  const [jobs, setJobs] = useState<Job[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
   const [filters, setFilters] = useState({ search: "", content_type: "", tag_id: "" });
   const [cards, setCards] = useState<PhysicalCard[]>([]);
@@ -1591,12 +1635,16 @@ function LibraryPage() {
   const bulkYotoProcessingRef = useRef(false);
 
   async function refreshLibraryList() {
-    const nextItems = await fetchLibraryItems({
-      search: filters.search.trim() || undefined,
-      content_type: filters.content_type || undefined,
-      tag_id: filters.tag_id ? Number(filters.tag_id) : null,
-    });
+    const [nextItems, nextJobs] = await Promise.all([
+      fetchLibraryItems({
+        search: filters.search.trim() || undefined,
+        content_type: filters.content_type || undefined,
+        tag_id: filters.tag_id ? Number(filters.tag_id) : null,
+      }),
+      fetchJobs(),
+    ]);
     setItems(nextItems);
+    setJobs(nextJobs);
   }
 
   useEffect(() => {
@@ -1613,7 +1661,24 @@ function LibraryPage() {
     );
   }, [items]);
 
-  const yotoSelectableItems = items.filter(itemNeedsYotoCloudCreate);
+  useEffect(() => {
+    if (!hasActiveJobs(jobs)) {
+      return;
+    }
+    const intervalId = window.setInterval(() => {
+      void refreshLibraryList().catch(() => undefined);
+    }, 2500);
+    return () => window.clearInterval(intervalId);
+  }, [jobs, filters.search, filters.content_type, filters.tag_id]);
+
+  const processingJobByItemId = new Map(
+    jobs
+      .filter((job) => job.type === "transcode_audio" && isJobActive(job) && job.related_library_item_id !== null)
+      .map((job) => [job.related_library_item_id as number, job] as const),
+  );
+  const yotoSelectableItems = items.filter(
+    (item) => itemNeedsYotoCloudCreate(item) && !processingJobByItemId.has(item.id),
+  );
   const allYotoSelectableChecked =
     yotoSelectableItems.length > 0 && yotoSelectableItems.every((item) => bulkYotoItemIds.includes(item.id));
 
@@ -1925,7 +1990,12 @@ function LibraryPage() {
     if (bulkYotoProcessingRef.current) {
       return;
     }
-    const selectedItems = items.filter((item) => bulkYotoItemIds.includes(item.id) && itemNeedsYotoCloudCreate(item));
+    const selectedItems = items.filter(
+      (item) =>
+        bulkYotoItemIds.includes(item.id) &&
+        itemNeedsYotoCloudCreate(item) &&
+        !processingJobByItemId.has(item.id),
+    );
     if (selectedItems.length === 0) {
       setError("Choose one or more library items that still need Yoto cloud content.");
       return;
@@ -2026,12 +2096,16 @@ function LibraryPage() {
         <div className="item-list">
           {items.map((item) => (
             <article className="list-row" key={item.id}>
+              {(() => {
+                const itemProcessingJob = processingJobByItemId.get(item.id) ?? null;
+                return (
               <div>
                 <div className="library-row-heading">
                   {itemNeedsYotoCloudCreate(item) ? (
                     <label className="library-row-checkbox">
                       <input
                         checked={bulkYotoItemIds.includes(item.id)}
+                        disabled={Boolean(itemProcessingJob)}
                         onChange={(event) => toggleBulkYotoItem(item.id, event.target.checked)}
                         type="checkbox"
                       />
@@ -2049,12 +2123,22 @@ function LibraryPage() {
                   <span className={`status-pill${item.yoto.has_remote_playlist ? " status-pill-ok" : " status-pill-muted"}`}>
                     {item.yoto.has_remote_playlist ? "Yoto cloud ready" : itemBulkYotoActionLabel(item)}
                   </span>
+                  {itemProcessingJob ? (
+                    <span className="status-pill status-pill-active">
+                      Encoding {itemProcessingJob.progress_percent}%
+                    </span>
+                  ) : null}
                   {item.yoto.has_playlist_draft ? (
                     <span className="status-pill status-pill-muted">
                       Draft {item.yoto.latest_playlist_status ?? `#${item.yoto.latest_playlist_id ?? "?"}`}
                     </span>
                   ) : null}
                 </div>
+                {itemProcessingJob ? (
+                  <p className="muted">
+                    Audio processing is still running: {itemProcessingJob.progress_message}. Yoto cloud create stays blocked until it finishes.
+                  </p>
+                ) : null}
                 {item.tags.length > 0 ? (
                   <div className="tag-chip-row">
                     {item.tags.map((tag) => (
@@ -2115,6 +2199,8 @@ function LibraryPage() {
                   </div>
                 ) : null}
               </div>
+                );
+              })()}
               <div className="row-actions">
                 <Link className="ghost-button" to={`/library/${item.id}`}>
                   Details
@@ -2631,7 +2717,14 @@ function CreateCardPage() {
   const itemSteps = detail ? yotoPlaylistWorkflowSteps(detail, jobs, yotoPlaylists) : [];
   const stageStatuses = detail ? createCardStageStatuses(detail, jobs, yotoPlaylists, selectedCard) : [];
   const itemSummary = itemSteps.length > 0 ? workflowStatusSummary(itemSteps) : null;
-  const canCreateLive = Boolean(latestPlaylist && !latestPlaylist.remote_playlist_id && !latestPlaylist.remote_playlist_uri);
+  const processingBlockedNotice = detail ? processingNotice(detail, jobs) : null;
+  const canCreateLive = Boolean(
+    latestPlaylist &&
+      !latestPlaylist.remote_playlist_id &&
+      !latestPlaylist.remote_playlist_uri &&
+      detail &&
+      !isProcessingIncomplete(detail, jobs),
+  );
   const readyToLink = Boolean(
     detail &&
       latestPlaylist &&
@@ -2791,6 +2884,14 @@ function CreateCardPage() {
             <CopyValueButton label="playlist URI" value={latestPlaylist?.remote_playlist_uri ?? null} />
             <CopyValueButton label="share link" value={latestPlaylist?.remote_share_link_url ?? null} />
           </div>
+        </div>
+      ) : null}
+      {processingBlockedNotice ? (
+        <div className="detail-note">
+          <p className="eyebrow">Processing</p>
+          <h3>Audio encoding in progress</h3>
+          <p>{processingBlockedNotice}</p>
+          <p className="muted">Yoto cloud create stays blocked until every source-backed track is processed.</p>
         </div>
       ) : null}
 
@@ -3264,6 +3365,7 @@ function LibraryDetailPage() {
   const yotoSteps = yotoPlaylistWorkflowSteps(detail, jobs, yotoPlaylists);
   const yotoSummary = workflowStatusSummary(yotoSteps);
   const currentYotoPlaylist = latestYotoPlaylist(yotoPlaylists);
+  const yotoProcessingNotice = processingNotice(detail, jobs);
 
   return (
     <section className="panel">
@@ -3628,6 +3730,13 @@ function LibraryDetailPage() {
           Required for Yoto cloud create: a title, playlist draft, and playable uploaded tracks. Cover artwork is optional.
           If you do set cover art, Yoto only receives it when it is already a public <code>http(s)</code> image URL.
         </p>
+        {yotoProcessingNotice ? (
+          <div className="detail-note">
+            <p className="eyebrow">Processing</p>
+            <h3>Encoding still running</h3>
+            <p>{yotoProcessingNotice}</p>
+          </div>
+        ) : null}
         <WorkflowChecklist steps={yotoSteps} />
         {yotoPlaylists.length === 0 ? (
           <EmptyState message="No Yoto playlist drafts queued yet." />
@@ -3666,6 +3775,7 @@ function LibraryDetailPage() {
                     <div className="button-row">
                       <button
                         className="primary-button"
+                        disabled={Boolean(yotoProcessingNotice)}
                         onClick={() => void handleCreateLiveYotoPlaylist(playlist.id)}
                         type="button"
                       >

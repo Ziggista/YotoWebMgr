@@ -903,6 +903,51 @@ def _draft_has_processed_assets(db: Session, draft: YotoPlaylistDraft) -> bool:
     return False
 
 
+def _source_backed_track_count(db: Session, item_id: int) -> int:
+    return int(
+        db.scalar(
+            select(func.count(PlaylistTrack.id))
+            .where(PlaylistTrack.library_item_id == item_id)
+            .where(PlaylistTrack.is_stream.is_(False))
+        )
+        or 0
+    )
+
+
+def _processed_track_count(db: Session, item_id: int) -> int:
+    return len(_latest_processed_asset_by_track(db, item_id))
+
+
+def _processing_job_in_progress(db: Session, item_id: int) -> Job | None:
+    return db.scalar(
+        select(Job)
+        .where(Job.related_library_item_id == item_id)
+        .where(Job.type == "transcode_audio")
+        .where(Job.status.in_(("queued", "running", "retrying")))
+        .order_by(Job.id.desc())
+        .limit(1)
+    )
+
+
+def _live_create_readiness_error(db: Session, item_id: int) -> str | None:
+    pending_job = _processing_job_in_progress(db, item_id)
+    source_track_count = _source_backed_track_count(db, item_id)
+    processed_track_count = _processed_track_count(db, item_id)
+
+    if pending_job is not None:
+        return (
+            f"Audio processing is still in progress for this item "
+            f"({processed_track_count}/{source_track_count} tracks ready, "
+            f"{pending_job.progress_percent}% complete). Wait for Process audio to finish before creating Yoto cloud content."
+        )
+    if source_track_count > 0 and processed_track_count < source_track_count:
+        return (
+            f"Audio processing is incomplete for this item "
+            f"({processed_track_count}/{source_track_count} tracks ready). Run Process audio and wait for it to finish before creating Yoto cloud content."
+        )
+    return None
+
+
 async def _upload_file_to_yoto_signed_url(upload_url: str, source_path: Path) -> None:
     content_type = mimetypes.guess_type(source_path.name)[0] or "application/octet-stream"
     async with httpx.AsyncClient(timeout=300) as client:
@@ -1767,13 +1812,16 @@ async def get_yoto_playlist_remote_payload(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Yoto playlist draft not found")
 
     payload, warnings, can_create_live = _remote_payload_preview_from_draft(draft)
-    if not can_create_live and _draft_has_processed_assets(db, draft):
+    readiness_error = _live_create_readiness_error(db, draft.library_item_id)
+    if readiness_error is not None:
+        warnings = [readiness_error]
+    elif not can_create_live and _draft_has_processed_assets(db, draft):
         warnings = [
             "Processed Yoto-ready assets exist for this draft, but the preview endpoint still shows the older local-only source payload."
         ]
     return YotoPlaylistRemotePayloadResponse(
         playlist_draft_id=draft.id,
-        can_create_live=can_create_live or _draft_has_processed_assets(db, draft),
+        can_create_live=readiness_error is None and (can_create_live or _draft_has_processed_assets(db, draft)),
         payload=payload,
         warnings=warnings,
         live_api_call=False,
@@ -1816,6 +1864,9 @@ async def create_live_yoto_playlist(
             status_code=409,
             detail="This playlist draft already has remote Yoto content. Use force=true to create another remote copy.",
         )
+    readiness_error = _live_create_readiness_error(db, item.id)
+    if readiness_error is not None:
+        raise HTTPException(status_code=409, detail=readiness_error)
 
     stored_tokens, token_refreshed = await _load_live_tokens(db=db, credential=credential)
     previous_status = draft.status
@@ -2286,10 +2337,16 @@ async def queue_bulk_create_live_yoto(
         if item is None:
             skipped_item_ids.append(item_id)
             continue
+        if not payload.force and _live_create_readiness_error(db, item_id) is not None:
+            skipped_item_ids.append(item_id)
+            continue
         unique_item_ids.append(item_id)
 
     if not unique_item_ids:
-        raise HTTPException(status_code=422, detail="No valid library items were supplied for bulk Yoto create.")
+        raise HTTPException(
+            status_code=409,
+            detail="No selected library items are ready for Yoto cloud create yet. Wait for audio processing to finish first.",
+        )
 
     job = Job(
         type="bulk_create_live_yoto",
