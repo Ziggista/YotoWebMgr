@@ -297,6 +297,28 @@ async def test_upload_import_stages_video_file_for_audio_stripping(
     assert Path(payload["source_path"]).exists()
 
 
+async def test_upload_import_stages_amr_audio_file(
+    api_client: AsyncClient,
+) -> None:
+    async with api_client as client:
+        response = await client.post(
+            "/api/v1/imports/uploads",
+            data={
+                "title": "Uploaded AMR Story",
+                "content_type": "Audiobook",
+                "requested_by_user_slug": "dale",
+            },
+            files={"media_file": ("uploaded-story.amr", b"fake amr bytes", "audio/amr")},
+        )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["source_type"] == "browser_upload"
+    assert payload["source_path"].endswith(".amr")
+    assert payload["related_job_id"] is not None
+    assert Path(payload["source_path"]).exists()
+
+
 async def test_library_list_exposes_yoto_summary(
     api_client: AsyncClient,
     db_session: Session,
@@ -2308,6 +2330,8 @@ async def test_create_live_yoto_playlist_uploads_local_audio_assets(
             assert chapters[0]["tracks"][0]["fileSize"] == processed_path.stat().st_size
             assert chapters[0]["tracks"][0]["channels"] == "mono"
             return 200, {"card": {"cardId": "REMOTE123", "title": "Uploaded Draft"}}
+        if method == "GET" and relative_url == "/content/REMOTE123":
+            return 200, {"card": {"cardId": "REMOTE123", "title": "Uploaded Draft"}}
         raise AssertionError(f"Unexpected Yoto API call: {method} {relative_url}")
 
     monkeypatch.setattr(yoto_routes, "load_tokens_from_secret", fake_load_tokens_from_secret)
@@ -2323,7 +2347,8 @@ async def test_create_live_yoto_playlist_uploads_local_audio_assets(
     assert upload_calls == [("https://signed.example.test/upload-123", str(processed_path))]
     assert api_calls[0][0] == "GET"
     assert api_calls[1] == ("GET", "/media/upload/upload-123/transcoded?loudnorm=false", None)
-    assert api_calls[2][0] == "POST"
+    assert api_calls[2] == ("POST", "/content", api_calls[2][2])
+    assert api_calls[3] == ("GET", "/content/REMOTE123", None)
 
     refreshed_draft = db_session.get(YotoPlaylistDraft, draft.id)
     refreshed_item = db_session.get(LibraryItem, item.id)
@@ -2333,6 +2358,77 @@ async def test_create_live_yoto_playlist_uploads_local_audio_assets(
     assert stored_payload["content"]["chapters"][0]["tracks"][0]["trackUrl"] == "yoto:#abc123sha"
     assert refreshed_item is not None
     assert refreshed_item.status == "yoto_remote_created"
+
+
+async def test_create_live_yoto_playlist_rejects_raw_amr_without_processed_asset(
+    api_client: AsyncClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    item = LibraryItem(
+        title="AMR Draft",
+        content_type="Other Audio",
+        status="inspected",
+        readiness_status="needs_yoto_upload",
+    )
+    db_session.add(item)
+    db_session.flush()
+    source_path = tmp_path / "voice-note.amr"
+    source_path.write_bytes(b"fake-amr")
+    track = PlaylistTrack(
+        library_item_id=item.id,
+        title="Voice Note",
+        source_path=str(source_path),
+        track_number=1,
+        duration_seconds=48,
+        is_stream=False,
+    )
+    credential = YotoCredentialState(
+        account_label="Household Yoto",
+        status="connected_tested",
+        token_storage_ref="k8s-secret:test-namespace:test-secret:yoto-credential-local.json",
+        scopes="openid offline_access user:content:manage",
+        expires_at=datetime.now(timezone.utc).replace(year=2027),
+    )
+    draft = YotoPlaylistDraft(
+        library_item_id=item.id,
+        title=item.title,
+        status="queued",
+        payload_json=json.dumps(
+            {
+                "title": item.title,
+                "chapters": [
+                    {
+                        "title": "Voice Note",
+                        "type": "audio",
+                        "source_path": str(source_path),
+                        "display_number": 1,
+                        "duration_seconds": 48,
+                    }
+                ],
+            }
+        ),
+    )
+    db_session.add_all([track, credential, draft])
+    db_session.commit()
+
+    async def fake_load_tokens_from_secret(_: str) -> StoredYotoTokens:
+        return StoredYotoTokens(
+            access_token="test-access-token",
+            refresh_token="test-refresh-token",
+            token_type="Bearer",
+            scope="openid offline_access user:content:manage",
+            expires_at=datetime.now(timezone.utc).replace(year=2027),
+        )
+
+    monkeypatch.setattr(yoto_routes, "load_tokens_from_secret", fake_load_tokens_from_secret)
+
+    async with api_client as client:
+        response = await client.post(f"/api/v1/yoto/playlists/{draft.id}/create-live", json={})
+
+    assert response.status_code == 409
+    assert "must be processed locally before Yoto live creation" in response.json()["detail"]
 
 
 async def test_create_live_yoto_playlist_allows_empty_request_body(

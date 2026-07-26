@@ -786,6 +786,11 @@ def _best_effort_audio_channels(*, channels: int | str | None) -> str | None:
     return None
 
 
+def _requires_local_yoto_processing(path: Path) -> bool:
+    # Yoto's remote transcode endpoint has proven unreliable with raw AMR uploads.
+    return path.suffix.lower() in {".amr"}
+
+
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -1042,6 +1047,14 @@ async def _build_live_payload_from_draft(
         if not source_path.exists():
             warnings.append(f"{title}: local source file is missing at {source_path}.")
             continue
+        if asset is None and _requires_local_yoto_processing(source_path):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"{title}: {source_path.suffix.lower()} must be processed locally before Yoto live creation. "
+                    "Run Process on this library item to generate a Yoto-ready MP3, then try Create Live again."
+                ),
+            )
 
         checksum = asset.checksum_sha256 if asset is not None and asset.checksum_sha256 else _sha256_file(source_path)
         upload_relative_url = "/media/transcode/audio/uploadUrl?" + urlencode(

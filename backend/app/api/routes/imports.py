@@ -18,6 +18,7 @@ from app.schemas.foundation import ImportCreate, ImportResponse, ImportReviewApp
 router = APIRouter()
 allowed_media_extensions = [
     ".aac",
+    ".amr",
     ".avi",
     ".flac",
     ".mkv",
