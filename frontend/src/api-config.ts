@@ -1,6 +1,7 @@
 const API_BASE_URL_KEY = "yotowebmgr.apiBaseUrl";
 const ANDROID_DEFAULT_API_BASE_URL = "http://ziggi-pc-1.tailaf3d4b.ts.net:5175";
 const ANDROID_UPDATE_MANIFEST_PATH = "/live-updates/android/latest.json";
+const ANDROID_ARTIFACT_MANIFEST_PATH = "/downloads/android/latest.json";
 
 export function normalizeApiBaseUrl(value: string) {
   return value.trim().replace(/\/+$/, "");
@@ -78,4 +79,9 @@ export function resolveApiUrl(path: string) {
 export function resolveAndroidUpdateManifestUrl() {
   const apiBaseUrl = getStoredApiBaseUrl();
   return apiBaseUrl ? `${apiBaseUrl}${ANDROID_UPDATE_MANIFEST_PATH}` : "";
+}
+
+export function resolveAndroidArtifactManifestUrl() {
+  const apiBaseUrl = getStoredApiBaseUrl();
+  return apiBaseUrl ? `${apiBaseUrl}${ANDROID_ARTIFACT_MANIFEST_PATH}` : "";
 }

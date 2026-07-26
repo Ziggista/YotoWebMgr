@@ -12,7 +12,6 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DIST_DIR = ROOT_DIR / "dist"
 OUTPUT_DIR = ROOT_DIR / "public" / "live-updates" / "android"
-PACKAGE_JSON = ROOT_DIR / "package.json"
 
 
 def git_short_sha() -> str:
@@ -28,14 +27,20 @@ def git_short_sha() -> str:
         return "dev"
 
 
+def load_version_meta() -> dict[str, object]:
+    raw = subprocess.check_output(["node", str(ROOT_DIR / "scripts" / "version-meta.mjs")], text=True)
+    return json.loads(raw)
+
+
 def main() -> int:
     if not DIST_DIR.exists():
         raise SystemExit(f"dist directory not found at {DIST_DIR}")
 
-    package = json.loads(PACKAGE_JSON.read_text(encoding="utf-8"))
-    app_version = str(package.get("version") or "0.0.0")
+    version_meta = load_version_meta()
+    app_version = str(version_meta.get("versionName") or "v0.1b0001")
+    app_version_code = int(version_meta.get("versionCode") or 1)
     build_sha = git_short_sha()
-    ota_version = f"{app_version}+{build_sha}"
+    ota_version = str(version_meta.get("otaVersion") or f"{app_version}+{build_sha}")
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     for existing in OUTPUT_DIR.glob("yotowebmgr-web-update-*.zip"):
@@ -48,6 +53,7 @@ def main() -> int:
         "version": ota_version,
         "build_sha": build_sha,
         "app_version": app_version,
+        "app_version_code": app_version_code,
         "bundle_url": f"/live-updates/android/{archive_path.name}",
         "generated_at": datetime.now(UTC).isoformat(),
         "notes": "Web-only OTA bundle. Native/plugin changes still require a rebuilt APK.",

@@ -15,6 +15,7 @@ ANDROID_KEYSTORE_PROPERTIES_FILE="${ANDROID_DIR}/keystore.properties"
 LOG_DIR="${LOG_DIR:-${ROOT_DIR}/scripts/dev/logs}"
 RUN_TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 GIT_SHA="$(git -C "${ROOT_DIR}" rev-parse --short HEAD 2>/dev/null || echo "nogit")"
+VERSION_META_SCRIPT="${FRONTEND_DIR}/scripts/version-meta.mjs"
 LOG_FILE="${LOG_FILE:-${LOG_DIR}/deploy-dev-${RUN_TIMESTAMP}-${GIT_SHA}.log}"
 DESTRUCTIVE_REBUILD=false
 FORCE_DESTROY=false
@@ -22,6 +23,9 @@ ANDROID_BUILD=false
 ANDROID_BUNDLE=false
 SECRET_BACKUP_FILE=""
 YOTO_STATE_BACKUP_FILE=""
+APP_BUILD_VERSION_NAME=""
+APP_BUILD_VERSION_CODE=""
+APP_BUILD_NUMBER=""
 
 if [[ -z "${MICROK8S_BIN}" && -x /snap/bin/microk8s ]]; then
   MICROK8S_BIN="/snap/bin/microk8s"
@@ -290,6 +294,33 @@ ensure_frontend_node_modules() {
   fi
 }
 
+load_version_metadata() {
+  local version_meta_json
+  if [[ ! -f "${VERSION_META_SCRIPT}" ]]; then
+    echo "Version metadata script not found at ${VERSION_META_SCRIPT}" >&2
+    exit 1
+  fi
+  version_meta_json="$(node "${VERSION_META_SCRIPT}")"
+  APP_BUILD_VERSION_NAME="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["versionName"])' <<<"${version_meta_json}")"
+  APP_BUILD_VERSION_CODE="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["versionCode"])' <<<"${version_meta_json}")"
+  APP_BUILD_NUMBER="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["buildNumber"])' <<<"${version_meta_json}")"
+}
+
+build_frontend_dist() {
+  pushd "${FRONTEND_DIR}" >/dev/null
+  VITE_APP_BUILD_SHA="${GIT_SHA}" \
+  VITE_APP_VERSION_NAME="${APP_BUILD_VERSION_NAME}" \
+  VITE_APP_VERSION_CODE="${APP_BUILD_VERSION_CODE}" \
+  VITE_APP_BUILD_NUMBER="${APP_BUILD_NUMBER}" \
+  npm run build
+  VITE_APP_BUILD_SHA="${GIT_SHA}" \
+  VITE_APP_VERSION_NAME="${APP_BUILD_VERSION_NAME}" \
+  VITE_APP_VERSION_CODE="${APP_BUILD_VERSION_CODE}" \
+  VITE_APP_BUILD_NUMBER="${APP_BUILD_NUMBER}" \
+  npm run build:ota-bundle
+  popd >/dev/null
+}
+
 prepare_frontend_ota_bundle() {
   if [[ ! -d "${FRONTEND_DIR}" ]]; then
     echo "Frontend directory not found at ${FRONTEND_DIR}" >&2
@@ -298,10 +329,7 @@ prepare_frontend_ota_bundle() {
 
   echo "Preparing frontend OTA bundle for Android web updates"
   ensure_frontend_node_modules
-  pushd "${FRONTEND_DIR}" >/dev/null
-  VITE_APP_BUILD_SHA="${GIT_SHA}" npm run build
-  VITE_APP_BUILD_SHA="${GIT_SHA}" npm run build:ota-bundle
-  popd >/dev/null
+  build_frontend_dist
 }
 
 copy_web_dist_into_android_assets() {
@@ -369,9 +397,109 @@ ensure_android_local_properties() {
   echo "Wrote ${ANDROID_LOCAL_PROPERTIES_FILE}"
 }
 
+build_android_artifacts() {
+  local -n gradle_tasks_ref=$1
+  local -n output_paths_ref=$2
+  local build_label="$3"
+
+  echo "Building Android ${build_label}"
+  if [[ ! -d "${FRONTEND_DIR}" ]]; then
+    echo "Frontend directory not found at ${FRONTEND_DIR}" >&2
+    exit 1
+  fi
+
+  pushd "${FRONTEND_DIR}" >/dev/null
+  ensure_android_local_properties
+  ensure_frontend_node_modules
+  build_frontend_dist
+  if [[ "$(node_major_version)" =~ ^[0-9]+$ ]] && (( $(node_major_version) >= 22 )); then
+    npx cap sync android
+    override_android_plugin_settings
+  else
+    echo "Node $(node -v) is below Capacitor CLI's required Node 22 runtime; skipping 'cap sync' and using asset-copy fallback"
+    echo "Fallback assumption: the existing Android wrapper is already checked in and no native Capacitor plugin set changed."
+    copy_web_dist_into_android_assets
+    override_android_plugin_settings
+  fi
+  popd >/dev/null
+
+  if [[ ! -x "${ANDROID_DIR}/gradlew" ]]; then
+    echo "Android Gradle wrapper not found at ${ANDROID_DIR}/gradlew" >&2
+    exit 1
+  fi
+
+  pushd "${ANDROID_DIR}" >/dev/null
+  ./gradlew "${gradle_tasks_ref[@]}"
+  popd >/dev/null
+
+  echo "Android ${build_label} built:"
+  for android_output_path in "${output_paths_ref[@]}"; do
+    echo "  ${android_output_path}"
+  done
+  echo
+}
+
+publish_android_artifacts() {
+  local output_dir="${FRONTEND_DIR}/public/downloads/android"
+
+  mkdir -p "${output_dir}"
+  find "${output_dir}" -mindepth 1 -maxdepth 1 -type f ! -name ".gitkeep" -delete
+
+  python3 - <<PY
+import json
+from datetime import UTC, datetime
+from pathlib import Path
+import shutil
+
+output_dir = Path(r"${output_dir}")
+version_name = "${APP_BUILD_VERSION_NAME}"
+version_code = int("${APP_BUILD_VERSION_CODE}")
+build_sha = "${GIT_SHA}"
+artifacts = []
+
+for source in [Path(r"${ANDROID_DIR}/app/build/outputs/apk/debug/app-debug.apk"), Path(r"${ANDROID_DIR}/app/build/outputs/apk/release/app-release.apk"), Path(r"${ANDROID_DIR}/app/build/outputs/bundle/release/app-release.aab")]:
+    if not source.exists():
+        continue
+    kind = "apk" if source.suffix.lower() == ".apk" else "aab"
+    channel = "release" if "release" in source.parts else "debug"
+    destination_name = f"yotowebmgr-{version_name}-{channel}.{kind}"
+    destination = output_dir / destination_name
+    shutil.copy2(source, destination)
+    artifacts.append(
+        {
+            "channel": channel,
+            "kind": kind,
+            "file_name": destination.name,
+            "url": f"/downloads/android/{destination.name}",
+            "size_bytes": destination.stat().st_size,
+            "generated_at": datetime.now(UTC).isoformat(),
+        }
+    )
+
+preferred = next((artifact for artifact in artifacts if artifact["kind"] == "apk" and artifact["channel"] == "release"), None)
+if preferred is None:
+    preferred = next((artifact for artifact in artifacts if artifact["kind"] == "apk"), None)
+if preferred is None and artifacts:
+    preferred = artifacts[0]
+
+manifest = {
+    "version_name": version_name,
+    "version_code": version_code,
+    "build_sha": build_sha,
+    "generated_at": datetime.now(UTC).isoformat(),
+    "preferred_artifact": preferred,
+    "artifacts": artifacts,
+}
+(output_dir / "latest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+print(f"Published {len(artifacts)} Android artifact(s) to {output_dir}")
+PY
+}
+
 echo "YotoWebMgr dev deploy"
 echo "UTC timestamp: ${RUN_TIMESTAMP}"
 echo "Git SHA: ${GIT_SHA}"
+load_version_metadata
+echo "App version: ${APP_BUILD_VERSION_NAME} (code ${APP_BUILD_VERSION_CODE})"
 echo "Log file: ${LOG_FILE}"
 echo "Destructive rebuild: ${DESTRUCTIVE_REBUILD}"
 echo "Force destroy: ${FORCE_DESTROY}"
@@ -417,7 +545,31 @@ else
 fi
 
 prepare_frontend_ota_bundle
-"${ROOT_DIR}/k8s/scripts/build-images.sh"
+if [[ "${ANDROID_BUILD}" == "true" || "${ANDROID_BUNDLE}" == "true" ]]; then
+  android_gradle_tasks=("assembleDebug")
+  android_output_paths=("${ANDROID_DIR}/app/build/outputs/apk/debug/app-debug.apk")
+  android_build_label="debug APK"
+  if [[ "${ANDROID_BUNDLE}" == "true" ]]; then
+    if [[ ! -f "${ANDROID_KEYSTORE_PROPERTIES_FILE}" ]]; then
+      echo "Android app bundle builds require ${ANDROID_KEYSTORE_PROPERTIES_FILE} so Gradle can sign the release bundle." >&2
+      exit 1
+    fi
+    android_gradle_tasks=("bundleRelease" "assembleRelease")
+    android_output_paths=(
+      "${ANDROID_DIR}/app/build/outputs/bundle/release/app-release.aab"
+      "${ANDROID_DIR}/app/build/outputs/apk/release/app-release.apk"
+    )
+    android_build_label="signed release app bundle and APK"
+  elif [[ -f "${ANDROID_KEYSTORE_PROPERTIES_FILE}" ]]; then
+    android_gradle_tasks=("assembleRelease")
+    android_output_paths=("${ANDROID_DIR}/app/build/outputs/apk/release/app-release.apk")
+    android_build_label="signed release APK"
+  fi
+
+  build_android_artifacts android_gradle_tasks android_output_paths "${android_build_label}"
+fi
+publish_android_artifacts
+APP_BUILD_VERSION_NAME="${APP_BUILD_VERSION_NAME}" APP_BUILD_VERSION_CODE="${APP_BUILD_VERSION_CODE}" "${ROOT_DIR}/k8s/scripts/build-images.sh"
 
 "${MICROK8S_BIN}" kubectl apply -k "${ROOT_DIR}/k8s/overlays/dev"
 if [[ -n "${SECRET_BACKUP_FILE}" && -f "${SECRET_BACKUP_FILE}" ]]; then
@@ -450,66 +602,6 @@ echo
 echo "Recent frontend logs:"
 "${MICROK8S_BIN}" kubectl -n "${NAMESPACE}" logs deployment/frontend --tail=200 || true
 echo
-
-if [[ "${ANDROID_BUILD}" == "true" || "${ANDROID_BUNDLE}" == "true" ]]; then
-  android_gradle_tasks=("assembleDebug")
-  android_output_paths=("${ANDROID_DIR}/app/build/outputs/apk/debug/app-debug.apk")
-  android_build_label="debug APK"
-  if [[ "${ANDROID_BUNDLE}" == "true" ]]; then
-    if [[ ! -f "${ANDROID_KEYSTORE_PROPERTIES_FILE}" ]]; then
-      echo "Android app bundle builds require ${ANDROID_KEYSTORE_PROPERTIES_FILE} so Gradle can sign the release bundle." >&2
-      exit 1
-    fi
-    android_gradle_tasks=("bundleRelease" "assembleRelease")
-    android_output_paths=(
-      "${ANDROID_DIR}/app/build/outputs/bundle/release/app-release.aab"
-      "${ANDROID_DIR}/app/build/outputs/apk/release/app-release.apk"
-    )
-    android_build_label="signed release app bundle and APK"
-  elif [[ -f "${ANDROID_KEYSTORE_PROPERTIES_FILE}" ]]; then
-    android_gradle_tasks=("assembleRelease")
-    android_output_paths=("${ANDROID_DIR}/app/build/outputs/apk/release/app-release.apk")
-    android_build_label="signed release APK"
-  fi
-
-  echo "Building Android ${android_build_label}"
-  if [[ ! -d "${FRONTEND_DIR}" ]]; then
-    echo "Frontend directory not found at ${FRONTEND_DIR}" >&2
-    exit 1
-  fi
-
-  pushd "${FRONTEND_DIR}" >/dev/null
-  ensure_android_local_properties
-  ensure_frontend_node_modules
-  VITE_APP_BUILD_SHA="${GIT_SHA}" npm run build
-  VITE_APP_BUILD_SHA="${GIT_SHA}" npm run build:ota-bundle
-  if [[ "$(node_major_version)" =~ ^[0-9]+$ ]] && (( $(node_major_version) >= 22 )); then
-    npx cap sync android
-    override_android_plugin_settings
-  else
-    echo "Node $(node -v) is below Capacitor CLI's required Node 22 runtime; skipping 'cap sync' and using asset-copy fallback"
-    echo "Fallback assumption: the existing Android wrapper is already checked in and no native Capacitor plugin set changed."
-    copy_web_dist_into_android_assets
-    override_android_plugin_settings
-  fi
-  popd >/dev/null
-
-  if [[ ! -x "${ANDROID_DIR}/gradlew" ]]; then
-    echo "Android Gradle wrapper not found at ${ANDROID_DIR}/gradlew" >&2
-    exit 1
-  fi
-
-  pushd "${ANDROID_DIR}" >/dev/null
-  ./gradlew "${android_gradle_tasks[@]}"
-  popd >/dev/null
-
-  echo "Android ${android_build_label} built:"
-  for android_output_path in "${android_output_paths[@]}"; do
-    echo "  ${android_output_path}"
-  done
-  echo
-fi
-
 echo "Dev deployment is ready."
 echo "Ensuring the Kubernetes frontend is forwarded."
 BIND_ADDRESS="${BIND_ADDRESS}" bash "${ROOT_DIR}/k8s/scripts/ensure-dev-port-forward.sh"

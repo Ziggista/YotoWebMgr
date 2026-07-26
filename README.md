@@ -127,6 +127,12 @@ scripts/dev/seed-radio.sh  # add the ABC Triple J test stream to the current dev
 scripts/media/seed-copyleft-test-media.sh # seed local audiobook + kids album fixtures outside Git
 ```
 
+When you deploy with `--android-build` or `--android-bundle`, the script now stamps the Android
+wrapper with a user-facing version like `v0.1b0098`, uses the matching integer build number as the
+Android `versionCode`, and publishes the generated APK/AAB metadata to the frontend under
+`/downloads/android/latest.json`. The Settings page uses that manifest to offer a direct APK
+download from the live dev server.
+
 PowerShell wrappers are also available:
 
 ```text

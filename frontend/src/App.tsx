@@ -18,6 +18,8 @@ import {
   CardScanDumpEntry,
   CardPlan,
   CreateLiveYotoPlaylistResponse,
+  createLibraryItem,
+  createPlaylistTrack,
   ImportSourceInfo,
   ImportRequest,
   Job,
@@ -100,7 +102,7 @@ import {
   uploadImport,
   updateImportReview,
 } from "./api";
-import { resolveAndroidUpdateManifestUrl } from "./api-config";
+import { resolveAndroidArtifactManifestUrl, resolveAndroidUpdateManifestUrl } from "./api-config";
 import "./App.css";
 
 const sections = ["Library", "Create", "Import", "Cards", "Jobs", "Tags", "Settings"];
@@ -121,6 +123,8 @@ const yotoPkceExchangeKey = "yotowebmgr.yoto.pkce.exchange";
 const yotoNativeRedirectUri = "com.yoto.webmanager://settings/yoto/callback";
 const yotoWebCallbackPath = "/settings/yoto/callback";
 const frontendBuildSha = import.meta.env.VITE_APP_BUILD_SHA ?? "dev";
+const frontendVersionName = import.meta.env.VITE_APP_VERSION_NAME ?? "v0.1b0001";
+const frontendVersionCode = import.meta.env.VITE_APP_VERSION_CODE ?? "1";
 const readyToLinkNotificationStorageKey = "yotowebmgr.notifications.readyToLink";
 const yotoDebugPresets = [
   { label: "MYO content", method: "GET" as const, path: "/content/mine?showdeleted=false" },
@@ -141,9 +145,28 @@ type AndroidUpdateManifest = {
   version: string;
   build_sha: string;
   app_version: string;
+  app_version_code?: number;
   bundle_url: string;
   generated_at: string;
   notes?: string;
+};
+
+type AndroidArtifact = {
+  channel: "debug" | "release";
+  kind: "apk" | "aab";
+  file_name: string;
+  url: string;
+  size_bytes: number;
+  generated_at: string;
+};
+
+type AndroidArtifactManifest = {
+  version_name: string;
+  version_code: number;
+  build_sha: string;
+  generated_at: string;
+  preferred_artifact: AndroidArtifact | null;
+  artifacts: AndroidArtifact[];
 };
 
 type AndroidUpdateState =
@@ -768,6 +791,154 @@ function isJobActive(job: Job | null | undefined): boolean {
 
 function hasActiveJobs(jobs: Job[]): boolean {
   return jobs.some((job) => isJobActive(job));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function waitForItemsToFinishProcessing(
+  itemIds: number[],
+  onProgress?: (message: string) => void,
+): Promise<void> {
+  const uniqueItemIds = Array.from(new Set(itemIds));
+  const startedAt = Date.now();
+  const timeoutMs = 30 * 60 * 1000;
+
+  while (true) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error("Timed out waiting for audio processing to finish before Yoto send.");
+    }
+
+    const [jobs, details] = await Promise.all([
+      fetchJobs(),
+      Promise.all(uniqueItemIds.map((itemId) => fetchLibraryItemDetail(itemId))),
+    ]);
+
+    let readyCount = 0;
+    for (const detail of details) {
+      const coverage = processedTrackCoverage(detail);
+      const processingJob = latestJobForItem(
+        jobs.filter((job) => job.related_library_item_id === detail.item.id),
+        "transcode_audio",
+      );
+      if (processingJob?.status === "failed") {
+        throw new Error(processingJob.error_summary || `Audio processing failed for ${detail.item.title}.`);
+      }
+      if (coverage.total > 0 && coverage.processed >= coverage.total && !isJobActive(processingJob)) {
+        readyCount += 1;
+      }
+    }
+
+    if (readyCount === uniqueItemIds.length) {
+      onProgress?.(`Audio ready for ${readyCount}/${uniqueItemIds.length} item(s). Sending to Yoto.`);
+      return;
+    }
+
+    const firstActiveJob = jobs.find(
+      (job) =>
+        job.type === "transcode_audio" &&
+        uniqueItemIds.includes(job.related_library_item_id ?? -1) &&
+        isJobActive(job),
+    );
+    onProgress?.(
+      firstActiveJob
+        ? `Waiting for audio processing: ${readyCount}/${uniqueItemIds.length} ready. ${firstActiveJob.progress_message}`
+        : `Waiting for audio processing: ${readyCount}/${uniqueItemIds.length} ready.`,
+    );
+    await sleep(5000);
+  }
+}
+
+async function sendLibraryItemsToYotoOneStep(
+  itemIds: number[],
+  onProgress?: (message: string) => void,
+) {
+  const uniqueItemIds = Array.from(new Set(itemIds));
+  if (uniqueItemIds.length === 0) {
+    throw new Error("Choose one or more library items first.");
+  }
+
+  const [jobs, details] = await Promise.all([
+    fetchJobs(),
+    Promise.all(uniqueItemIds.map((itemId) => fetchLibraryItemDetail(itemId))),
+  ]);
+
+  for (const detail of details) {
+    const itemJobs = jobs.filter((job) => job.related_library_item_id === detail.item.id);
+    const processingJob = latestJobForItem(itemJobs, "transcode_audio");
+    const coverage = processedTrackCoverage(detail);
+    if (coverage.total === 0) {
+      throw new Error(`${detail.item.title} has no non-stream tracks to process for Yoto.`);
+    }
+    if (processingJob?.status === "failed") {
+      throw new Error(processingJob.error_summary || `Audio processing failed for ${detail.item.title}.`);
+    }
+    if (coverage.processed < coverage.total && !isJobActive(processingJob)) {
+      onProgress?.(`Queueing audio processing for ${detail.item.title}.`);
+      await queueLibraryItemProcessing(detail.item.id);
+    }
+  }
+
+  await waitForItemsToFinishProcessing(uniqueItemIds, onProgress);
+  onProgress?.(`Queueing Yoto cloud create for ${uniqueItemIds.length} item(s).`);
+  return queueBulkCreateLiveYoto({
+    library_item_ids: uniqueItemIds,
+    mark_linked_cards_ready: false,
+  });
+}
+
+async function createMergedLibraryItemFromSelections(
+  itemIds: number[],
+  playlistTitle: string,
+  ownerUserSlug: string,
+  onProgress?: (message: string) => void,
+): Promise<LibraryItem> {
+  const uniqueItemIds = Array.from(new Set(itemIds));
+  if (uniqueItemIds.length < 2) {
+    throw new Error("Select two or more library items to merge.");
+  }
+
+  const details = await Promise.all(uniqueItemIds.map((itemId) => fetchLibraryItemDetail(itemId)));
+  const firstDetail = details[0];
+  const mergedItem = await createLibraryItem({
+    title: playlistTitle,
+    content_type:
+      details.every((detail) => detail.item.content_type === firstDetail.item.content_type)
+        ? firstDetail.item.content_type
+        : "Custom Playlist",
+    cover_art_path: firstDetail.item.cover_art_path,
+    playlist_always_play_from_start: firstDetail.item.playlist_always_play_from_start,
+    playlist_shuffle_tracks: firstDetail.item.playlist_shuffle_tracks,
+    playlist_hide_track_numbers: firstDetail.item.playlist_hide_track_numbers,
+    notes: `Merged from library items: ${details.map((detail) => detail.item.title).join(", ")}`,
+    owner_user_slug: ownerUserSlug,
+  });
+
+  let trackNumber = 1;
+  for (const detail of details) {
+    const orderedTracks = [...detail.tracks].sort((left, right) => left.track_number - right.track_number);
+    for (const track of orderedTracks) {
+      onProgress?.(`Adding ${track.title} to merged playlist ${playlistTitle}.`);
+      await createPlaylistTrack(mergedItem.id, {
+        title: track.title,
+        source_path: track.source_path,
+        source_url: track.source_url,
+        source_start_seconds: track.source_start_seconds,
+        source_end_seconds: track.source_end_seconds,
+        track_number: trackNumber,
+        duration_seconds: track.duration_seconds,
+        icon_path: track.icon_path,
+        track_behavior: track.track_behavior,
+        is_stream: track.is_stream,
+        stream_url: track.stream_url,
+        podcast_episode_guid: track.podcast_episode_guid,
+      });
+      trackNumber += 1;
+    }
+  }
+
+  return mergedItem;
 }
 
 function workflowStageTone(stage: "done" | "active" | "blocked"): "ok" | "active" | "muted" {
@@ -1607,7 +1778,7 @@ async function createPkcePair(): Promise<{ verifier: string; challenge: string }
   };
 }
 
-function LibraryPage() {
+function LibraryPage({ session }: { session: SessionResponse }) {
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
@@ -1632,6 +1803,12 @@ function LibraryPage() {
   const [linking, setLinking] = useState(false);
   const [bulkYotoItemIds, setBulkYotoItemIds] = useState<number[]>([]);
   const [bulkYotoProcessing, setBulkYotoProcessing] = useState(false);
+  const [bulkYotoMergeName, setBulkYotoMergeName] = useState("");
+  const [bulkYotoMergeMode, setBulkYotoMergeMode] = useState<"new" | "existing">("new");
+  const [bulkYotoMergeProcessing, setBulkYotoMergeProcessing] = useState(false);
+  const [bulkYotoExistingPlaylistUri, setBulkYotoExistingPlaylistUri] = useState("");
+  const [remoteYotoCards, setRemoteYotoCards] = useState<YotoRemoteCard[]>([]);
+  const [loadingRemoteYotoCards, setLoadingRemoteYotoCards] = useState(false);
   const bulkYotoProcessingRef = useRef(false);
 
   async function refreshLibraryList() {
@@ -1657,7 +1834,7 @@ function LibraryPage() {
 
   useEffect(() => {
     setBulkYotoItemIds((current) =>
-      current.filter((itemId) => items.some((item) => item.id === itemId && itemNeedsYotoCloudCreate(item))),
+      current.filter((itemId) => items.some((item) => item.id === itemId)),
     );
   }, [items]);
 
@@ -1671,14 +1848,30 @@ function LibraryPage() {
     return () => window.clearInterval(intervalId);
   }, [jobs, filters.search, filters.content_type, filters.tag_id]);
 
+  useEffect(() => {
+    if (bulkYotoMergeMode !== "existing" || remoteYotoCards.length > 0 || loadingRemoteYotoCards) {
+      return;
+    }
+    setLoadingRemoteYotoCards(true);
+    void fetchYotoRemoteContent(false)
+      .then((response) => {
+        setRemoteYotoCards(response.cards);
+        if (!bulkYotoExistingPlaylistUri && response.cards[0]?.playlist_uri) {
+          setBulkYotoExistingPlaylistUri(response.cards[0].playlist_uri);
+        }
+      })
+      .catch((loadError) =>
+        setError(loadError instanceof Error ? loadError.message : "Failed to load remote Yoto playlists."),
+      )
+      .finally(() => setLoadingRemoteYotoCards(false));
+  }, [bulkYotoMergeMode, bulkYotoExistingPlaylistUri, loadingRemoteYotoCards, remoteYotoCards.length]);
+
   const processingJobByItemId = new Map(
     jobs
       .filter((job) => job.type === "transcode_audio" && isJobActive(job) && job.related_library_item_id !== null)
       .map((job) => [job.related_library_item_id as number, job] as const),
   );
-  const yotoSelectableItems = items.filter(
-    (item) => itemNeedsYotoCloudCreate(item) && !processingJobByItemId.has(item.id),
-  );
+  const yotoSelectableItems = items;
   const allYotoSelectableChecked =
     yotoSelectableItems.length > 0 && yotoSelectableItems.every((item) => bulkYotoItemIds.includes(item.id));
 
@@ -1991,10 +2184,7 @@ function LibraryPage() {
       return;
     }
     const selectedItems = items.filter(
-      (item) =>
-        bulkYotoItemIds.includes(item.id) &&
-        itemNeedsYotoCloudCreate(item) &&
-        !processingJobByItemId.has(item.id),
+      (item) => bulkYotoItemIds.includes(item.id) && itemNeedsYotoCloudCreate(item),
     );
     if (selectedItems.length === 0) {
       setError("Choose one or more library items that still need Yoto cloud content.");
@@ -2007,15 +2197,17 @@ function LibraryPage() {
     setLinkMessage(null);
 
     try {
-      const result = await queueBulkCreateLiveYoto({
-        library_item_ids: selectedItems.map((item) => item.id),
-        mark_linked_cards_ready: false,
-      });
+      const result = await sendLibraryItemsToYotoOneStep(
+        selectedItems.map((item) => item.id),
+        setLinkMessage,
+      );
       setLinkMessage(
         `Queued backend Yoto create job #${result.job.id} for ${result.queued_item_ids.length} item(s)${
           result.skipped_item_ids.length > 0 ? `, skipped ${result.skipped_item_ids.length}` : ""
         }.`,
       );
+    } catch (processingError) {
+      setError(processingError instanceof Error ? processingError.message : "Failed to send selected items to Yoto.");
     } finally {
       await refreshLibraryList();
       if (detail) {
@@ -2023,6 +2215,65 @@ function LibraryPage() {
       }
       setBulkYotoItemIds([]);
       setBulkYotoProcessing(false);
+      bulkYotoProcessingRef.current = false;
+    }
+  }
+
+  async function handleCreateMergedYotoSelection() {
+    if (bulkYotoProcessingRef.current) {
+      return;
+    }
+    const selectedItems = items.filter((item) => bulkYotoItemIds.includes(item.id));
+    if (selectedItems.length < 2) {
+      setError("Select two or more library items to merge into one Yoto playlist.");
+      return;
+    }
+    if (!bulkYotoMergeName.trim()) {
+      setError("Enter a merged playlist name first.");
+      return;
+    }
+    if (bulkYotoMergeMode === "existing" && !bulkYotoExistingPlaylistUri.trim()) {
+      setError("Choose an existing remote Yoto playlist to map the merged item to.");
+      return;
+    }
+
+    bulkYotoProcessingRef.current = true;
+    setBulkYotoMergeProcessing(true);
+    setError(null);
+    setLinkMessage(null);
+
+    try {
+      const mergedItem = await createMergedLibraryItemFromSelections(
+        bulkYotoItemIds,
+        bulkYotoMergeName.trim(),
+        session.user.slug,
+        setLinkMessage,
+      );
+      if (bulkYotoMergeMode === "new") {
+        const result = await sendLibraryItemsToYotoOneStep([mergedItem.id], setLinkMessage);
+        setLinkMessage(
+          `Created merged item "${mergedItem.title}" and queued Yoto job #${result.job.id}.`,
+        );
+      } else {
+        const queued = await queueYotoPlaylist(mergedItem.id);
+        const selectedRemoteCard =
+          remoteYotoCards.find((card) => card.playlist_uri === bulkYotoExistingPlaylistUri) ?? null;
+        await updateYotoPlaylistRemoteLink(queued.playlist.id, {
+          remote_playlist_id: selectedRemoteCard?.card_id ?? null,
+          remote_playlist_uri: bulkYotoExistingPlaylistUri,
+          mark_linked_manually: false,
+        });
+        setLinkMessage(
+          `Created merged item "${mergedItem.title}" and mapped it to existing Yoto playlist ${bulkYotoExistingPlaylistUri}.`,
+        );
+      }
+      setBulkYotoItemIds([]);
+      setBulkYotoMergeName("");
+      await refreshLibraryList();
+    } catch (mergeError) {
+      setError(mergeError instanceof Error ? mergeError.message : "Failed to merge selected items.");
+    } finally {
+      setBulkYotoMergeProcessing(false);
       bulkYotoProcessingRef.current = false;
     }
   }
@@ -2076,17 +2327,58 @@ function LibraryPage() {
             />
             <span>
               {bulkYotoItemIds.length > 0
-                ? `${bulkYotoItemIds.length} item(s) selected for Yoto cloud`
-                : `${yotoSelectableItems.length} item(s) still need Yoto cloud content`}
+                ? `${bulkYotoItemIds.length} item(s) selected`
+                : `${yotoSelectableItems.length} item(s) available for Yoto actions`}
             </span>
           </label>
+          <input
+            onChange={(event) => setBulkYotoMergeName(event.target.value)}
+            placeholder="Merged playlist name"
+            value={bulkYotoMergeName}
+          />
+          <select
+            onChange={(event) => setBulkYotoMergeMode(event.target.value as "new" | "existing")}
+            value={bulkYotoMergeMode}
+          >
+            <option value="new">Create new Yoto playlist</option>
+            <option value="existing">Map to existing Yoto playlist</option>
+          </select>
+          {bulkYotoMergeMode === "existing" ? (
+            <select
+              disabled={loadingRemoteYotoCards || remoteYotoCards.length === 0}
+              onChange={(event) => setBulkYotoExistingPlaylistUri(event.target.value)}
+              value={bulkYotoExistingPlaylistUri}
+            >
+              {loadingRemoteYotoCards ? <option value="">Loading remote playlists</option> : null}
+              {!loadingRemoteYotoCards && remoteYotoCards.length === 0 ? (
+                <option value="">No remote playlists found</option>
+              ) : null}
+              {remoteYotoCards.map((card) => (
+                <option key={card.card_id} value={card.playlist_uri}>
+                  {card.title}
+                </option>
+              ))}
+            </select>
+          ) : null}
           <button
             className="primary-button"
             disabled={bulkYotoProcessing || bulkYotoItemIds.length === 0}
             onClick={() => void handleBulkProcessToYoto()}
             type="button"
           >
-            {bulkYotoProcessing ? "Processing selected items" : "Process selected to Yoto"}
+            {bulkYotoProcessing ? "Sending selected items" : "Send selected to Yoto"}
+          </button>
+          <button
+            className="secondary-button"
+            disabled={bulkYotoMergeProcessing || bulkYotoItemIds.length < 2 || !bulkYotoMergeName.trim()}
+            onClick={() => void handleCreateMergedYotoSelection()}
+            type="button"
+          >
+            {bulkYotoMergeProcessing
+              ? "Building merged playlist"
+              : bulkYotoMergeMode === "existing"
+                ? "Merge and map to existing playlist"
+                : "Merge and send as new playlist"}
           </button>
         </div>
       ) : null}
@@ -2101,16 +2393,13 @@ function LibraryPage() {
                 return (
               <div>
                 <div className="library-row-heading">
-                  {itemNeedsYotoCloudCreate(item) ? (
-                    <label className="library-row-checkbox">
-                      <input
-                        checked={bulkYotoItemIds.includes(item.id)}
-                        disabled={Boolean(itemProcessingJob)}
-                        onChange={(event) => toggleBulkYotoItem(item.id, event.target.checked)}
-                        type="checkbox"
-                      />
-                    </label>
-                  ) : null}
+                  <label className="library-row-checkbox">
+                    <input
+                      checked={bulkYotoItemIds.includes(item.id)}
+                      onChange={(event) => toggleBulkYotoItem(item.id, event.target.checked)}
+                      type="checkbox"
+                    />
+                  </label>
                   <div>
                     <h3>{item.title}</h3>
                 <p className="muted">
@@ -3961,8 +4250,11 @@ function ImportPage({ session }: { session: SessionResponse }) {
   });
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
+  const [autoApproveUpload, setAutoApproveUpload] = useState(true);
+  const [autoSendToYoto, setAutoSendToYoto] = useState(true);
 
   async function refreshImports() {
     const [nextImports, nextJobs] = await Promise.all([fetchImports(), fetchJobs()]);
@@ -3990,13 +4282,15 @@ function ImportPage({ session }: { session: SessionResponse }) {
     event.preventDefault();
     setSubmitting(true);
     setError(null);
+    setMessage(null);
     try {
+      let createdImport: ImportRequest;
       if (mode === "upload") {
         if (!selectedFile) {
           throw new Error("Choose a media file to upload.");
         }
         setUploadProgress({ loaded: 0, total: selectedFile.size || null, percent: 0 });
-        await uploadImport({
+        createdImport = await uploadImport({
           title: form.title,
           content_type: form.content_type,
           requested_by_user_slug: session.user.slug,
@@ -4004,7 +4298,7 @@ function ImportPage({ session }: { session: SessionResponse }) {
           onProgress: setUploadProgress,
         });
       } else {
-        await createImport({
+        createdImport = await createImport({
           title: form.title,
           source_type: "filesystem",
           source_path: form.source_path || null,
@@ -4012,6 +4306,27 @@ function ImportPage({ session }: { session: SessionResponse }) {
           requested_by_user_slug: session.user.slug,
         });
       }
+
+      if (autoApproveUpload) {
+        setMessage(`Approving import ${createdImport.title}.`);
+        createdImport = await approveImportReview(createdImport.id, session.user.slug);
+      }
+
+      if (mode === "upload" && autoSendToYoto) {
+        if (!createdImport.related_library_item_id) {
+          throw new Error("The uploaded import did not create a library item that can be sent to Yoto.");
+        }
+        const result = await sendLibraryItemsToYotoOneStep(
+          [createdImport.related_library_item_id],
+          setMessage,
+        );
+        setMessage(`Upload approved and queued to Yoto as job #${result.job.id}.`);
+      } else if (autoApproveUpload) {
+        setMessage(`Import ${createdImport.title} was auto-approved.`);
+      } else {
+        setMessage(`Queued import ${createdImport.title}.`);
+      }
+
       setForm({ title: "", source_path: "", content_type: "Audiobook" });
       setSelectedFile(null);
       await refreshImports();
@@ -4147,6 +4462,28 @@ function ImportPage({ session }: { session: SessionResponse }) {
               Uploads are staged in{" "}
               {sources?.browser_upload_path ?? "/var/lib/yotowebmgr/media/imports/uploads"}.
             </p>
+            <label className="checkbox-row">
+              <input
+                checked={autoApproveUpload}
+                onChange={(event) => {
+                  setAutoApproveUpload(event.target.checked);
+                  if (!event.target.checked) {
+                    setAutoSendToYoto(false);
+                  }
+                }}
+                type="checkbox"
+              />
+              Auto-approve this upload
+            </label>
+            <label className="checkbox-row">
+              <input
+                checked={autoSendToYoto}
+                disabled={!autoApproveUpload}
+                onChange={(event) => setAutoSendToYoto(event.target.checked)}
+                type="checkbox"
+              />
+              Auto-send this upload to Yoto
+            </label>
             {uploadProgress ? (
               <div className="upload-progress" aria-live="polite">
                 <div
@@ -4198,6 +4535,7 @@ function ImportPage({ session }: { session: SessionResponse }) {
         </div>
       </form>
       {error ? <p className="auth-error">{error}</p> : null}
+      {message ? <p className="muted">{message}</p> : null}
 
       {reviewingImportId !== null ? (
         <div className="review-panel">
@@ -6679,8 +7017,11 @@ function SettingsPage() {
   const [customDebugPath, setCustomDebugPath] = useState("/content/mine?showdeleted=false");
   const [customDebugBody, setCustomDebugBody] = useState("");
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermissionState | null>(null);
+  const [androidArtifacts, setAndroidArtifacts] = useState<AndroidArtifactManifest | null>(null);
+  const [androidArtifactError, setAndroidArtifactError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const androidArtifactManifestUrl = resolveAndroidArtifactManifestUrl();
 
   useEffect(() => {
     void Promise.all([fetchSettings(), fetchYotoCredentialStatus()])
@@ -6702,7 +7043,22 @@ function SettingsPage() {
         setError(loadError instanceof Error ? loadError.message : "Failed to load settings."),
       );
     void getNotificationPermissionState().then(setNotificationPermission).catch(() => undefined);
-  }, []);
+    if (androidArtifactManifestUrl) {
+      void fetch(androidArtifactManifestUrl, { cache: "no-store" })
+        .then(async (response) => {
+          if (!response.ok) {
+            throw new Error("No hosted Android package is published on this webserver yet.");
+          }
+          return response.json() as Promise<AndroidArtifactManifest>;
+        })
+        .then(setAndroidArtifacts)
+        .catch((loadError) =>
+          setAndroidArtifactError(
+            loadError instanceof Error ? loadError.message : "Failed to load the hosted Android package manifest.",
+          ),
+        );
+    }
+  }, [androidArtifactManifestUrl]);
 
   async function handleRequestNotificationPermission() {
     setSaving(true);
@@ -7278,6 +7634,51 @@ function SettingsPage() {
         </div>
         <div className="settings-connection-panel">
           <div>
+            <h3 className="settings-section-title">Android app package</h3>
+            <p className="settings-note">
+              Native build: {frontendVersionName} Â· code {frontendVersionCode} Â· UI {frontendBuildSha}
+            </p>
+            {androidArtifacts ? (
+              <p className="settings-note">
+                Hosted package: {androidArtifacts.version_name} Â· code {androidArtifacts.version_code} Â· build{" "}
+                {androidArtifacts.build_sha}
+              </p>
+            ) : (
+              <p className="settings-note">
+                {androidArtifactError ?? "Run the deploy script with --android-build or --android-bundle to publish a downloadable package here."}
+              </p>
+            )}
+          </div>
+          {androidArtifacts ? (
+            <div className="version-list">
+              {androidArtifacts.artifacts.map((artifact) => (
+                <article className="version-row" key={`${artifact.channel}-${artifact.kind}-${artifact.file_name}`}>
+                  <div>
+                    <h3>
+                      {artifact.channel === "release" ? "Release" : "Debug"} {artifact.kind.toUpperCase()}
+                    </h3>
+                    <p className="muted">
+                      {Math.max(1, Math.round(artifact.size_bytes / 1024 / 1024))} MB Â· {artifact.file_name}
+                    </p>
+                  </div>
+                  <div className="version-actions">
+                    {androidArtifacts.preferred_artifact?.file_name === artifact.file_name ? (
+                      <span className="status-pill">Recommended</span>
+                    ) : null}
+                    <a
+                      className="secondary-button"
+                      href={new URL(artifact.url, androidArtifactManifestUrl).toString()}
+                    >
+                      Download
+                    </a>
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : null}
+        </div>
+        <div className="settings-connection-panel">
+          <div>
             <h3 className="settings-section-title">Android notifications</h3>
             <p className="settings-note">
               When a library item reaches the ready-to-link stage, the Android app can show a native notification so
@@ -7742,6 +8143,8 @@ function BuildStamp() {
       <div className="build-stamp-row">
         <span className={indicatorClass} aria-hidden="true" />
         <strong>Build</strong>
+        <span className="build-chip">{frontendVersionName}</span>
+        <span className="build-chip">Code {frontendVersionCode}</span>
         <span className="build-chip">UI {frontendBuildSha}</span>
         <span className="build-chip">API {backendSha}</span>
         <span className={`build-status${hashesMatch ? " build-status-match" : ""}`}>
@@ -7871,7 +8274,7 @@ export default function App() {
         <Routes>
           <Route
             path="/"
-            element={session ? <LibraryPage /> : <PlaceholderPage title="Home" />}
+            element={session ? <LibraryPage session={session} /> : <PlaceholderPage title="Home" />}
           />
           <Route
             path="/create"

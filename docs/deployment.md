@@ -50,14 +50,26 @@ To build Android artifacts from the same script:
 k8s/scripts/deploy-dev.sh --android-build
 ```
 
-That produces an APK. If you have `frontend/android/keystore.properties` configured and need the
-Google Play upload artifact instead, build the signed release app bundle:
+That now publishes the current APK into the frontend webserver under `/downloads/android/` and
+updates a small manifest at `/downloads/android/latest.json`. The Settings page reads that manifest
+so phones can download the hosted package directly from the running dev server. Android build
+versions now use the format `v0.1bXXXX`, where `XXXX` is the auto-incrementing Git build count,
+and the same numeric build count is used as Android `versionCode`.
+
+If you have `frontend/android/keystore.properties` configured and need the Google Play upload
+artifact instead, build the signed release app bundle:
 
 ```bash
 k8s/scripts/deploy-dev.sh --android-bundle
 ```
 
 That now builds both the Play bundle and a signed release APK in one run.
+
+The deploy log prints the resolved app version, for example:
+
+```text
+App version: v0.1b0098 (code 98)
+```
 
 The Play Console bundle output path is:
 

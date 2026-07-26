@@ -1,13 +1,13 @@
 apply plugin: 'com.android.application'
 
-def packageJson = new groovy.json.JsonSlurper().parseText(file('../../package.json').text)
-def appVersion = packageJson.version.toString()
-def versionParts = appVersion.tokenize('.')
-def versionMajor = versionParts.size() > 0 ? versionParts[0].toInteger() : 0
-def versionMinor = versionParts.size() > 1 ? versionParts[1].toInteger() : 0
-def versionPatch = versionParts.size() > 2 ? versionParts[2].toInteger() : 0
-def appVersionCode = (versionMajor * 10000) + (versionMinor * 100) + versionPatch
-def appVersionName = "${versionMajor}.${versionMinor}.${String.format('%02d', versionPatch)}"
+def versionMetaOutput = new ByteArrayOutputStream()
+exec {
+    commandLine 'node', '../../scripts/version-meta.mjs'
+    standardOutput = versionMetaOutput
+}
+def versionMeta = new groovy.json.JsonSlurper().parseText(versionMetaOutput.toString('UTF-8'))
+def appVersionCode = (versionMeta.versionCode ?: 1).toInteger()
+def appVersionName = versionMeta.versionName?.toString() ?: 'v0.1b0001'
 def keystoreProperties = new Properties()
 def keystorePropertiesFile = rootProject.file('keystore.properties')
 if (keystorePropertiesFile.exists()) {

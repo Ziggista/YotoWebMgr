@@ -5,6 +5,9 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 REGISTRY="${REGISTRY:-localhost:32000}"
 TAG="${TAG:-dev}"
 BUILD_SHA="${BUILD_SHA:-$(git -C "${ROOT_DIR}" rev-parse --short HEAD 2>/dev/null || echo "nogit")}"
+VERSION_META_SCRIPT="${ROOT_DIR}/frontend/scripts/version-meta.mjs"
+APP_BUILD_VERSION_NAME="${APP_BUILD_VERSION_NAME:-$(node "${VERSION_META_SCRIPT}" --field versionName 2>/dev/null || echo "v0.1b0001")}"
+APP_BUILD_VERSION_CODE="${APP_BUILD_VERSION_CODE:-$(node "${VERSION_META_SCRIPT}" --field versionCode 2>/dev/null || echo "1")}"
 BUILDAH_ISOLATION="${BUILDAH_ISOLATION:-chroot}"
 XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/yotowebmgr-buildah-run-${UID}}"
 export BUILDAH_ISOLATION
@@ -23,6 +26,8 @@ build_image() {
     --pull \
     --build-arg "APP_BUILD_SHA=${BUILD_SHA}" \
     --build-arg "VITE_APP_BUILD_SHA=${BUILD_SHA}" \
+    --build-arg "VITE_APP_VERSION_NAME=${APP_BUILD_VERSION_NAME}" \
+    --build-arg "VITE_APP_VERSION_CODE=${APP_BUILD_VERSION_CODE}" \
     --tag "${image}" \
     --file "${dockerfile}" \
     "${context}"

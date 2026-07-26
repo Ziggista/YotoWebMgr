@@ -760,6 +760,27 @@ export async function fetchLibraryItems(filters: {
   return response.json() as Promise<LibraryItem[]>;
 }
 
+export async function createLibraryItem(payload: {
+  title: string;
+  content_type: string;
+  cover_art_path?: string | null;
+  playlist_always_play_from_start?: boolean;
+  playlist_shuffle_tracks?: boolean;
+  playlist_hide_track_numbers?: boolean;
+  notes?: string | null;
+  owner_user_slug?: string | null;
+}): Promise<LibraryItem> {
+  const response = await apiFetch("/api/v1/library", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to create library item."));
+  }
+  return response.json() as Promise<LibraryItem>;
+}
+
 export async function fetchTags(): Promise<Tag[]> {
   const response = await apiFetch("/api/v1/tags");
   if (!response.ok) {
@@ -870,6 +891,34 @@ export async function createRadioStreamTrack(
   });
   if (!response.ok) {
     throw new Error(await errorMessage(response, "Failed to add radio stream."));
+  }
+  return response.json() as Promise<PlaylistTrack>;
+}
+
+export async function createPlaylistTrack(
+  itemId: number,
+  payload: {
+    title: string;
+    source_path?: string | null;
+    source_url?: string | null;
+    source_start_seconds?: number | null;
+    source_end_seconds?: number | null;
+    track_number?: number;
+    duration_seconds?: number | null;
+    icon_path?: string | null;
+    track_behavior?: string;
+    is_stream?: boolean;
+    stream_url?: string | null;
+    podcast_episode_guid?: string | null;
+  },
+): Promise<PlaylistTrack> {
+  const response = await apiFetch(`/api/v1/library/${itemId}/tracks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to add track."));
   }
   return response.json() as Promise<PlaylistTrack>;
 }
