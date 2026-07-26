@@ -16,6 +16,7 @@ LOG_DIR="${LOG_DIR:-${ROOT_DIR}/scripts/dev/logs}"
 RUN_TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 GIT_SHA="$(git -C "${ROOT_DIR}" rev-parse --short HEAD 2>/dev/null || echo "nogit")"
 LOG_FILE="${LOG_FILE:-${LOG_DIR}/deploy-dev-${RUN_TIMESTAMP}-${GIT_SHA}.log}"
+DESTRUCTIVE_REBUILD=false
 FORCE_DESTROY=false
 ANDROID_BUILD=false
 ANDROID_BUNDLE=false
@@ -32,10 +33,12 @@ fi
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") [--force] [--bind-address ADDRESS]
+Usage: $(basename "$0") [--destructive] [--force] [--bind-address ADDRESS]
 
 Options:
-  --force   Delete the namespace without preserving ${SECRET_NAME}.
+  --destructive
+            Delete and recreate the ${NAMESPACE} namespace before deploy.
+  --force   With --destructive, skip preserving ${SECRET_NAME} and Yoto DB-backed state.
   --android-build
             Rebuild the Android debug APK after the deploy completes.
   --android-bundle
@@ -47,7 +50,11 @@ EOF
 
 while (($# > 0)); do
   case "$1" in
+    --destructive)
+      DESTRUCTIVE_REBUILD=true
+      ;;
     --force)
+      DESTRUCTIVE_REBUILD=true
       FORCE_DESTROY=true
       ;;
     --android-build)
@@ -362,10 +369,11 @@ ensure_android_local_properties() {
   echo "Wrote ${ANDROID_LOCAL_PROPERTIES_FILE}"
 }
 
-echo "YotoWebMgr destructive dev deploy"
+echo "YotoWebMgr dev deploy"
 echo "UTC timestamp: ${RUN_TIMESTAMP}"
 echo "Git SHA: ${GIT_SHA}"
 echo "Log file: ${LOG_FILE}"
+echo "Destructive rebuild: ${DESTRUCTIVE_REBUILD}"
 echo "Force destroy: ${FORCE_DESTROY}"
 echo "Android build: ${ANDROID_BUILD}"
 echo "Android bundle: ${ANDROID_BUNDLE}"
@@ -388,17 +396,25 @@ if [[ "${FORCE_DESTROY}" != "true" ]]; then
     echo "No existing ${NAMESPACE}/${SECRET_NAME} secret found to preserve."
   fi
 else
-  echo "Force mode enabled: ${NAMESPACE}/${SECRET_NAME} will not be preserved."
+  if [[ "${DESTRUCTIVE_REBUILD}" == "true" ]]; then
+    echo "Force mode enabled: ${NAMESPACE}/${SECRET_NAME} will not be preserved."
+  else
+    echo "Force mode enabled: existing ${NAMESPACE}/${SECRET_NAME} contents will not be preserved across apply."
+  fi
 fi
 
-backup_yoto_state
+if [[ "${DESTRUCTIVE_REBUILD}" == "true" ]]; then
+  backup_yoto_state
 
-echo "Deleting existing ${NAMESPACE} namespace before building or deploying"
-"${MICROK8S_BIN}" kubectl delete namespace "${NAMESPACE}" --ignore-not-found=true
-while "${MICROK8S_BIN}" kubectl get namespace "${NAMESPACE}" >/dev/null 2>&1; do
-  echo "Waiting for ${NAMESPACE} namespace deletion"
-  sleep 2
-done
+  echo "Deleting existing ${NAMESPACE} namespace before building or deploying"
+  "${MICROK8S_BIN}" kubectl delete namespace "${NAMESPACE}" --ignore-not-found=true
+  while "${MICROK8S_BIN}" kubectl get namespace "${NAMESPACE}" >/dev/null 2>&1; do
+    echo "Waiting for ${NAMESPACE} namespace deletion"
+    sleep 2
+  done
+else
+  echo "Preserving existing ${NAMESPACE} namespace, PostgreSQL volume, and import media volumes."
+fi
 
 prepare_frontend_ota_bundle
 "${ROOT_DIR}/k8s/scripts/build-images.sh"
@@ -408,10 +424,16 @@ if [[ -n "${SECRET_BACKUP_FILE}" && -f "${SECRET_BACKUP_FILE}" ]]; then
   echo "Restoring preserved ${NAMESPACE}/${SECRET_NAME}"
   "${MICROK8S_BIN}" kubectl apply -f "${SECRET_BACKUP_FILE}"
 fi
+if [[ "${DESTRUCTIVE_REBUILD}" != "true" ]]; then
+  echo "Restarting app deployments so the freshly built dev images are pulled without resetting stored state"
+  "${MICROK8S_BIN}" kubectl -n "${NAMESPACE}" rollout restart deployment/api deployment/worker deployment/frontend
+fi
 "${MICROK8S_BIN}" kubectl -n "${NAMESPACE}" rollout status deployment/postgres --timeout=180s
 "${MICROK8S_BIN}" kubectl -n "${NAMESPACE}" rollout status deployment/api --timeout=180s
 wait_for_database_schema 180
-restore_yoto_state
+if [[ "${DESTRUCTIVE_REBUILD}" == "true" ]]; then
+  restore_yoto_state
+fi
 "${MICROK8S_BIN}" kubectl -n "${NAMESPACE}" rollout status deployment/worker --timeout=180s
 "${MICROK8S_BIN}" kubectl -n "${NAMESPACE}" rollout status deployment/frontend --timeout=180s
 assert_deployment_available api 120

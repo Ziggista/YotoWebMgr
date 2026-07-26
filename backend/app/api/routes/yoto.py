@@ -7,7 +7,7 @@ import logging
 import mimetypes
 from pathlib import Path
 from secrets import token_urlsafe
-from typing import Annotated, Any
+from typing import Annotated, Any, Callable
 from urllib.parse import urlencode, urljoin
 from urllib.parse import urlparse
 
@@ -66,6 +66,7 @@ from app.schemas.foundation import (
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+JobProgressCallback = Callable[[int, str], None]
 
 
 def _setting(db: Session, key: str, fallback: str = "") -> str:
@@ -113,6 +114,56 @@ def _update_job_progress(
         job.finished_at = datetime.now(timezone.utc)
     db.add(job)
     db.commit()
+
+
+def _clamp_progress_percent(value: int) -> int:
+    return max(0, min(100, value))
+
+
+def _job_progress_callback(
+    job_id: int,
+    *,
+    db: Session | None = None,
+    error_summary: str | None = None,
+) -> JobProgressCallback:
+    def _callback(progress_percent: int, progress_message: str) -> None:
+        if db is not None:
+            _update_job_progress(
+                db,
+                job_id,
+                status_text="running",
+                progress_percent=_clamp_progress_percent(progress_percent),
+                progress_message=progress_message[:240],
+                error_summary=error_summary,
+            )
+            return
+        with SessionLocal() as progress_db:
+            _update_job_progress(
+                progress_db,
+                job_id,
+                status_text="running",
+                progress_percent=_clamp_progress_percent(progress_percent),
+                progress_message=progress_message[:240],
+                error_summary=error_summary,
+            )
+
+    return _callback
+
+
+def _map_fraction_to_progress(
+    *,
+    completed_tracks: int,
+    total_tracks: int,
+    track_phase_fraction: float,
+    start_percent: int = 5,
+    end_percent: int = 90,
+) -> int:
+    if total_tracks <= 0:
+        return start_percent
+    normalized_phase = min(max(track_phase_fraction, 0.0), 1.0)
+    total_fraction = (completed_tracks + normalized_phase) / total_tracks
+    span = max(0, end_percent - start_percent)
+    return _clamp_progress_percent(start_percent + round(total_fraction * span))
 
 
 def _credential_response(db: Session, credential: YotoCredentialState | None) -> YotoCredentialStatusResponse:
@@ -948,18 +999,39 @@ def _live_create_readiness_error(db: Session, item_id: int) -> str | None:
     return None
 
 
-async def _upload_file_to_yoto_signed_url(upload_url: str, source_path: Path) -> None:
+async def _upload_file_to_yoto_signed_url(
+    upload_url: str,
+    source_path: Path,
+    *,
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> None:
     content_type = mimetypes.guess_type(source_path.name)[0] or "application/octet-stream"
-    async with httpx.AsyncClient(timeout=300) as client:
+    total_bytes = source_path.stat().st_size
+
+    async def _stream_file() -> Any:
+        loaded_bytes = 0
+        chunk_size = 1024 * 256
         with source_path.open("rb") as handle:
-            response = await client.put(
-                upload_url,
-                content=handle.read(),
-                headers={"Content-Type": content_type},
-            )
+            while True:
+                chunk = handle.read(chunk_size)
+                if not chunk:
+                    break
+                loaded_bytes += len(chunk)
+                if progress_callback is not None:
+                    progress_callback(loaded_bytes, total_bytes)
+                yield chunk
+
+    async with httpx.AsyncClient(timeout=300) as client:
+        response = await client.put(
+            upload_url,
+            content=_stream_file(),
+            headers={"Content-Type": content_type},
+        )
     if response.status_code >= 400:
         detail = response.text[:500] if response.text else "Upload to Yoto media store failed."
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=detail)
+    if progress_callback is not None:
+        progress_callback(total_bytes, total_bytes)
     # Give Yoto's upload pipeline a short settle window before polling transcode state.
     await asyncio.sleep(5)
 
@@ -970,13 +1042,21 @@ async def _poll_yoto_transcoded_audio(
     credential: YotoCredentialState,
     stored_tokens: StoredYotoTokens,
     upload_id: str,
+    progress_callback: JobProgressCallback | None = None,
+    base_progress_percent: int = 0,
+    max_progress_percent: int = 100,
+    progress_message_prefix: str = "Waiting for Yoto transcode",
 ) -> tuple[dict[str, Any], StoredYotoTokens, bool]:
     poll_seconds = max(1, int(_setting(db, "yoto_transcode_poll_seconds", "10") or "10"))
     timeout_minutes = max(1, int(_setting(db, "yoto_transcode_timeout_minutes", "30") or "30"))
     deadline = datetime.now(timezone.utc) + timedelta(minutes=timeout_minutes)
     refreshed_any = False
+    started_at = datetime.now(timezone.utc)
+    max_polls = max(1, round((timeout_minutes * 60) / poll_seconds))
+    poll_count = 0
 
     while datetime.now(timezone.utc) < deadline:
+        poll_count += 1
         http_status, payload, stored_tokens, refreshed = await _call_authenticated_yoto_api(
             db=db,
             credential=credential,
@@ -995,8 +1075,22 @@ async def _poll_yoto_transcoded_audio(
         )
         if transcoded_sha is not None:
             # Give Yoto's transcode pipeline a short settle window before content creation.
+            if progress_callback is not None:
+                progress_callback(
+                    _clamp_progress_percent(max_progress_percent),
+                    f"{progress_message_prefix}: transcode complete",
+                )
             await asyncio.sleep(5)
             return payload, stored_tokens, refreshed_any
+        if progress_callback is not None:
+            elapsed_seconds = max(0, round((datetime.now(timezone.utc) - started_at).total_seconds()))
+            percent = base_progress_percent + round(
+                (max_progress_percent - base_progress_percent) * min(poll_count / max_polls, 0.98)
+            )
+            progress_callback(
+                _clamp_progress_percent(percent),
+                f"{progress_message_prefix}: waiting on Yoto transcode ({elapsed_seconds}s elapsed)",
+            )
         await asyncio.sleep(poll_seconds)
 
     raise HTTPException(
@@ -1011,6 +1105,7 @@ async def _build_live_payload_from_draft(
     draft: YotoPlaylistDraft,
     credential: YotoCredentialState,
     stored_tokens: StoredYotoTokens,
+    progress_callback: JobProgressCallback | None = None,
 ) -> tuple[dict[str, object] | None, list[str], bool, StoredYotoTokens, bool]:
     try:
         payload = json.loads(draft.payload_json)
@@ -1035,6 +1130,12 @@ async def _build_live_payload_from_draft(
     warnings: list[str] = []
     total_duration = 0
     refreshed_any = False
+    total_audio_chapters = sum(
+        1
+        for raw_chapter in chapters
+        if isinstance(raw_chapter, dict) and str(raw_chapter.get("type") or "audio") != "stream"
+    )
+    completed_audio_chapters = 0
 
     for index, raw_chapter in enumerate(chapters, start=1):
         if not isinstance(raw_chapter, dict):
@@ -1078,19 +1179,24 @@ async def _build_live_payload_from_draft(
             remote_chapters.append(remote_chapter)
             continue
 
+        current_audio_index = completed_audio_chapters + 1
+
         if matched_track is None:
             warnings.append(f"{title}: could not match this draft chapter to a library track.")
+            completed_audio_chapters += 1
             continue
 
         asset = processed_assets.get(matched_track.id)
         source_path_value = asset.output_path if asset is not None else matched_track.source_path
         if not source_path_value:
             warnings.append(f"{title}: no source or processed file is available for upload.")
+            completed_audio_chapters += 1
             continue
 
         source_path = Path(source_path_value)
         if not source_path.exists():
             warnings.append(f"{title}: local source file is missing at {source_path}.")
+            completed_audio_chapters += 1
             continue
         if asset is None and _requires_local_yoto_processing(source_path):
             raise HTTPException(
@@ -1099,6 +1205,16 @@ async def _build_live_payload_from_draft(
                     f"{title}: {source_path.suffix.lower()} must be processed locally before Yoto live creation. "
                     "Run Process on this library item to generate a Yoto-ready MP3, then try Create Live again."
                 ),
+            )
+
+        if progress_callback is not None:
+            progress_callback(
+                _map_fraction_to_progress(
+                    completed_tracks=completed_audio_chapters,
+                    total_tracks=total_audio_chapters,
+                    track_phase_fraction=0.02,
+                ),
+                f"Preparing Yoto upload for track {current_audio_index}/{total_audio_chapters}: {title}",
             )
 
         checksum = asset.checksum_sha256 if asset is not None and asset.checksum_sha256 else _sha256_file(source_path)
@@ -1122,18 +1238,58 @@ async def _build_live_payload_from_draft(
                 detail=_response_excerpt(upload_payload) or "Yoto upload URL request failed.",
             )
 
+        if progress_callback is not None:
+            progress_callback(
+                _map_fraction_to_progress(
+                    completed_tracks=completed_audio_chapters,
+                    total_tracks=total_audio_chapters,
+                    track_phase_fraction=0.08,
+                ),
+                f"Received signed Yoto upload URL for track {current_audio_index}/{total_audio_chapters}: {title}",
+            )
+
         upload_id, upload_url = _extract_yoto_upload_descriptor(upload_payload)
         if upload_id is None:
             raise HTTPException(status_code=502, detail="Yoto upload URL response did not include an uploadId.")
 
         if upload_url is not None:
-            await _upload_file_to_yoto_signed_url(upload_url, source_path)
+            await _upload_file_to_yoto_signed_url(
+                upload_url,
+                source_path,
+                progress_callback=(
+                    None
+                    if progress_callback is None
+                    else lambda loaded, total, completed=completed_audio_chapters, total_tracks=total_audio_chapters, track_title=title, track_index=current_audio_index: progress_callback(
+                        _map_fraction_to_progress(
+                            completed_tracks=completed,
+                            total_tracks=total_tracks,
+                            track_phase_fraction=0.10 + (0.45 * ((loaded / total) if total > 0 else 1.0)),
+                        ),
+                        f"Uploading track {track_index}/{total_tracks} to Yoto: {track_title} ({loaded // 1024}KB/{max(1, total // 1024)}KB)",
+                    )
+                ),
+            )
 
         transcode_payload, stored_tokens, refreshed = await _poll_yoto_transcoded_audio(
             db=db,
             credential=credential,
             stored_tokens=stored_tokens,
             upload_id=upload_id,
+            progress_callback=(
+                None
+                if progress_callback is None
+                else lambda percent, message, completed=completed_audio_chapters, total_tracks=total_audio_chapters: progress_callback(
+                    _map_fraction_to_progress(
+                        completed_tracks=completed,
+                        total_tracks=total_tracks,
+                        track_phase_fraction=0.55 + (0.37 * (percent / 100)),
+                    ),
+                    message,
+                )
+            ),
+            base_progress_percent=0,
+            max_progress_percent=100,
+            progress_message_prefix=f"Track {current_audio_index}/{total_audio_chapters} {title}",
         )
         refreshed_any = refreshed_any or refreshed
 
@@ -1191,9 +1347,25 @@ async def _build_live_payload_from_draft(
         if duration_seconds is not None:
             remote_chapter["duration"] = duration_seconds
         remote_chapters.append(remote_chapter)
+        completed_audio_chapters += 1
+        if progress_callback is not None:
+            progress_callback(
+                _map_fraction_to_progress(
+                    completed_tracks=completed_audio_chapters,
+                    total_tracks=total_audio_chapters,
+                    track_phase_fraction=0.0,
+                ),
+                f"Prepared live Yoto media for track {current_audio_index}/{total_audio_chapters}: {title}",
+            )
 
     if not remote_chapters:
         return None, warnings or ["No live-create-ready chapters were generated from this draft."], False, stored_tokens, refreshed_any
+
+    if progress_callback is not None:
+        progress_callback(
+            max(90, _map_fraction_to_progress(completed_tracks=completed_audio_chapters, total_tracks=max(1, total_audio_chapters), track_phase_fraction=1.0)),
+            f"Prepared {len(remote_chapters)} chapter(s) for Yoto cloud create",
+        )
 
     generated_payload: dict[str, object] = {
         "title": str(payload.get("title") or draft.title),
@@ -1828,11 +2000,12 @@ async def get_yoto_playlist_remote_payload(
     )
 
 
-@router.post("/playlists/{playlist_id}/create-live", response_model=CreateLiveYotoPlaylistResponse)
-async def create_live_yoto_playlist(
+async def _create_live_yoto_playlist_internal(
+    *,
     playlist_id: int,
-    db: Annotated[Session, Depends(get_db_session)],
-    payload: CreateLiveYotoPlaylistRequest | None = Body(default=None),
+    db: Session,
+    payload: CreateLiveYotoPlaylistRequest | None = None,
+    progress_callback: JobProgressCallback | None = None,
 ) -> CreateLiveYotoPlaylistResponse:
     draft = db.get(YotoPlaylistDraft, playlist_id)
     if draft is None:
@@ -1875,33 +2048,72 @@ async def create_live_yoto_playlist(
     db.add(draft)
     db.commit()
     db.refresh(draft)
+    item_job_progress = _job_progress_callback(draft.related_job_id, db=db) if draft.related_job_id else None
+
+    def _report_progress(progress_percent: int, progress_message: str) -> None:
+        message = progress_message[:240]
+        if item_job_progress is not None:
+            item_job_progress(progress_percent, message)
+        if progress_callback is not None:
+            progress_callback(progress_percent, message)
+
+    _report_progress(2, f"Preparing live Yoto create for {draft.title}")
 
     request_payload = request.request_payload
-    if request_payload is None:
-        request_payload, warnings, _can_create_live, stored_tokens, build_refreshed = await _build_live_payload_from_draft(
-            db=db,
-            draft=draft,
-            credential=credential,
-            stored_tokens=stored_tokens,
-        )
-        token_refreshed = token_refreshed or build_refreshed
+    try:
         if request_payload is None:
-            draft.status = previous_status
-            draft.last_error = "Draft is not ready for live Yoto playlist creation."
-            db.add(draft)
-            db.commit()
-            raise HTTPException(
-                status_code=422,
-                detail=" ".join(warnings) if warnings else "This draft is not ready for live Yoto playlist creation.",
+            request_payload, warnings, _can_create_live, stored_tokens, build_refreshed = await _build_live_payload_from_draft(
+                db=db,
+                draft=draft,
+                credential=credential,
+                stored_tokens=stored_tokens,
+                progress_callback=_report_progress,
             )
+            token_refreshed = token_refreshed or build_refreshed
+            if request_payload is None:
+                draft.status = previous_status
+                draft.last_error = "Draft is not ready for live Yoto playlist creation."
+                db.add(draft)
+                db.commit()
+                if item_job_progress is not None:
+                    _update_job_progress(
+                        db,
+                        draft.related_job_id,
+                        status_text="failed",
+                        progress_percent=100,
+                        progress_message=f"Yoto cloud create blocked for {draft.title}",
+                        error_summary=draft.last_error[:240],
+                    )
+                raise HTTPException(
+                    status_code=422,
+                    detail=" ".join(warnings) if warnings else "This draft is not ready for live Yoto playlist creation.",
+                )
+    except HTTPException as error:
+        draft.status = previous_status
+        draft.last_error = str(error.detail)[:240] if error.detail else "Yoto live create failed before upload completion."
+        db.add(draft)
+        db.commit()
+        if item_job_progress is not None:
+            _update_job_progress(
+                db,
+                draft.related_job_id,
+                status_text="failed",
+                progress_percent=100,
+                progress_message=f"Yoto cloud create failed for {draft.title}",
+                error_summary=draft.last_error,
+            )
+        raise
 
     if not isinstance(request_payload, dict):
         draft.status = previous_status
         draft.last_error = "The live Yoto payload was not a JSON object."
         db.add(draft)
         db.commit()
+        if item_job_progress is not None:
+            item_job_progress(100, draft.last_error)
         raise HTTPException(status_code=422, detail="The live Yoto payload must be a JSON object.")
 
+    _report_progress(92, f"Creating Yoto cloud content for {draft.title}")
     http_status, response_payload, stored_tokens, create_refreshed = await _call_authenticated_yoto_api(
         db=db,
         credential=credential,
@@ -1919,6 +2131,15 @@ async def create_live_yoto_playlist(
         db.add(draft)
         db.add(credential)
         db.commit()
+        if item_job_progress is not None:
+            _update_job_progress(
+                db,
+                draft.related_job_id,
+                status_text="failed",
+                progress_percent=100,
+                progress_message=f"Yoto cloud create failed for {draft.title}",
+                error_summary=draft.last_error[:240],
+            )
         raise HTTPException(
             status_code=http_status or 502,
             detail=_response_excerpt(response_payload) or "Yoto playlist creation failed.",
@@ -1940,6 +2161,7 @@ async def create_live_yoto_playlist(
     fetched_remote_content_payload: dict[str, Any] | list[Any] | None = None
 
     if remote_card_id:
+        _report_progress(97, f"Fetching created Yoto card details for {draft.title}")
         details_http_status, details_payload, stored_tokens, details_refreshed = await _call_authenticated_yoto_api(
             db=db,
             credential=credential,
@@ -2032,6 +2254,16 @@ async def create_live_yoto_playlist(
     db.refresh(draft)
     db.refresh(item)
     db.refresh(credential)
+    if item_job_progress is not None:
+        _update_job_progress(
+            db,
+            draft.related_job_id,
+            status_text="succeeded",
+            progress_percent=100,
+            progress_message=f"Created Yoto cloud content for {draft.title}",
+        )
+    if progress_callback is not None:
+        progress_callback(100, f"Created Yoto cloud content for {draft.title}")
 
     return CreateLiveYotoPlaylistResponse(
         playlist=_draft_response(draft),
@@ -2044,6 +2276,19 @@ async def create_live_yoto_playlist(
         response_excerpt=_response_excerpt(fetched_remote_content_payload or response_payload),
         error_detail=None,
         live_api_call=True,
+    )
+
+
+@router.post("/playlists/{playlist_id}/create-live", response_model=CreateLiveYotoPlaylistResponse)
+async def create_live_yoto_playlist(
+    playlist_id: int,
+    db: Annotated[Session, Depends(get_db_session)],
+    payload: CreateLiveYotoPlaylistRequest | None = Body(default=None),
+) -> CreateLiveYotoPlaylistResponse:
+    return await _create_live_yoto_playlist_internal(
+        playlist_id=playlist_id,
+        db=db,
+        payload=payload,
     )
 
 
@@ -2169,6 +2414,7 @@ async def _run_bulk_create_live_yoto_job(
             progress_percent=5,
             progress_message=f"Starting bulk Yoto create for {total_items} item(s)",
         )
+    batch_progress = _job_progress_callback(job_id)
 
     for index, item_id in enumerate(item_ids, start=1):
         with SessionLocal() as db:
@@ -2203,10 +2449,17 @@ async def _run_bulk_create_live_yoto_job(
                     continue
 
             try:
-                await create_live_yoto_playlist(
+                await _create_live_yoto_playlist_internal(
                     playlist_id=draft.id,
                     db=db,
                     payload=request,
+                    progress_callback=lambda item_percent, item_message, item_title=item.title, item_index=index: batch_progress(
+                        max(
+                            5,
+                            _clamp_progress_percent(round((((item_index - 1) + (item_percent / 100)) / total_items) * 100)),
+                        ),
+                        f"{item_title}: {item_message}"[:240],
+                    ),
                 )
                 processed_count += 1
                 _update_job_progress(

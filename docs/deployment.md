@@ -19,9 +19,9 @@ The initial deployment target is MicroK8s in WSL.
 ## Dev Deployment
 
 The dev overlay expects the MicroK8s registry addon and images tagged under `localhost:32000`.
-The dev deployment is intentionally destructive for the app namespace: each run deletes
-`yotowebmgr` before image build/deploy, recreates PostgreSQL storage, and runs migrations from
-scratch.
+The default dev deployment is now non-destructive for the app namespace: it keeps `yotowebmgr`,
+preserves PostgreSQL storage and media PVCs, rebuilds the images, reapplies the manifests, and
+rolls the app deployments so they pull the fresh `:dev` images.
 
 The API container also supports an explicit development reset switch:
 
@@ -30,14 +30,18 @@ RESET_DATABASE_ON_START=true
 ```
 
 When this is enabled with `ENVIRONMENT=development` and a PostgreSQL `DATABASE_URL`, API startup
-drops and recreates the PostgreSQL `public` schema before running Alembic. This keeps dev deploys
-honest against PostgreSQL instead of relying on throwaway SQLite schemas while the data model is
-still moving quickly.
+drops and recreates the PostgreSQL `public` schema before running Alembic.
 
-Keep `RESET_DATABASE_ON_START=false` outside disposable dev deployments.
+The dev overlay now keeps `RESET_DATABASE_ON_START=false` so ordinary redeploys preserve library
+state. Use `--destructive` if you want the old clean-slate namespace reset behavior, or `--force`
+if you also want to skip the existing secret and Yoto-state preservation helpers.
 
 ```bash
 k8s/scripts/deploy-dev.sh
+```
+
+```bash
+k8s/scripts/deploy-dev.sh --destructive
 ```
 
 To build Android artifacts from the same script:
@@ -108,7 +112,7 @@ This matters because a container can crash after image start but before the app 
 
 ```bash
 scripts/dev/verify.sh      # backend tests, frontend build, shell syntax checks
-scripts/dev/redeploy.sh    # destructive MicroK8s rebuild/redeploy from scratch
+scripts/dev/redeploy.sh    # MicroK8s rebuild/redeploy; preserves state unless --destructive is passed through
 k8s/scripts/open-dev.sh    # ensure the Kubernetes frontend is forwarded on http://127.0.0.1:5175/
 scripts/dev/status.sh      # pods, services, recent API logs
 scripts/dev/seed-radio.sh  # add the ABC Triple J test stream to the current dev API
@@ -136,8 +140,10 @@ The import area is split by purpose:
   path access.
 - Library playback currently serves staged import media only when the source file is still inside
   the configured import storage roots.
-- In the dev pipeline this PVC is recreated whenever `k8s/scripts/deploy-dev.sh` deletes the
-  namespace. For non-destructive environments, keep this PVC and the media PVCs persistent.
+- In the default dev pipeline this PVC is preserved because the namespace is no longer deleted on
+  every run.
+- If you run `k8s/scripts/deploy-dev.sh --destructive`, the namespace is deleted and recreated, so
+  this PVC is wiped along with the rest of the namespace.
 
 Practical testing rule: after a destructive dev redeploy, prefer browser upload or
 `POST /api/v1/imports/uploads` for end-to-end media tests unless you have explicitly reseeded the

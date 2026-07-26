@@ -64,6 +64,9 @@ and API both see the same source path for inspect/process/Yoto tests.
 The direct `/var/lib/yotowebmgr/media/imports/drop/...` path is only safe when you have reseeded
 the current `imports-pvc` after the latest namespace delete.
 
+Under the new default non-destructive deploy flow, that reseed step is usually unnecessary because
+the namespace and PVCs stay in place unless you explicitly pass `--destructive`.
+
 ## Full Audiobook Fixture
 
 The seed script downloads the full `The Velveteen Rabbit` Project Gutenberg audio edition into:

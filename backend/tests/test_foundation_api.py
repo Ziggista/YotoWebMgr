@@ -2070,20 +2070,30 @@ async def test_create_live_yoto_playlist_updates_draft_and_linked_cards(
         access_token: str,
         json_body: object | None = None,
     ) -> tuple[int, object]:
-        assert method == "POST"
         assert api_base_url == "https://api.yotoplay.com"
-        assert relative_url == "/content"
         assert access_token == "test-access-token"
-        assert isinstance(json_body, dict)
-        return (
-            200,
-            {
-                "card": {
-                    "cardId": "31yYU",
-                    "title": "Live Draft",
-                }
-            },
-        )
+        if method == "POST" and relative_url == "/content":
+            assert isinstance(json_body, dict)
+            return (
+                200,
+                {
+                    "card": {
+                        "cardId": "31yYU",
+                        "title": "Live Draft",
+                    }
+                },
+            )
+        if method == "GET" and relative_url == "/content/31yYU":
+            return (
+                200,
+                {
+                    "card": {
+                        "cardId": "31yYU",
+                        "title": "Live Draft",
+                    }
+                },
+            )
+        raise AssertionError(f"Unexpected Yoto API call: {method} {relative_url}")
 
     monkeypatch.setattr(yoto_routes, "load_tokens_from_secret", fake_load_tokens_from_secret)
     monkeypatch.setattr(yoto_routes, "_call_yoto_api", fake_call_yoto_api)
@@ -2188,6 +2198,7 @@ async def test_bulk_create_live_yoto_queues_backend_job(
         playlist_id: int,
         db: Session,
         payload: object | None = None,
+        progress_callback: object | None = None,
     ) -> object:
         refreshed_draft = db.get(YotoPlaylistDraft, playlist_id)
         assert refreshed_draft is not None
@@ -2197,7 +2208,7 @@ async def test_bulk_create_live_yoto_queues_backend_job(
         db.commit()
         return object()
 
-    monkeypatch.setattr(yoto_routes, "create_live_yoto_playlist", fake_create_live_yoto_playlist)
+    monkeypatch.setattr(yoto_routes, "_create_live_yoto_playlist_internal", fake_create_live_yoto_playlist)
 
     @contextmanager
     def fake_session_local() -> Generator[Session, None, None]:
@@ -2289,7 +2300,16 @@ async def test_create_live_yoto_playlist_uploads_local_audio_assets(
             }
         ),
     )
-    db_session.add_all([asset, credential, draft])
+    job = Job(
+        type="create_yoto_playlist",
+        status="queued",
+        progress_percent=0,
+        progress_message="Queued local Yoto playlist draft for remote mapping",
+        related_library_item_id=item.id,
+    )
+    db_session.add_all([asset, credential, draft, job])
+    db_session.flush()
+    draft.related_job_id = job.id
     db_session.commit()
 
     upload_calls: list[tuple[str, str]] = []
@@ -2304,7 +2324,12 @@ async def test_create_live_yoto_playlist_uploads_local_audio_assets(
             expires_at=datetime.now(timezone.utc).replace(year=2027),
         )
 
-    async def fake_upload_file_to_yoto_signed_url(upload_url: str, source_path: Path) -> None:
+    async def fake_upload_file_to_yoto_signed_url(
+        upload_url: str,
+        source_path: Path,
+        *,
+        progress_callback: object | None = None,
+    ) -> None:
         upload_calls.append((upload_url, str(source_path)))
 
     async def fake_call_yoto_api(
@@ -2352,12 +2377,17 @@ async def test_create_live_yoto_playlist_uploads_local_audio_assets(
 
     refreshed_draft = db_session.get(YotoPlaylistDraft, draft.id)
     refreshed_item = db_session.get(LibraryItem, item.id)
+    refreshed_job = db_session.get(Job, job.id)
     assert refreshed_draft is not None
     assert refreshed_draft.remote_playlist_id == "REMOTE123"
     stored_payload = json.loads(refreshed_draft.payload_json)
     assert stored_payload["content"]["chapters"][0]["tracks"][0]["trackUrl"] == "yoto:#abc123sha"
     assert refreshed_item is not None
     assert refreshed_item.status == "yoto_remote_created"
+    assert refreshed_job is not None
+    assert refreshed_job.status == "succeeded"
+    assert refreshed_job.progress_percent == 100
+    assert "Created Yoto cloud content" in refreshed_job.progress_message
 
 
 async def test_create_live_yoto_playlist_rejects_raw_amr_without_processed_asset(

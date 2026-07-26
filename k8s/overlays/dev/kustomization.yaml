@@ -15,13 +15,6 @@ images:
 generatorOptions:
   disableNameSuffixHash: true
 
-configMapGenerator:
-  - name: yotowebmgr-config
-    namespace: yotowebmgr
-    behavior: merge
-    literals:
-      - RESET_DATABASE_ON_START=true
-
 secretGenerator:
   - name: yotowebmgr-secrets
     namespace: yotowebmgr

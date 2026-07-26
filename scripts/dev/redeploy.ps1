@@ -40,7 +40,7 @@ $wslCommand = if ($quotedArgs) {
 }
 
 Write-Host "Using WSL distro: $distro"
-Write-Host "Running destructive MicroK8s redeploy from: $wslRootDir"
+Write-Host "Running MicroK8s deploy from: $wslRootDir"
 if ($bindAddress) {
   Write-Host "Using bind address: $bindAddress"
 }

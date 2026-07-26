@@ -59,18 +59,31 @@ MicroK8s registry:
 k8s/scripts/deploy-dev.sh
 ```
 
-From Windows PowerShell, use the wrapper that runs the same destructive script through WSL:
+From Windows PowerShell, use the wrapper that runs the same script through WSL:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/dev/redeploy.ps1
 ```
 
-The dev deployment script is intentionally destructive. It deletes the `yotowebmgr` namespace
-before building images or applying manifests, so PostgreSQL starts with a clean volume and Alembic
-applies all migrations from scratch.
-The dev overlay also sets `RESET_DATABASE_ON_START=true`, which makes the API drop and recreate
-PostgreSQL's `public` schema before migrations run. That is intentionally destructive and should
-stay disabled outside disposable dev deployments.
+The dev deployment script now preserves the existing `yotowebmgr` namespace, PostgreSQL data, and
+media PVC contents by default. That means uploads, library rows, playlist drafts, and other stored
+state survive a normal rebuild/redeploy.
+
+If you explicitly want the old clean-slate behavior, pass `--destructive`:
+
+```bash
+k8s/scripts/deploy-dev.sh --destructive
+```
+
+If you want a full wipe without preserving the existing Kubernetes Secret or Yoto credential-row
+backup, pass `--force`, which now implies `--destructive`:
+
+```bash
+k8s/scripts/deploy-dev.sh --force
+```
+
+`RESET_DATABASE_ON_START` now stays `false` in the dev overlay so the API does not silently drop
+the PostgreSQL `public` schema during ordinary redeploys.
 
 The deployment script starts or refreshes the local frontend port-forward automatically. To check or
 restart it later, run the dedicated helper:
@@ -106,8 +119,8 @@ Common commands are wrapped so routine checks use less typing:
 
 ```bash
 scripts/dev/verify.sh      # backend tests, frontend build, shell syntax checks
-scripts/dev/redeploy.sh    # destructive MicroK8s rebuild/redeploy from scratch
-k8s/scripts/deploy-dev.sh  # destructive Linux/WSL deploy entrypoint used by the wrappers
+scripts/dev/redeploy.sh    # MicroK8s rebuild/redeploy that preserves state by default
+k8s/scripts/deploy-dev.sh  # Linux/WSL deploy entrypoint; add --destructive for a clean reset
 k8s/scripts/open-dev.sh    # ensure the Kubernetes frontend is forwarded on http://127.0.0.1:5175/
 scripts/dev/status.sh      # pods, services, recent API logs
 scripts/dev/seed-radio.sh  # add the ABC Triple J test stream to the current dev API
