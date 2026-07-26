@@ -19,4 +19,4 @@ ENV VITE_APP_VERSION_CODE=${VITE_APP_VERSION_CODE}
 
 EXPOSE 5173
 
-CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+CMD ["npm", "--silent", "run", "dev", "--", "--host", "0.0.0.0"]

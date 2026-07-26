@@ -312,12 +312,12 @@ build_frontend_dist() {
   VITE_APP_VERSION_NAME="${APP_BUILD_VERSION_NAME}" \
   VITE_APP_VERSION_CODE="${APP_BUILD_VERSION_CODE}" \
   VITE_APP_BUILD_NUMBER="${APP_BUILD_NUMBER}" \
-  npm run build
+  npm --silent run build
   VITE_APP_BUILD_SHA="${GIT_SHA}" \
   VITE_APP_VERSION_NAME="${APP_BUILD_VERSION_NAME}" \
   VITE_APP_VERSION_CODE="${APP_BUILD_VERSION_CODE}" \
   VITE_APP_BUILD_NUMBER="${APP_BUILD_NUMBER}" \
-  npm run build:ota-bundle
+  npm --silent run build:ota-bundle
   popd >/dev/null
 }
 
